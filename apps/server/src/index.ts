@@ -8,6 +8,8 @@ import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import bcrypt from "bcryptjs";
 import {
   AgentToServerSchema,
+  AgentChatSyncSchema,
+  ChatMessageSchema,
   CreateAgentSchema,
   CreateChatSchema,
   DeploySchema,
@@ -41,6 +43,7 @@ import {
   type ChatAttachmentRow,
   type ChatMessageRow,
   type ChatRow,
+  type ChatShareRow,
   type JobRow,
   type LogRow,
   type OAuthConnectionRow,
@@ -117,6 +120,9 @@ const chatSyncRequests = new Map<string, {
   timer: NodeJS.Timeout;
 }>();
 const STALE_JOB_GRACE_MS = 2 * 60 * 1000;
+const AgentChatShareSchema = AgentChatSyncSchema.extend({
+  messages: ChatMessageSchema.array().max(1000)
+});
 
 db.prepare("UPDATE agents SET status = 'offline', current_job_id = NULL").run();
 
@@ -980,6 +986,151 @@ function serializeChat(chat: ChatRow) {
   };
 }
 
+function publicShareUrl(request: { protocol: string; hostname: string }, token: string): string {
+  return `${publicOrigin(request)}/share/${encodeURIComponent(token)}`;
+}
+
+function stripPrivateAttachmentUrls<T extends { attachments?: object[] }>(messages: T[]): T[] {
+  return messages.map((message) => ({
+    ...message,
+    attachments: message.attachments?.map((attachment) => ({ ...attachment, url: undefined })) as T["attachments"]
+  }));
+}
+
+function latestAssistantContent(messages: Array<{ role: string; content: string }>): string | null {
+  return [...messages].reverse().find((message) => message.role === "assistant" && message.content.trim())?.content.trim() ?? null;
+}
+
+function chatShareSnapshot(chat: ChatRow) {
+  const jobs = db.prepare("SELECT * FROM jobs WHERE chat_id = ? ORDER BY created_at DESC").all(chat.id) as JobRow[];
+  const rows = db.prepare("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC").all(chat.id) as ChatMessageRow[];
+  const messages = stripPrivateAttachmentUrls(serializeMessagesForChat(chat.id, rows, { includeData: true }));
+  return {
+    exportedAt: nowIso(),
+    chat: serializeChat(chat),
+    jobs: jobs.map((row) => serializeJob(row, { includeDiff: false })),
+    messages,
+    finalAnswer: latestAssistantContent(messages)
+  };
+}
+
+function serializeShare(row: ChatShareRow, request: { protocol: string; hostname: string }) {
+  return {
+    token: row.token,
+    url: publicShareUrl(request, row.token),
+    chatId: row.chat_id,
+    agentId: row.agent_id,
+    repoId: row.repo_id,
+    title: row.title,
+    source: row.source,
+    externalId: row.external_id,
+    finalContent: row.final_content,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    snapshot: JSON.parse(row.snapshot_json) as unknown
+  };
+}
+
+function upsertChatShareFromChat(chat: ChatRow): ChatShareRow {
+  const snapshot = chatShareSnapshot(chat);
+  const stamp = nowIso();
+  const snapshotJson = JSON.stringify(snapshot);
+  const existing = db.prepare("SELECT * FROM chat_shares WHERE chat_id = ?").get(chat.id) as ChatShareRow | undefined;
+  if (existing) {
+    db.prepare(`
+      UPDATE chat_shares
+      SET agent_id=?, repo_id=?, title=?, source=?, external_id=?, final_content=?, snapshot_json=?, updated_at=?
+      WHERE token=?
+    `).run(
+      chat.agent_id,
+      chat.repo_id,
+      chat.title,
+      chat.source,
+      chat.external_id,
+      snapshot.finalAnswer,
+      snapshotJson,
+      stamp,
+      existing.token
+    );
+    return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(existing.token) as ChatShareRow;
+  }
+  const token = randomToken("share");
+  db.prepare(`
+    INSERT INTO chat_shares (token,chat_id,agent_id,repo_id,title,source,external_id,final_content,snapshot_json,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    token,
+    chat.id,
+    chat.agent_id,
+    chat.repo_id,
+    chat.title,
+    chat.source,
+    chat.external_id,
+    snapshot.finalAnswer,
+    snapshotJson,
+    stamp,
+    stamp
+  );
+  return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(token) as ChatShareRow;
+}
+
+function upsertChatShareFromLocalSync(agent: AgentRow, sync: Omit<Extract<AgentToServer, { type: "chat.sync" }>, "type">): ChatShareRow {
+  const stamp = nowIso();
+  const messages = stripPrivateAttachmentUrls(sync.messages.map((message, index) => ({
+    id: message.id ?? `local_${sync.source}_${sync.externalId}_${index}`,
+    chatId: `local:${sync.externalId}`,
+    role: message.role,
+    content: message.content,
+    source: message.source,
+    externalId: message.externalId,
+    metadata: message.metadata,
+    createdAt: message.createdAt,
+    attachments: message.attachments?.map((attachment, attachmentIndex) => ({
+      id: `${sync.externalId}:${index}:${attachmentIndex}`,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      dataBase64: isPreviewableImageMime(attachment.mimeType) ? attachment.dataBase64 : undefined,
+      createdAt: message.createdAt
+    }))
+  })));
+  const snapshot = {
+    exportedAt: stamp,
+    chat: {
+      id: `local:${sync.externalId}`,
+      agentId: agent.id,
+      repoId: sync.repoId,
+      title: sync.title,
+      source: sync.source,
+      externalId: sync.externalId,
+      cwd: sync.cwd,
+      hiddenAt: null,
+      createdAt: messages[0]?.createdAt ?? sync.updatedAt,
+      updatedAt: sync.updatedAt
+    },
+    jobs: [],
+    messages,
+    finalAnswer: latestAssistantContent(messages)
+  };
+  const snapshotJson = JSON.stringify(snapshot);
+  const existing = db.prepare("SELECT * FROM chat_shares WHERE agent_id = ? AND source = ? AND external_id = ? AND chat_id IS NULL")
+    .get(agent.id, sync.source, sync.externalId) as ChatShareRow | undefined;
+  if (existing) {
+    db.prepare(`
+      UPDATE chat_shares
+      SET repo_id=?, title=?, final_content=?, snapshot_json=?, updated_at=?
+      WHERE token=?
+    `).run(sync.repoId, sync.title, snapshot.finalAnswer, snapshotJson, stamp, existing.token);
+    return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(existing.token) as ChatShareRow;
+  }
+  const token = randomToken("share");
+  db.prepare(`
+    INSERT INTO chat_shares (token,chat_id,agent_id,repo_id,title,source,external_id,final_content,snapshot_json,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `).run(token, null, agent.id, sync.repoId, sync.title, sync.source, sync.externalId, snapshot.finalAnswer, snapshotJson, stamp, stamp);
+  return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(token) as ChatShareRow;
+}
+
 function chatEtag(chat: ChatRow, messages: ChatMessageRow[], jobs: JobRow[]) {
   const lastMessage = messages.at(-1);
   const value = JSON.stringify({
@@ -1427,6 +1578,26 @@ async function createApp(): Promise<FastifyInstance> {
   });
 
   app.get("/api/health", async () => ({ ok: true, now: nowIso() }));
+
+  app.get("/api/shared/chats/:token", async (request, reply) => {
+    const token = (request.params as { token: string }).token;
+    if (!/^share_[A-Za-z0-9_-]{20,120}$/.test(token)) return reply.code(404).send({ error: "not_found" });
+    const share = db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(token) as ChatShareRow | undefined;
+    if (!share) return reply.code(404).send({ error: "not_found" });
+    reply.header("Cache-Control", "public, max-age=60");
+    return { share: serializeShare(share, request) };
+  });
+
+  app.post("/api/agent/shared-chats", async (request, reply) => {
+    const authHeader = request.headers.authorization;
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : undefined;
+    const agent = await authenticateAgent(token);
+    if (!agent) return reply.code(401).send({ error: "invalid_token" });
+    const parsed = AgentChatShareSchema.safeParse({ ...(request.body as Record<string, unknown> | null ?? {}), type: "chat.sync" });
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_chat_share", details: parsed.error.flatten() });
+    const share = upsertChatShareFromLocalSync(agent, parsed.data);
+    return reply.code(201).send({ ok: true, share: serializeShare(share, request), url: publicShareUrl(request, share.token) });
+  });
 
   app.get("/api/oauth/providers", async () => ({ providers: oauthProviders() }));
 
@@ -1959,6 +2130,17 @@ async function createApp(): Promise<FastifyInstance> {
       jobs: rows.map((row) => serializeJob(row, { includeDiff: false })),
       messages: serializeMessagesForChat(chatId, messages, { lightMetadata: true })
     };
+  });
+
+  app.post("/api/chats/:id/share", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const chatId = (request.params as { id: string }).id;
+    if (!canAccessChat(auth.user, chatId)) return reply.code(404).send({ error: "not_found" });
+    const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
+    if (!chat) return reply.code(404).send({ error: "not_found" });
+    const share = upsertChatShareFromChat(chat);
+    return reply.code(201).send({ ok: true, share: serializeShare(share, request), url: publicShareUrl(request, share.token) });
   });
 
   app.get("/api/chat-messages/:id/details", async (request, reply) => {

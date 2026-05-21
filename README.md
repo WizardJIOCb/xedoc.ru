@@ -244,6 +244,13 @@ Repo root `start-agent.bat` делает то же для локальной р�
 - `codex`: локальные Codex CLI threads из Windows профиля.
 - `vscode`: локальные VS Code chat sessions.
 
+Public chat export:
+
+- Any synced/web chat can be published from the web UI with the `Ссылка` action.
+- The server stores a snapshot in `chat_shares`, so `/share/<token>` is readable without login and contains the whole chat plus the latest assistant answer as `finalAnswer`.
+- The VS Code bridge panel also has `Ссылка` next to local Codex threads. It reads the local rollout file, posts it to `POST /api/agent/shared-chats` with the local agent token, copies the public URL, and can open it in the browser.
+- VS Code direct export needs the bridge process to see `CMC_AGENT_TOKEN` or the configured `tokenEnv`, and it discovers the server from `CMC_PUBLIC_BASE_URL` or `apps/agent-windows/agent.config.json`.
+
 Sync local chats:
 
 ```text
@@ -367,6 +374,7 @@ Project chat:
 - VS Code: `/api/agents/:agentId/vscode-command`.
 - Chat sync: `/api/agents/:agentId/sync-local-chats`.
 - Chats/messages: `/api/chats`, `/api/chats/:id`, attachments/details endpoints.
+- Public chat shares: `POST /api/chats/:id/share`, `GET /api/shared/chats/:token`, `POST /api/agent/shared-chats`.
 - Jobs: `/api/jobs`, `/api/jobs/:id`, `/api/jobs/:id/cancel`.
 - WebSockets: `/api/ui/ws`, `/api/agent/ws`.
 - Health: `/api/health`.

@@ -219,6 +219,21 @@ type ChatPayload = {
   messages: ChatMessage[];
 };
 
+type SharedChat = {
+  token: string;
+  url: string;
+  title: string;
+  source: string;
+  externalId?: string | null;
+  finalContent?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  snapshot: ChatPayload & {
+    exportedAt: string;
+    finalAnswer?: string | null;
+  };
+};
+
 type ImagePreview = {
   src: string;
   name: string;
@@ -907,6 +922,105 @@ function renderMessageAttachments(attachments: MessageAttachment[] | undefined, 
   );
 }
 
+function shareTokenFromLocation() {
+  const match = window.location.pathname.match(/^\/share\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1] ?? "") : "";
+}
+
+function SharedChatPage({ token }: { token: string }) {
+  const [share, setShare] = useState<SharedChat | null>(null);
+  const [notice, setNotice] = useState("Загружаю публичный чат...");
+  const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api(`/api/shared/chats/${encodeURIComponent(token)}`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) {
+          setNotice(data.error === "not_found" ? "Ссылка на чат не найдена." : data.error || "Не удалось загрузить публичный чат.");
+          return;
+        }
+        setShare(data.share);
+        setNotice("");
+      })
+      .catch(() => {
+        if (!cancelled) setNotice("Не удалось загрузить публичный чат.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const finalAnswer = share?.snapshot.finalAnswer || share?.finalContent || "";
+  const messages = share?.snapshot.messages ?? [];
+
+  return (
+    <main className="share-page">
+      <header className="share-hero">
+        <div>
+          <img className="brand-logo" src="/favicon.svg" alt="" />
+          <span>codex.rodion.pro</span>
+        </div>
+        <h1>{share?.title ?? "Shared Codex chat"}</h1>
+        {share && (
+          <p>
+            {share.source} chat · exported {formatDateTime(share.snapshot.exportedAt || share.updatedAt)}
+          </p>
+        )}
+      </header>
+
+      {notice && <section className="share-card">{notice}</section>}
+
+      {share && (
+        <>
+          {finalAnswer && (
+            <section className="share-card final-answer">
+              <span>Final answer</span>
+              {renderRichText(finalAnswer, "rich-text message-body")}
+            </section>
+          )}
+
+          <section className="share-chat">
+            {messages.map((message) => (
+              <article className={`message ${message.role}`} key={message.id}>
+                <div className="message-meta">
+                  <div className="message-author-stack">
+                    <span>{message.role === "user" ? "User" : message.source === "vscode" ? "VS Code" : "Codex"}</span>
+                    <small>{formatDateTime(message.createdAt)}</small>
+                  </div>
+                </div>
+                {message.role === "system" ? (
+                  <div className="system-message-body" title={normalizeDisplayText(message.content).trim()}>
+                    {normalizeDisplayText(message.content).trim()}
+                  </div>
+                ) : renderRichText(message.content, "rich-text message-body")}
+                {renderMessageAttachments(message.attachments, setImagePreview)}
+              </article>
+            ))}
+          </section>
+        </>
+      )}
+
+      {imagePreview && (
+        <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={imagePreview.name} onClick={() => setImagePreview(null)}>
+          <figure onClick={(event) => event.stopPropagation()}>
+            <button aria-label="Close image preview" type="button" onClick={() => setImagePreview(null)}>
+              <X size={20} />
+            </button>
+            <img alt={imagePreview.name} src={imagePreview.src} />
+            <figcaption>
+              <strong>{imagePreview.name}</strong>
+              <span>{imagePreview.mimeType} · {formatBytes(imagePreview.size)}</span>
+            </figcaption>
+          </figure>
+        </div>
+      )}
+    </main>
+  );
+}
+
 function summarizeDisplayCommand(command: string) {
   return command
     .replace(/"C:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe"\s+-Command\s+/i, "")
@@ -1286,6 +1400,7 @@ function App() {
   const [sslBusy, setSslBusy] = useState(false);
   const [vscodeNotice, setVscodeNotice] = useState("");
   const [vscodeBusy, setVscodeBusy] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
   const [chatNotice, setChatNotice] = useState("");
   const [projectNotice, setProjectNotice] = useState("");
   const [attachmentNotice, setAttachmentNotice] = useState("");
@@ -2518,6 +2633,31 @@ function App() {
     setAttachmentNotice("");
     setVscodeNotice("Задача запущена в web. VS Code можно обновить вручную после завершения.");
     await loadChat(targetChatId, jobId);
+  }
+
+  async function shareChat(chat = activeChat) {
+    if (!chat || !csrf) return;
+    setShareBusy(true);
+    setChatNotice("");
+    setChatMenuId("");
+    const response = await api(`/api/chats/${encodeURIComponent(chat.id)}/share`, {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: "{}"
+    });
+    const data = await response.json().catch(() => ({}));
+    setShareBusy(false);
+    if (!response.ok) {
+      setChatNotice(data.error || "Не получилось создать публичную ссылку на чат.");
+      return;
+    }
+    const url = String(data.url || data.share?.url || "");
+    if (url) {
+      await navigator.clipboard?.writeText(url).catch(() => undefined);
+      setChatNotice(`Ссылка на чат скопирована: ${url}`);
+      return;
+    }
+    setChatNotice("Публичная ссылка создана, но сервер не вернул URL.");
   }
 
   async function hideChat(chat: Chat) {
@@ -3829,6 +3969,7 @@ function App() {
                             {chatMenuId === chat.id && (
                               <div className="nav-chat-menu">
                                 <button type="button" onClick={() => openChatProperties(chat)}>Свойства</button>
+                                <button type="button" disabled={shareBusy} onClick={() => shareChat(chat)}>Ссылка</button>
                                 <button
                                   type="button"
                                   disabled={activeJob?.chatId === chat.id && ["queued", "assigned", "running"].includes(activeJob.status)}
@@ -4036,7 +4177,14 @@ function App() {
           <section className="chat-work">
             <div className="section-head">
               <h2><MessageSquare size={18} /> {activeChat?.title ?? "Project chat"}</h2>
-              <button className="icon tiny" onClick={() => openProjectSettings(selectedRepo)} title="Настройки"><Settings size={16} /></button>
+              <div className="section-actions">
+                {activeChat && (
+                  <button className="secondary" disabled={shareBusy} onClick={() => shareChat(activeChat)} type="button">
+                    <Link2 size={16} /> Ссылка
+                  </button>
+                )}
+                <button className="icon tiny" onClick={() => openProjectSettings(selectedRepo)} title="Настройки"><Settings size={16} /></button>
+              </div>
             </div>
             <div className="repo-meta">
               <GitBranch size={16} /> {selectedRepo.currentBranch || "no branch"} · {selectedRepo.dirty ? "dirty" : "clean"} · {selectedRepo.pathMasked}
@@ -4253,4 +4401,5 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+const sharedToken = shareTokenFromLocation();
+createRoot(document.getElementById("root")!).render(sharedToken ? <SharedChatPage token={sharedToken} /> : <App />);

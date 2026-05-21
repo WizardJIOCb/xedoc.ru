@@ -147,6 +147,20 @@ export type ChatAttachmentRow = {
   created_at: string;
 };
 
+export type ChatShareRow = {
+  token: string;
+  chat_id: string | null;
+  agent_id: string | null;
+  repo_id: string | null;
+  title: string;
+  source: string;
+  external_id: string | null;
+  final_content: string | null;
+  snapshot_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type LogRow = {
   id: string;
   job_id: string;
@@ -286,6 +300,19 @@ export function openDb(path: string): DatabaseSync {
       data_base64 TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS chat_shares (
+      token TEXT PRIMARY KEY,
+      chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL,
+      agent_id TEXT,
+      repo_id TEXT,
+      title TEXT NOT NULL,
+      source TEXT NOT NULL,
+      external_id TEXT,
+      final_content TEXT,
+      snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS oauth_connections (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       provider TEXT NOT NULL,
@@ -318,6 +345,8 @@ export function openDb(path: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS idx_attachments_job ON job_attachments(job_id);
     CREATE INDEX IF NOT EXISTS idx_attachments_message ON job_attachments(chat_message_id);
     CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments(chat_message_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_shares_chat ON chat_shares(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_shares_agent ON chat_shares(agent_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_provider_user ON oauth_connections(provider, provider_user_id) WHERE provider_user_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON chat_messages(chat_id, source, external_id) WHERE external_id IS NOT NULL;
@@ -411,6 +440,8 @@ export function openDb(path: string): DatabaseSync {
   db.exec("CREATE INDEX IF NOT EXISTS idx_attachments_job ON job_attachments(job_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_attachments_message ON job_attachments(chat_message_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments(chat_message_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_chat_shares_chat ON chat_shares(chat_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_chat_shares_agent ON chat_shares(agent_id, updated_at)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_external ON chats(agent_id, source, external_id) WHERE external_id IS NOT NULL");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON chat_messages(chat_id, source, external_id) WHERE external_id IS NOT NULL");
   return db;

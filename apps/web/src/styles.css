@@ -85,6 +85,73 @@ textarea:focus {
   padding: 24px;
 }
 
+.share-page {
+  height: 100%;
+  min-height: 100vh;
+  overflow: auto;
+  padding: 28px;
+  background:
+    linear-gradient(180deg, #fbfbf8 0%, var(--bg) 280px),
+    var(--bg);
+}
+
+.share-hero,
+.share-card,
+.share-chat {
+  width: min(920px, 100%);
+  margin: 0 auto;
+}
+
+.share-hero {
+  display: grid;
+  gap: 10px;
+  padding: 6px 0 22px;
+}
+
+.share-hero > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.share-hero h1 {
+  margin: 0;
+  font-size: clamp(26px, 4vw, 42px);
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+
+.share-hero p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.share-card {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.share-card > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.share-chat {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 40px;
+}
+
 .login-panel {
   width: min(420px, 100%);
   display: grid;
@@ -612,6 +679,17 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.section-head {
+  justify-content: space-between;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .icon {

@@ -1,4 +1,6 @@
 import net from "node:net";
+import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
@@ -38,6 +40,20 @@ type CodexThread = {
   id: string;
   title: string;
   updatedAt: string;
+};
+
+type ExportedChatMessage = {
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  source: "codex";
+  externalId: string;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+};
+
+type AgentConfig = {
+  serverUrl?: string;
+  tokenEnv?: string;
 };
 
 function pipePath(): string {
@@ -224,6 +240,138 @@ function readLocalCodexThreads(): CodexThread[] {
     .slice(0, 80);
 }
 
+function rolloutPathForThread(threadId: string): string | undefined {
+  return collectRolloutFiles(join(codexHome(), "sessions")).find((path) => threadIdFromRolloutPath(path) === threadId);
+}
+
+function readCodexThreadMessages(path: string): ExportedChatMessage[] {
+  const messages: ExportedChatMessage[] = [];
+  const text = readFileSync(path, "utf8");
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    if (!line.trim()) continue;
+    let row: any;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (row.type !== "response_item" || row.payload?.type !== "message") continue;
+    const role = row.payload.role;
+    if (role !== "user" && role !== "assistant" && role !== "system" && role !== "tool") continue;
+    const content = textFromContent(row.payload.content).trim();
+    if (!content || isCodexContextMessage(content)) continue;
+    messages.push({
+      role,
+      content: content.slice(0, 200000),
+      source: "codex",
+      externalId: `${basename(path)}:${index}`,
+      createdAt: typeof row.timestamp === "string" ? row.timestamp : new Date().toISOString()
+    });
+  }
+  return messages;
+}
+
+function readAgentConfig(): AgentConfig {
+  const candidates = [
+    process.env.CMC_AGENT_CONFIG,
+    ...(vscode.workspace.workspaceFolders?.map((folder) => join(folder.uri.fsPath, "apps", "agent-windows", "agent.config.json")) ?? []),
+    join(os.homedir(), "codex-agent", "apps", "agent-windows", "agent.config.json")
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    try {
+      return JSON.parse(readFileSync(candidate, "utf8")) as AgentConfig;
+    } catch {
+      // Try the next known config path.
+    }
+  }
+  return {};
+}
+
+function serverOriginFromConfig(config: AgentConfig): string {
+  const explicit = process.env.CMC_PUBLIC_BASE_URL?.trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const serverUrl = config.serverUrl?.trim();
+  if (!serverUrl) return "https://codex.rodion.pro";
+  return serverUrl
+    .replace(/^wss:/i, "https:")
+    .replace(/^ws:/i, "http:")
+    .replace(/\/api\/agent\/ws\/?$/i, "")
+    .replace(/\/+$/, "");
+}
+
+function postJson(url: string, token: string, body: unknown): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const data = Buffer.from(JSON.stringify(body), "utf8");
+    const transport = target.protocol === "http:" ? http : https;
+    const request = transport.request({
+      method: "POST",
+      protocol: target.protocol,
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Content-Length": String(data.byteLength)
+      },
+      timeout: 15000
+    }, (response) => {
+      let responseText = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        responseText += chunk;
+        if (responseText.length > 2_000_000) request.destroy(new Error("response_too_large"));
+      });
+      response.on("end", () => {
+        let parsed: any = {};
+        try {
+          parsed = responseText ? JSON.parse(responseText) : {};
+        } catch {
+          reject(new Error("invalid_server_response"));
+          return;
+        }
+        if ((response.statusCode ?? 500) >= 400) {
+          reject(new Error(String(parsed.error ?? `server_${response.statusCode}`)));
+          return;
+        }
+        resolve(parsed);
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("share_timeout")));
+    request.on("error", reject);
+    request.end(data);
+  });
+}
+
+async function shareCodexThread(threadId: string): Promise<string> {
+  const rolloutPath = rolloutPathForThread(threadId);
+  if (!rolloutPath) throw new Error("codex_thread_not_found");
+  const messages = readCodexThreadMessages(rolloutPath);
+  if (!messages.length) throw new Error("codex_thread_has_no_messages");
+  const title = titleFromContent(readSessionTitles().get(threadId)) || titleFromContent(messages.find((message) => message.role === "user")?.content) || "Codex chat";
+  const updatedAt = messages.at(-1)?.createdAt ?? readRolloutSummary(rolloutPath).updatedAt ?? new Date().toISOString();
+  const config = readAgentConfig();
+  const tokenEnv = config.tokenEnv || "CMC_AGENT_TOKEN";
+  const token = process.env[tokenEnv]?.trim() || process.env.CMC_AGENT_TOKEN?.trim();
+  if (!token) throw new Error(`${tokenEnv}_missing`);
+  const origin = serverOriginFromConfig(config);
+  const result = await postJson(`${origin}/api/agent/shared-chats`, token, {
+    repoId: "vscode-export",
+    source: "codex",
+    externalId: threadId,
+    title,
+    updatedAt,
+    messages
+  });
+  const url = typeof result.url === "string" ? result.url : typeof result.share?.url === "string" ? result.share.url : "";
+  if (!url) throw new Error("share_url_missing");
+  await vscode.env.clipboard.writeText(url);
+  return url;
+}
+
 function webviewHtml(): string {
   const nonce = randomBytes(16).toString("base64");
   return `<!doctype html>
@@ -283,11 +431,12 @@ function webviewHtml(): string {
         if (!thread || typeof thread.id !== 'string') continue;
         const item = document.createElement('article');
         item.className = 'item';
-        item.innerHTML = '<div class="title"></div><div class="meta"></div><div class="actions"><button data-action="open">Открыть</button><button class="secondary" data-action="reopen">Переоткрыть</button></div>';
+        item.innerHTML = '<div class="title"></div><div class="meta"></div><div class="actions"><button data-action="open">Открыть</button><button class="secondary" data-action="reopen">Переоткрыть</button><button class="secondary" data-action="export">Ссылка</button></div>';
         item.querySelector('.title').textContent = String(thread.title || 'Codex chat');
         item.querySelector('.meta').textContent = formatDateTime(thread.updatedAt);
         item.querySelector('[data-action="open"]').addEventListener('click', () => vscode.postMessage({ type: 'openThread', threadId: thread.id }));
         item.querySelector('[data-action="reopen"]').addEventListener('click', () => vscode.postMessage({ type: 'reopenThread', threadId: thread.id }));
+        item.querySelector('[data-action="export"]').addEventListener('click', () => vscode.postMessage({ type: 'exportThread', threadId: thread.id }));
         list.appendChild(item);
       }
     });
@@ -328,6 +477,16 @@ class CodexRodionChatsProvider implements vscode.WebviewViewProvider {
     if ((request.type === "openThread" || request.type === "reopenThread") && typeof request.threadId === "string") {
       if (request.type === "reopenThread") await closeCodexThreadTabs(request.threadId);
       await openCodexThread(request.threadId);
+      return;
+    }
+    if (request.type === "exportThread" && typeof request.threadId === "string") {
+      try {
+        const url = await shareCodexThread(request.threadId);
+        const open = await vscode.window.showInformationMessage(`Ссылка на чат скопирована: ${url}`, "Открыть");
+        if (open === "Открыть") await vscode.env.openExternal(vscode.Uri.parse(url));
+      } catch (error) {
+        await vscode.window.showWarningMessage(`Не получилось экспортировать чат: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 }

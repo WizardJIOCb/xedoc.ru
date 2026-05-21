@@ -11,6 +11,9 @@ declare module "vscode" {
   export type Tab = {
     input: unknown;
   };
+  export type WorkspaceFolder = {
+    uri: Uri;
+  };
 
   export type Webview = {
     html: string;
@@ -43,7 +46,7 @@ declare module "vscode" {
   };
 
   export const window: {
-    showInformationMessage(message: string): PromiseLike<string | undefined>;
+    showInformationMessage(message: string, ...items: string[]): PromiseLike<string | undefined>;
     showWarningMessage(message: string): PromiseLike<string | undefined>;
     registerWebviewViewProvider(viewId: string, provider: WebviewViewProvider): Disposable;
     tabGroups: {
@@ -54,5 +57,17 @@ declare module "vscode" {
 
   export const Uri: {
     file(path: string): Uri;
+    parse(path: string): Uri;
+  };
+
+  export const workspace: {
+    workspaceFolders?: WorkspaceFolder[];
+  };
+
+  export const env: {
+    clipboard: {
+      writeText(value: string): PromiseLike<void>;
+    };
+    openExternal(uri: Uri): PromiseLike<boolean>;
   };
 }
