@@ -9,6 +9,14 @@ type LocalAttachment = NonNullable<ChatMessage["attachments"]>[number];
 
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
+const CODEX_CONTEXT_TAGS = [
+  "environment_context",
+  "permissions instructions",
+  "collaboration_mode",
+  "apps_instructions",
+  "skills_instructions",
+  "plugins_instructions"
+];
 const IMAGE_MIME_BY_EXT = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
@@ -282,11 +290,35 @@ function diffStatFromPatch(output: string): string[] {
 }
 
 function isCodexContextMessage(content: string): boolean {
-  const normalized = content.trim();
-  return /^<(environment_context|permissions instructions|collaboration_mode|apps_instructions|skills_instructions|plugins_instructions)>/i.test(normalized)
-    || /^#?\s*AGENTS\.md instructions for\b/i.test(normalized)
-    || /^AGENTS\.md\s+Project rules\b/i.test(normalized)
-    || normalized.includes("<INSTRUCTIONS>");
+  return !stripLeadingCodexContextBlocks(content);
+}
+
+function stripLeadingCodexContextBlocks(content: string): string {
+  let value = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!value) return "";
+
+  for (;;) {
+    const before = value;
+    value = value
+      .replace(/^\s*#?\s*AGENTS\.md instructions for[^\n]*\n+\s*<INSTRUCTIONS>\s*[\s\S]*?<\/INSTRUCTIONS>\s*/i, "")
+      .replace(/^\s*<INSTRUCTIONS>\s*[\s\S]*?<\/INSTRUCTIONS>\s*/i, "")
+      .trimStart();
+
+    for (const tag of CODEX_CONTEXT_TAGS) {
+      const escaped = escapeRegex(tag);
+      value = value.replace(new RegExp(`^\\s*<${escaped}>\\s*[\\s\\S]*?<\\/${escaped}>\\s*`, "i"), "").trimStart();
+    }
+
+    if (value === before) break;
+  }
+
+  if (/^\s*#?\s*AGENTS\.md instructions for\b/i.test(value) && /<INSTRUCTIONS>/i.test(value)) return "";
+  if (/^\s*AGENTS\.md\s+Project rules\b/i.test(value)) return "";
+  return value.trim();
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function firstUserMessage(messages: ChatMessage[]): string | undefined {
@@ -469,7 +501,7 @@ function textFromContent(content: unknown): string {
 }
 
 function cleanSyncedContent(content: string, attachments: LocalAttachment[]): string {
-  const cleaned = content
+  const cleaned = stripLeadingCodexContextBlocks(content)
     .replace(/<image>\s*<\/image>/gi, "")
     .replace(/<image\s*\/>/gi, "")
     .replace(/\n{3,}/g, "\n\n")

@@ -75,9 +75,19 @@ type AgentConnection = {
 
 const agents = new Map<string, AgentConnection>();
 type AuthUser = Pick<UserRow, "id" | "role">;
+type SyncedChat = Extract<AgentToServer, { type: "chat.sync" }>;
+type SyncedChatMessage = SyncedChat["messages"][number];
 const uiClients = new Set<{ user: AuthUser; send: (event: UiEvent) => void }>();
 type OAuthProviderId = "google" | "github" | "vk" | "mailru";
 const oauthProviderIds: OAuthProviderId[] = ["google", "vk"];
+const CODEX_CONTEXT_TAGS = [
+  "environment_context",
+  "permissions instructions",
+  "collaboration_mode",
+  "apps_instructions",
+  "skills_instructions",
+  "plugins_instructions"
+];
 type OAuthProfile = {
   provider: OAuthProviderId;
   providerUserId: string;
@@ -733,6 +743,91 @@ function storeJobAttachments(
   }
 }
 
+function stripLeadingCodexContextBlocks(content: string): string {
+  let value = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!value) return "";
+
+  for (;;) {
+    const before = value;
+    value = value
+      .replace(/^\s*#?\s*AGENTS\.md instructions for[^\n]*\n+\s*<INSTRUCTIONS>\s*[\s\S]*?<\/INSTRUCTIONS>\s*/i, "")
+      .replace(/^\s*<INSTRUCTIONS>\s*[\s\S]*?<\/INSTRUCTIONS>\s*/i, "")
+      .trimStart();
+
+    for (const tag of CODEX_CONTEXT_TAGS) {
+      const escaped = escapeRegex(tag);
+      value = value.replace(new RegExp(`^\\s*<${escaped}>\\s*[\\s\\S]*?<\\/${escaped}>\\s*`, "i"), "").trimStart();
+    }
+
+    if (value === before) break;
+  }
+
+  if (/^\s*#?\s*AGENTS\.md instructions for\b/i.test(value) && /<INSTRUCTIONS>/i.test(value)) return "";
+  if (/^\s*AGENTS\.md\s+Project rules\b/i.test(value)) return "";
+  return value.trim();
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cleanSyncedMessageContent(content: string): string {
+  return stripLeadingCodexContextBlocks(content)
+    .replace(/<image>\s*<\/image>/gi, "")
+    .replace(/<image\s*\/>/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function titleFromSyncedContent(value: string | undefined | null): string | undefined {
+  if (!value) return undefined;
+  let content = cleanSyncedMessageContent(value);
+  const requestMatch = content.match(/My request for Codex:\s*([\s\S]+)/i);
+  if (requestMatch?.[1]) content = requestMatch[1];
+  content = content
+    .replace(/<image>[\s\S]*?<\/image>/gi, "")
+    .replace(/<image\s*\/>/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!content || /^# Context from my IDE setup:/i.test(content)) return undefined;
+  return content.slice(0, 120);
+}
+
+function syncedChatTitle(sync: Pick<SyncedChat, "source" | "title">, messages: SyncedChatMessage[]): string {
+  return titleFromSyncedContent(sync.title)
+    || titleFromSyncedContent(messages.find((message) => message.role === "user")?.content)
+    || titleFromSyncedContent(messages[0]?.content)
+    || (sync.source === "vscode" ? "VS Code chat" : "Codex chat");
+}
+
+function sanitizeSyncedMessages(messages: SyncedChatMessage[]): SyncedChatMessage[] {
+  return messages.flatMap((message) => {
+    const content = cleanSyncedMessageContent(message.content) || (message.attachments?.length ? "Image attachment" : "");
+    if (!content) return [];
+    return [{ ...message, content }];
+  });
+}
+
+function pruneSyncedContextMessages(chatId: string): boolean {
+  const rows = db.prepare(`
+    SELECT id, content
+    FROM chat_messages
+    WHERE chat_id = ? AND source IN ('codex', 'vscode')
+  `).all(chatId) as Array<Pick<ChatMessageRow, "id" | "content">>;
+  let changed = false;
+  for (const row of rows) {
+    const content = cleanSyncedMessageContent(row.content);
+    if (!content) {
+      db.prepare("DELETE FROM chat_messages WHERE id = ?").run(row.id);
+      changed = true;
+    } else if (content !== row.content) {
+      db.prepare("UPDATE chat_messages SET content = ? WHERE id = ?").run(content, row.id);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function replaceChatMessageAttachments(
   messageId: string,
   attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }> | undefined,
@@ -762,6 +857,9 @@ function replaceChatMessageAttachments(
 function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: "chat.sync" }>): void {
   const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?").get(agentId, sync.repoId) as RepoRow | undefined;
   if (!repo) return;
+  const syncedMessages = sanitizeSyncedMessages(sync.messages);
+  if (!syncedMessages.length) return;
+  const syncTitle = syncedChatTitle(sync, syncedMessages).slice(0, 300);
   const tombstone = db.prepare("SELECT 1 FROM deleted_chat_sync WHERE agent_id = ? AND repo_id = ? AND source = ? AND external_id = ?")
     .get(agentId, sync.repoId, sync.source, sync.externalId) as { 1: number } | undefined;
   if (tombstone) return;
@@ -778,11 +876,25 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
   let chat = db.prepare("SELECT * FROM chats WHERE agent_id = ? AND source = ? AND external_id = ?")
     .get(agentId, sync.source, sync.externalId) as ChatRow | undefined;
   let changed = false;
-  const latestSyncedMessage = sync.messages.at(-1);
+  if (!linkedChat && chat) changed = pruneSyncedContextMessages(chat.id) || changed;
+  const latestSyncedMessage = syncedMessages.at(-1);
   if (!linkedChat && chat && chat.updated_at === sync.updatedAt && latestSyncedMessage?.externalId) {
     const latestExists = db.prepare("SELECT 1 FROM chat_messages WHERE chat_id = ? AND source = ? AND external_id = ?")
       .get(chat.id, latestSyncedMessage.source, latestSyncedMessage.externalId) as { 1: number } | undefined;
-    if (latestExists) return;
+    if (latestExists) {
+      if (changed) {
+        db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?").run(sync.updatedAt || stamp, chat.id);
+        broadcast({
+          type: "chats.updated",
+          agentId,
+          repoId: sync.repoId,
+          chatId: chat.id,
+          source: sync.source,
+          externalId: sync.externalId
+        });
+      }
+      return;
+    }
   }
   if (linkedChat) {
     if (chat && chat.id !== linkedChat.id) {
@@ -790,6 +902,7 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
       changed = true;
     }
     chat = linkedChat;
+    changed = pruneSyncedContextMessages(chat.id) || changed;
     const nextCwd = chat.cwd ?? sync.cwd ?? null;
     if (chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
       db.prepare("UPDATE chats SET cwd=?, updated_at=? WHERE id=?")
@@ -798,19 +911,19 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
     }
   } else if (chat) {
     const nextCwd = sync.cwd ?? null;
-    if (chat.repo_id !== sync.repoId || chat.title !== sync.title || chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
+    if (chat.repo_id !== sync.repoId || chat.title !== syncTitle || chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
       db.prepare("UPDATE chats SET repo_id=?, title=?, cwd=?, updated_at=? WHERE id=?")
-        .run(sync.repoId, sync.title, nextCwd, sync.updatedAt, chat.id);
+        .run(sync.repoId, syncTitle, nextCwd, sync.updatedAt, chat.id);
       changed = true;
     }
   } else {
     const chatId = id("chat");
     db.prepare("INSERT INTO chats (id,agent_id,repo_id,title,source,external_id,cwd,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
-      .run(chatId, agentId, sync.repoId, sync.title, sync.source, sync.externalId, sync.cwd ?? null, sync.updatedAt, sync.updatedAt);
+      .run(chatId, agentId, sync.repoId, syncTitle, sync.source, sync.externalId, sync.cwd ?? null, sync.updatedAt, sync.updatedAt);
     chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow;
     changed = true;
   }
-  for (const message of sync.messages) {
+  for (const message of syncedMessages) {
     const content = message.content.slice(0, 200000);
     const metadataJson = message.metadata ? JSON.stringify(message.metadata) : null;
     const existing = message.externalId
@@ -1076,7 +1189,9 @@ function upsertChatShareFromChat(chat: ChatRow): ChatShareRow {
 
 function upsertChatShareFromLocalSync(agent: AgentRow, sync: Omit<Extract<AgentToServer, { type: "chat.sync" }>, "type">): ChatShareRow {
   const stamp = nowIso();
-  const messages = stripPrivateAttachmentUrls(sync.messages.map((message, index) => ({
+  const syncedMessages = sanitizeSyncedMessages(sync.messages);
+  const syncTitle = syncedChatTitle(sync, syncedMessages).slice(0, 300);
+  const messages = stripPrivateAttachmentUrls(syncedMessages.map((message, index) => ({
     id: message.id ?? `local_${sync.source}_${sync.externalId}_${index}`,
     chatId: `local:${sync.externalId}`,
     role: message.role,
@@ -1100,7 +1215,7 @@ function upsertChatShareFromLocalSync(agent: AgentRow, sync: Omit<Extract<AgentT
       id: `local:${sync.externalId}`,
       agentId: agent.id,
       repoId: sync.repoId,
-      title: sync.title,
+      title: syncTitle,
       source: sync.source,
       externalId: sync.externalId,
       cwd: sync.cwd,
@@ -1120,14 +1235,14 @@ function upsertChatShareFromLocalSync(agent: AgentRow, sync: Omit<Extract<AgentT
       UPDATE chat_shares
       SET repo_id=?, title=?, final_content=?, snapshot_json=?, updated_at=?
       WHERE token=?
-    `).run(sync.repoId, sync.title, snapshot.finalAnswer, snapshotJson, stamp, existing.token);
+    `).run(sync.repoId, syncTitle, snapshot.finalAnswer, snapshotJson, stamp, existing.token);
     return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(existing.token) as ChatShareRow;
   }
   const token = randomToken("share");
   db.prepare(`
     INSERT INTO chat_shares (token,chat_id,agent_id,repo_id,title,source,external_id,final_content,snapshot_json,created_at,updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)
-  `).run(token, null, agent.id, sync.repoId, sync.title, sync.source, sync.externalId, snapshot.finalAnswer, snapshotJson, stamp, stamp);
+  `).run(token, null, agent.id, sync.repoId, syncTitle, sync.source, sync.externalId, snapshot.finalAnswer, snapshotJson, stamp, stamp);
   return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(token) as ChatShareRow;
 }
 

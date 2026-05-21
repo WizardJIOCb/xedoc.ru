@@ -56,6 +56,15 @@ type AgentConfig = {
   tokenEnv?: string;
 };
 
+const CODEX_CONTEXT_TAGS = [
+  "environment_context",
+  "permissions instructions",
+  "collaboration_mode",
+  "apps_instructions",
+  "skills_instructions",
+  "plugins_instructions"
+];
+
 function pipePath(): string {
   const configured = process.env.CMC_VSCODE_BRIDGE_PIPE?.trim();
   if (configured) return configured;
@@ -173,16 +182,40 @@ function textFromContent(value: unknown): string {
 }
 
 function isCodexContextMessage(content: string): boolean {
-  const normalized = content.trim();
-  return /^<(environment_context|permissions instructions|collaboration_mode|apps_instructions|skills_instructions|plugins_instructions)>/i.test(normalized)
-    || /^#?\s*AGENTS\.md instructions for\b/i.test(normalized)
-    || /^AGENTS\.md\s+Project rules\b/i.test(normalized)
-    || normalized.includes("<INSTRUCTIONS>");
+  return !stripLeadingCodexContextBlocks(content);
+}
+
+function stripLeadingCodexContextBlocks(content: string): string {
+  let value = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!value) return "";
+
+  for (;;) {
+    const before = value;
+    value = value
+      .replace(/^\s*#?\s*AGENTS\.md instructions for[^\n]*\n+\s*<INSTRUCTIONS>\s*[\s\S]*?<\/INSTRUCTIONS>\s*/i, "")
+      .replace(/^\s*<INSTRUCTIONS>\s*[\s\S]*?<\/INSTRUCTIONS>\s*/i, "")
+      .trimStart();
+
+    for (const tag of CODEX_CONTEXT_TAGS) {
+      const escaped = escapeRegex(tag);
+      value = value.replace(new RegExp(`^\\s*<${escaped}>\\s*[\\s\\S]*?<\\/${escaped}>\\s*`, "i"), "").trimStart();
+    }
+
+    if (value === before) break;
+  }
+
+  if (/^\s*#?\s*AGENTS\.md instructions for\b/i.test(value) && /<INSTRUCTIONS>/i.test(value)) return "";
+  if (/^\s*AGENTS\.md\s+Project rules\b/i.test(value)) return "";
+  return value.trim();
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function titleFromContent(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  let content = value
+  let content = stripLeadingCodexContextBlocks(value)
     .replace(/<image>[\s\S]*?<\/image>/gi, "")
     .replace(/<image\s*\/>/gi, "")
     .trim();
@@ -208,7 +241,7 @@ function readRolloutSummary(path: string): { title?: string; updatedAt?: string 
       }
       if (typeof row.timestamp === "string") updatedAt = row.timestamp;
       if (!title && row.type === "response_item" && row.payload?.type === "message" && row.payload?.role === "user") {
-        const content = textFromContent(row.payload.content).replace(/\s+/g, " ").trim();
+        const content = stripLeadingCodexContextBlocks(textFromContent(row.payload.content)).replace(/\s+/g, " ").trim();
         title = titleFromContent(content);
       }
     }
@@ -258,7 +291,7 @@ function readCodexThreadMessages(path: string): ExportedChatMessage[] {
     if (row.type !== "response_item" || row.payload?.type !== "message") continue;
     const role = row.payload.role;
     if (role !== "user" && role !== "assistant" && role !== "system" && role !== "tool") continue;
-    const content = textFromContent(row.payload.content).trim();
+    const content = stripLeadingCodexContextBlocks(textFromContent(row.payload.content)).trim();
     if (!content || isCodexContextMessage(content)) continue;
     messages.push({
       role,
