@@ -1,4 +1,4 @@
-const CACHE = "cmc-shell-v3";
+const CACHE = "cmc-shell-v4";
 const ASSETS = ["/", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -17,6 +17,7 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/assets/")) return;
   event.respondWith(fetch(event.request).catch(() => caches.match(event.request).then((match) => match || caches.match("/"))));
 });
