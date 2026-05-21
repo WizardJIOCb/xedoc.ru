@@ -1574,7 +1574,7 @@ async function createApp(): Promise<FastifyInstance> {
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "DENY");
     reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
-    reply.header("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:");
+    reply.header("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss: https://mc.yandex.ru https://mc.yandex.com; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://mc.yandex.ru; img-src 'self' data: https://mc.yandex.ru;");
   });
 
   app.get("/api/health", async () => ({ ok: true, now: nowIso() }));
