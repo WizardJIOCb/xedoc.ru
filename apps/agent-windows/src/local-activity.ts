@@ -5,6 +5,7 @@ import type { LocalCodexActivity } from "@cmc/protocol";
 import type { AgentConfig, RepoConfig } from "./config.js";
 
 const BUSY_WINDOW_MS = 8000;
+const BUSY_COMPLETED_SETTLE_MS = 3000;
 const BUSY_IDLE_GRACE_MS = 15 * 60 * 1000;
 const BUSY_USER_TURN_WINDOW_MS = 30 * 60 * 1000;
 
@@ -22,6 +23,13 @@ type Candidate = {
   title?: string;
   updatedAt: number;
   startedAt?: number;
+  completedAt?: number;
+};
+
+type CodexTurnState = {
+  startedAt: number;
+  latestActivityAt: number;
+  completedAt?: number;
 };
 
 export function detectLocalCodexActivity(config: AgentConfig, currentJobId?: string): LocalCodexActivity {
@@ -59,7 +67,7 @@ export function detectLocalCodexActivity(config: AgentConfig, currentJobId?: str
     };
   }
 
-  if (busySinceMs && Date.now() - lastBusySeenMs <= BUSY_IDLE_GRACE_MS && lastBusyCandidate) {
+  if (busySinceMs && Date.now() - lastBusySeenMs <= BUSY_IDLE_GRACE_MS && lastBusyCandidate && !isSettledCompletedCandidate(lastBusyCandidate)) {
     return {
       status: "busy",
       summary: `${lastBusyCandidate.source} is working on a local Codex chat.`,
@@ -95,10 +103,17 @@ function markBusy(key: string, seenAt: number, candidate: Candidate): void {
   lastBusyCandidate = candidate;
 }
 
-function latestUserMessageMsFromCodexRollout(path: string): number | undefined {
+function isSettledCompletedCandidate(candidate: Candidate): boolean {
+  return Boolean(candidate.completedAt && Date.now() - candidate.completedAt > BUSY_COMPLETED_SETTLE_MS);
+}
+
+function latestCodexTurnState(path: string): CodexTurnState | undefined {
   const text = readTailText(path, 4 * 1024 * 1024);
   if (!text) return undefined;
-  let latest = 0;
+  let startedAt = 0;
+  let latestActivityAt = 0;
+  let latestAssistantAt = 0;
+  let latestToolAt = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let row: any;
@@ -107,11 +122,37 @@ function latestUserMessageMsFromCodexRollout(path: string): number | undefined {
     } catch {
       continue;
     }
-    if (row.type !== "response_item" || row.payload?.type !== "message" || row.payload?.role !== "user") continue;
     const timestamp = Date.parse(typeof row.timestamp === "string" ? row.timestamp : "");
-    if (Number.isFinite(timestamp)) latest = Math.max(latest, timestamp);
+    if (!Number.isFinite(timestamp)) continue;
+    if (row.type === "response_item" && row.payload?.type === "message" && row.payload?.role === "user") {
+      startedAt = timestamp;
+      latestActivityAt = timestamp;
+      latestAssistantAt = 0;
+      latestToolAt = 0;
+      continue;
+    }
+    if (!startedAt) continue;
+    latestActivityAt = Math.max(latestActivityAt, timestamp);
+    if (row.type === "response_item" && row.payload?.type === "message" && row.payload?.role === "assistant") {
+      latestAssistantAt = Math.max(latestAssistantAt, timestamp);
+    }
+    if (
+      (row.type === "response_item" && (
+        row.payload?.type === "function_call"
+        || row.payload?.type === "function_call_output"
+      ))
+      || row.type === "custom_tool_call"
+      || row.type === "custom_tool_call_output"
+    ) {
+      latestToolAt = Math.max(latestToolAt, timestamp);
+    }
   }
-  return latest || undefined;
+  if (!startedAt) return undefined;
+  return {
+    startedAt,
+    latestActivityAt,
+    completedAt: latestAssistantAt && latestAssistantAt >= latestToolAt ? latestAssistantAt : undefined
+  };
 }
 
 function readTailText(path: string, maxBytes: number): string {
@@ -150,17 +191,20 @@ function recentCodexThreads(config: AgentConfig): Candidate[] {
     return rows.flatMap((row) => {
       const repo = matchRepo(config.repos, row.cwd);
       if (!repo) return [];
-      const startedAt = latestUserMessageMsFromCodexRollout(row.rollout_path);
-      if (!startedAt || Date.now() - startedAt > BUSY_USER_TURN_WINDOW_MS) return [];
+      const turn = latestCodexTurnState(row.rollout_path);
+      if (!turn || Date.now() - turn.startedAt > BUSY_USER_TURN_WINDOW_MS) return [];
+      if (turn.completedAt && Date.now() - turn.completedAt > BUSY_COMPLETED_SETTLE_MS) return [];
+      const updatedAt = Math.max(timeMsFromNumber(row.updated_at), turn.latestActivityAt);
       return [{
-        key: `local-codex:${repo.id}:${row.id}:${startedAt || row.updated_at}`,
+        key: `local-codex:${repo.id}:${row.id}:${turn.startedAt || row.updated_at}`,
         repoId: repo.id,
         chatSource: "codex" as const,
         externalId: row.id,
         source: "local Codex",
         title: row.title,
-        updatedAt: timeMsFromNumber(row.updated_at),
-        startedAt
+        updatedAt,
+        startedAt: turn.startedAt,
+        completedAt: turn.completedAt
       }];
     });
   } catch {
