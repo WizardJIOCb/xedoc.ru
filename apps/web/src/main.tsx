@@ -311,8 +311,14 @@ type DiffRow = {
   file: string;
   changed: number;
   bars: string;
-  added: number;
-  deleted: number;
+  added: number | null;
+  deleted: number | null;
+};
+
+type DiffSummary = {
+  files: number;
+  added: number | null;
+  deleted: number | null;
 };
 
 type DiffLine = {
@@ -576,16 +582,40 @@ function diffRowsFromFileDiffs(fileDiffs: FileDiff[]): DiffRow[] {
 }
 
 function diffSummaryFromRows(rows: DiffRow[]) {
-  return rows.reduce((total, row) => ({
+  const exact = rows.every((row) => row.added !== null && row.deleted !== null);
+  return rows.reduce<DiffSummary>((total, row) => ({
     files: total.files + 1,
-    added: total.added + row.added,
-    deleted: total.deleted + row.deleted
-  }), { files: 0, added: 0, deleted: 0 });
+    added: exact ? (total.added ?? 0) + (row.added ?? 0) : null,
+    deleted: exact ? (total.deleted ?? 0) + (row.deleted ?? 0) : null
+  }), { files: 0, added: exact ? 0 : null, deleted: exact ? 0 : null });
+}
+
+function diffSummaryFromProgress(fallback?: { filesChanged?: number; added?: number; deleted?: number; files?: JobProgress["files"] } | null): DiffSummary | null {
+  if (!fallback) return null;
+  if (fallback.filesChanged === undefined && fallback.added === undefined && fallback.deleted === undefined && !fallback.files?.length) return null;
+  return {
+    files: fallback.filesChanged ?? fallback.files?.length ?? 0,
+    added: fallback.added ?? 0,
+    deleted: fallback.deleted ?? 0
+  };
+}
+
+function diffSummaryFromStat(stat: string | null | undefined): DiffSummary | null {
+  const summaryLine = stat
+    ?.split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /^\d+\s+files?\s+changed\b/i.test(line));
+  if (!summaryLine) return null;
+  const files = Number(summaryLine.match(/^(\d+)\s+files?\s+changed\b/i)?.[1] ?? 0);
+  const added = Number(summaryLine.match(/(\d+)\s+insertions?\(\+\)/i)?.[1] ?? 0);
+  const deleted = Number(summaryLine.match(/(\d+)\s+deletions?\(-\)/i)?.[1] ?? 0);
+  return { files, added, deleted };
 }
 
 function diffRows(stat: string | null, fallbackFiles?: JobProgress["files"], limit = 8): DiffRow[] {
   const fallbackRows = progressDiffRows(fallbackFiles);
-  if (!stat) return fallbackRows;
+  if (fallbackRows.length) return limit === Number.POSITIVE_INFINITY ? fallbackRows : fallbackRows.slice(0, limit);
+  if (!stat) return [];
   const rows = stat
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -594,28 +624,28 @@ function diffRows(stat: string | null, fallbackFiles?: JobProgress["files"], lim
     .flatMap((line) => {
       const match = line.match(/^(.*?)\s+\|\s+(\d+)\s+([+\-]+)?/);
       if (!match) return [];
+      const changed = Number(match?.[2] ?? 0);
       const bars = match?.[3] ?? "";
+      const exactBars = bars.length === changed;
       return [{
         file: match?.[1]?.trim() || line,
-        changed: Number(match?.[2] ?? 0),
-        bars,
-        added: [...bars].filter((char) => char === "+").length,
-        deleted: [...bars].filter((char) => char === "-").length
+        changed,
+        bars: exactBars ? bars : "",
+        added: exactBars ? [...bars].filter((char) => char === "+").length : null,
+        deleted: exactBars ? [...bars].filter((char) => char === "-").length : null
       }];
     });
-  const allRows = rows.length ? rows : fallbackRows;
-  return limit === Number.POSITIVE_INFINITY ? allRows : allRows.slice(0, limit);
+  return limit === Number.POSITIVE_INFINITY ? rows : rows.slice(0, limit);
 }
 
 function diffSummary(stat: string | null, fallback?: { filesChanged?: number; added?: number; deleted?: number; files?: JobProgress["files"] } | null) {
-  const rows = diffRows(stat, fallback?.files, Number.POSITIVE_INFINITY);
-  const statSummary = stat?.match(/(\d+)\s+files?\s+changed(?:,\s+(\d+)\s+insertions?\(\+\))?(?:,\s+(\d+)\s+deletions?\(-\))?/i);
+  const statSummary = diffSummaryFromStat(stat);
+  if (statSummary) return statSummary;
+  const progressSummary = diffSummaryFromProgress(fallback);
+  if (progressSummary) return progressSummary;
+  const rows = diffRows(stat, undefined, Number.POSITIVE_INFINITY);
   const fromRows = diffSummaryFromRows(rows);
-  return {
-    files: Math.max(Number(statSummary?.[1] ?? 0), fromRows.files, fallback?.filesChanged || 0),
-    added: Math.max(Number(statSummary?.[2] ?? 0), fromRows.added, fallback?.added || 0),
-    deleted: Math.max(Number(statSummary?.[3] ?? 0), fromRows.deleted, fallback?.deleted || 0)
-  };
+  return fromRows;
 }
 
 function jobDurationSeconds(job: Job) {
@@ -626,7 +656,7 @@ function jobDurationSeconds(job: Job) {
 }
 
 function renderDiffRowMeta(row: DiffRow) {
-  if (row.added || row.deleted) {
+  if (row.added !== null && row.deleted !== null && (row.added || row.deleted)) {
     return (
       <>
         <span className="diff-added">+{row.added}</span>
@@ -3846,8 +3876,8 @@ function App() {
               <strong>Edited {summary.files} {summary.files === 1 ? "file" : "files"}</strong>
               <small>
                 {durationSeconds > 0 && <span className="duration">Worked for {formatDuration(durationSeconds)}</span>}
-                <span className="added">+{summary.added}</span>
-                <span className="deleted">-{summary.deleted}</span>
+                {summary.added !== null && <span className="added">+{summary.added}</span>}
+                {summary.deleted !== null && <span className="deleted">-{summary.deleted}</span>}
               </small>
             </div>
           </div>
