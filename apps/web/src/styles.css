@@ -844,6 +844,17 @@ textarea:focus {
   line-height: 1.45;
 }
 
+.settings-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.settings-card-head h2 {
+  margin: 0 0 4px;
+}
+
 .sync-work {
   max-width: 980px;
 }
@@ -3159,6 +3170,7 @@ button:disabled {
   .sync-setup-card,
   .sync-grid,
   .sync-actions,
+  .settings-card-head,
   .agent-settings-row,
   .oauth-row {
     grid-template-columns: 1fr;

@@ -2943,15 +2943,20 @@ function App() {
   async function createAgent(event: React.FormEvent) {
     event.preventDefault();
     if (!csrf || !newAgentName.trim()) return;
+    await createAgentSetup(newAgentName.trim(), newAgentId.trim() || undefined, currentUser?.role === "admin" ? newAgentUserId || undefined : undefined);
+  }
+
+  async function createAgentSetup(name: string, agentId?: string, userId?: string) {
+    if (!csrf || !name.trim()) return;
     setBusy(true);
     setSettingsNotice("");
     const response = await api("/api/agents", {
       method: "POST",
       headers: { "x-csrf-token": csrf },
       body: JSON.stringify({
-        name: newAgentName.trim(),
-        id: newAgentId.trim() || undefined,
-        userId: currentUser?.role === "admin" ? newAgentUserId || undefined : undefined
+        name: name.trim(),
+        id: agentId?.trim() || undefined,
+        userId
       })
     });
     setBusy(false);
@@ -2964,6 +2969,18 @@ function App() {
     setNewAgentId("");
     setSettingsNotice("Agent created. Save the setup script now; the token is shown only once.");
     await refresh();
+  }
+
+  async function createAnotherComputerSetup() {
+    const stamp = new Date();
+    const suffix = [
+      stamp.getFullYear(),
+      String(stamp.getMonth() + 1).padStart(2, "0"),
+      String(stamp.getDate()).padStart(2, "0"),
+      String(stamp.getHours()).padStart(2, "0"),
+      String(stamp.getMinutes()).padStart(2, "0")
+    ].join("");
+    await createAgentSetup(`Windows Agent ${suffix}`, `windows-${suffix}`, currentUser?.role === "admin" ? newAgentUserId || undefined : undefined);
   }
 
   async function downloadAgentSetup(agentOverride?: Agent) {
@@ -3191,6 +3208,7 @@ function App() {
           </div>
           <div className="notice">
             Пользователь запускает Windows-agent у себя на ПК, логинится в Codex локально через <code>codex login</code>, а сайт только отправляет задачи его агенту.
+            Для второго ПК или ноутбука создай отдельного агента: один <code>agentId</code> рассчитан на одно активное подключение.
           </div>
           <form className="settings-card" onSubmit={createAgent}>
             <h2><Bot size={18} /> Create personal agent</h2>
@@ -3255,7 +3273,15 @@ function App() {
             </div>
           )}
           <div className="settings-card">
-            <h2>Agents</h2>
+            <div className="settings-card-head">
+              <div>
+                <h2>Agents</h2>
+                <p>Для другого компьютера нужен отдельный агент, иначе устройства будут перехватывать один и тот же статус.</p>
+              </div>
+              <button className="secondary" disabled={busy} type="button" onClick={() => void createAnotherComputerSetup()}>
+                <Plus size={16} /> Add another computer
+              </button>
+            </div>
             {agents.map((agent) => (
               <div className="settings-row agent-settings-row" key={agent.id}>
                 <div className="agent-settings-main">
@@ -3268,6 +3294,7 @@ function App() {
                     className="secondary compact"
                     disabled={busy || agent.status === "online"}
                     type="button"
+                    title={agent.status === "online" ? "Stop this agent first to rotate its setup token. For another PC, use Add another computer." : "Download setup-agent.bat"}
                     onClick={() => void downloadAgentSetup(agent)}
                   >
                     <Download size={15} /> Setup
