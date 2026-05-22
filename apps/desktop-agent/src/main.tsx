@@ -58,6 +58,11 @@ type LiveAgentState = {
   spinning: boolean;
 };
 
+type LogEntry = {
+  raw: string;
+  at: string;
+};
+
 const DEFAULT_STATUS: AgentStatus = {
   configured: false,
   running: false,
@@ -100,6 +105,84 @@ function cleanAgentLogLine(line: string) {
   return line.replace(/^agent(?::error)?:\s*/, "").trim();
 }
 
+function timestamp() {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(new Date());
+}
+
+function mergeLogEntries(current: LogEntry[], nextRawLogs: string[]): LogEntry[] {
+  if (!nextRawLogs.length) return [];
+  const currentRaw = current.map((entry) => entry.raw);
+  let common = Math.min(currentRaw.length, nextRawLogs.length);
+  while (common > 0) {
+    const currentTail = currentRaw.slice(currentRaw.length - common);
+    const nextHead = nextRawLogs.slice(0, common);
+    if (currentTail.every((line, index) => line === nextHead[index])) break;
+    common -= 1;
+  }
+  const kept = common ? current.slice(current.length - common) : [];
+  const now = timestamp();
+  const appended = nextRawLogs.slice(common).map((raw) => ({ raw, at: now }));
+  return [...kept, ...appended].slice(-160);
+}
+
+function shortLogMessage(line: string) {
+  const cleaned = cleanAgentLogLine(line);
+  const progress = cleaned.match(/^\[progress\]\s+(.+)$/);
+  const message = progress?.[1] ?? cleaned;
+
+  if (message.startsWith("sync: Local chat sync started")) {
+    const reason = message.match(/\(([^)]+)\)/)?.[1];
+    return `Checking chats${reason ? ` · ${reason}` : ""}`;
+  }
+  if (message.startsWith("sync: Local chat sync completed")) {
+    const match = message.match(/: (\d+) chats in (\d+)ms/);
+    return match ? `Chats synced · ${match[1]} chats · ${match[2]}ms` : "Chats synced";
+  }
+  if (message.startsWith("Incoming job.run")) return `Message received · ${message.replace(/^Incoming job\.run:\s*/, "")}`;
+  if (message.startsWith("Incoming ")) return `Message received · ${message.replace(/^Incoming\s+/, "")}`;
+  if (message.startsWith("Job received:")) return `Job started · ${message.replace(/^Job received:\s*/, "")}`;
+  if (message.startsWith("Job finished:")) return `Job finished · ${message.replace(/^Job finished:\s*/, "")}`;
+  if (message.startsWith("Job failed:")) return `Job failed · ${message.replace(/^Job failed:\s*/, "")}`;
+  if (message.includes(" thinking:")) return "Thinking";
+  if (message.includes(" started:")) return "Codex started";
+  if (message.includes(" completed:")) return "Completed";
+  if (message.includes(" working:")) {
+    const stats = message.match(/\(([^)]+)\)$/)?.[1];
+    return stats ? `Edited files · ${stats}` : "Checking diff";
+  }
+  if (message.includes(" finalizing:")) {
+    const stats = message.match(/\(([^)]+)\)$/)?.[1];
+    return stats ? `Finalizing · ${stats}` : "Finalizing result";
+  }
+  if (message.includes(" command:")) {
+    const command = message.split(" command: ").at(1) ?? "Running command";
+    return command.startsWith("Running:") ? command.replace("Running:", "Running command ·") : `Ran command · ${command}`;
+  }
+  if (message.includes(" message:")) {
+    return message.split(" message: ").at(1)?.slice(0, 220) ?? "Assistant message";
+  }
+  if (message.startsWith("Job log ") && message.includes(" system: Running:")) {
+    return message.replace(/^Job log\s+\S+\s+system:\s+Running:\s*/, "Running command · ");
+  }
+  if (message.startsWith("Connected to ")) return "Connected to server";
+  if (message === "Agent process started") return "Agent process started";
+  if (message === "Agent process stopped") return "Agent process stopped";
+  return message.length > 240 ? `${message.slice(0, 240)}...` : message;
+}
+
+function logTone(line: string) {
+  const cleaned = cleanAgentLogLine(line).toLowerCase();
+  if (cleaned.includes("failed") || cleaned.includes("error")) return "bad";
+  if (cleaned.includes("completed") || cleaned.includes("finished") || cleaned.includes("connected")) return "good";
+  if (cleaned.includes("[progress]") || cleaned.startsWith("incoming ")) return "active";
+  return "neutral";
+}
+
 function inferLiveState(status: AgentStatus): LiveAgentState {
   if (!status.running) {
     return {
@@ -135,12 +218,15 @@ function inferLiveState(status: AgentStatus): LiveAgentState {
     }
     if (line.includes("[progress]")) {
       const detail = line.replace(/^\[progress\]\s*/, "");
+      const percent = livePercent(detail);
+      const finished = isFinishedProgress(detail);
+      const failed = detail.includes("failed");
       return {
         title: liveTitle(detail),
-        detail,
-        percent: livePercent(detail),
-        tone: "active",
-        spinning: true
+        detail: liveDetail(detail),
+        percent,
+        tone: failed ? "bad" : finished ? "good" : "active",
+        spinning: !finished
       };
     }
     if (line.startsWith("Incoming ")) {
@@ -163,7 +249,11 @@ function inferLiveState(status: AgentStatus): LiveAgentState {
 }
 
 function liveTitle(detail: string) {
-  if (detail.startsWith("sync:") || detail.includes(" sync")) return "Syncing chats";
+  if (detail.startsWith("sync:") || detail.includes(" sync")) {
+    if (detail.includes("completed")) return "Chats synced";
+    if (detail.includes("failed")) return "Sync failed";
+    return "Checking chats";
+  }
   if (detail.includes(" thinking")) return "Codex is thinking";
   if (detail.includes(" command:")) return "Running command";
   if (detail.includes(" finalizing:")) return "Finalizing";
@@ -173,8 +263,25 @@ function liveTitle(detail: string) {
   return "Processing";
 }
 
+function liveDetail(detail: string) {
+  if (detail.startsWith("sync: Local chat sync started")) {
+    const reason = detail.match(/\(([^)]+)\)/)?.[1];
+    return reason ? `Reason: ${reason}` : "Looking for changed local chats.";
+  }
+  if (detail.startsWith("sync: Local chat sync completed")) {
+    const match = detail.match(/: (\d+) chats in (\d+)ms/);
+    return match ? `${match[1]} chats checked in ${match[2]}ms.` : "Local chats are up to date.";
+  }
+  return detail;
+}
+
+function isFinishedProgress(detail: string) {
+  return detail.includes("completed") || detail.includes("finished") || detail.includes("failed") || detail.includes("cancelled");
+}
+
 function livePercent(detail: string) {
   if (detail.includes("completed") || detail.includes("finished")) return 100;
+  if (detail.includes("failed") || detail.includes("cancelled")) return 100;
   if (detail.includes("finalizing")) return 88;
   if (detail.includes("command")) return 62;
   if (detail.includes("thinking") || detail.includes("working")) return 42;
@@ -192,11 +299,12 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [connectionOpen, setConnectionOpen] = useState(false);
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
 
   const tone = statusTone(status);
   const canStart = status.configured && !status.running;
 
-  const recentLogs = useMemo(() => status.logs.slice(-18).reverse(), [status.logs]);
+  const recentLogs = useMemo(() => logEntries.slice(-40).reverse(), [logEntries]);
   const liveState = useMemo(() => inferLiveState(status), [status]);
 
   async function refresh() {
@@ -226,6 +334,10 @@ function App() {
     const timer = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    setLogEntries((current) => mergeLogEntries(current, status.logs));
+  }, [status.logs]);
 
   return (
     <main className="shell">
@@ -379,7 +491,12 @@ function App() {
         </div>
         <div className="log-box">
           {recentLogs.length ? (
-            recentLogs.map((line, index) => <pre key={`${line}-${index}`}>{line}</pre>)
+            recentLogs.map((entry, index) => (
+              <div className={`log-line ${logTone(entry.raw)}`} key={`${entry.raw}-${entry.at}-${index}`}>
+                <span className="log-time">{entry.at}</span>
+                <span className="log-message">{shortLogMessage(entry.raw)}</span>
+              </div>
+            ))
           ) : (
             <div className="empty-log">
               <TerminalSquare size={20} />
