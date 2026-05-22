@@ -124,6 +124,8 @@ const vscodeRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "vscode.result" }>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  agentId: string;
+  connectionId: string;
 }>();
 const chatSyncRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "chat.sync.result" }>) => void;
@@ -442,9 +444,18 @@ function requestAgentVscode(
       vscodeRequests.delete(message.requestId);
       reject(new Error("agent_timeout"));
     }, 30000);
-    vscodeRequests.set(message.requestId, { resolve, reject, timer });
+    vscodeRequests.set(message.requestId, { resolve, reject, timer, agentId, connectionId: agent.connectionId });
     agent.send(message);
   });
+}
+
+function rejectVscodeRequestsForConnection(agentId: string, connectionId: string, reason: string): void {
+  for (const [requestId, pending] of vscodeRequests) {
+    if (pending.agentId !== agentId || pending.connectionId !== connectionId) continue;
+    clearTimeout(pending.timer);
+    vscodeRequests.delete(requestId);
+    pending.reject(new Error(reason));
+  }
 }
 
 function startAgentChatSync(
@@ -2549,7 +2560,10 @@ async function createApp(): Promise<FastifyInstance> {
     }
     const connectionId = id("agent_ws");
     const previous = agents.get(agent.id);
-    if (previous) previous.close();
+    if (previous) {
+      rejectVscodeRequestsForConnection(agent.id, previous.connectionId, "agent_replaced");
+      previous.close();
+    }
     const connection: AgentConnection = {
       id: agent.id,
       connectionId,
@@ -2741,6 +2755,7 @@ async function createApp(): Promise<FastifyInstance> {
     });
 
     socket.on("close", () => {
+      rejectVscodeRequestsForConnection(agent.id, connectionId, "agent_disconnected");
       if (agents.get(agent.id)?.connectionId !== connectionId) return;
       agents.delete(agent.id);
       setTimeout(() => {

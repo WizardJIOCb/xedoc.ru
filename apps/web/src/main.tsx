@@ -1572,6 +1572,7 @@ function App() {
   const scrollStateRafRef = useRef<number | undefined>(undefined);
   const localChatSyncRefreshRef = useRef(0);
   const syncAutoPingRef = useRef("");
+  const vscodeRequestSeqRef = useRef(0);
   const chatLoadingStartedRef = useRef(0);
   const shellRef = useRef<HTMLElement | null>(null);
   const chatThreadRef = useRef<HTMLElement | null>(null);
@@ -2938,6 +2939,7 @@ function App() {
     options: { auto?: boolean } = {}
   ) {
     if (!agentId || !csrf) return;
+    const requestSeq = ++vscodeRequestSeqRef.current;
     setVscodeBusy(true);
     setActionMenuOpen(false);
     setVscodeNotice(options.auto ? "Автоматически обновляю VS Code..." : "VS Code bridge command sent...");
@@ -2947,9 +2949,15 @@ function App() {
       body: JSON.stringify({ command, ...payload })
     });
     const data = await response.json().catch(() => ({}));
+    if (requestSeq !== vscodeRequestSeqRef.current) return;
     setVscodeBusy(false);
     if (!response.ok) {
-      setVscodeNotice(data.output || data.error || "VS Code bridge command failed.");
+      const errorText = data.error === "agent_replaced"
+        ? "Агент переподключился во время VS Code команды. Нажми Ping ещё раз; если повторяется, запущены два агента с одним ID."
+        : data.error === "agent_disconnected"
+          ? "Агент отключился во время VS Code команды. Проверь, что Codex Agent или start-agent.bat всё ещё запущен."
+          : data.output || data.error || "VS Code bridge command failed.";
+      setVscodeNotice(errorText);
       return;
     }
     setVscodeNotice(data.output || (options.auto ? "VS Code chat refreshed." : "VS Code bridge command completed."));
@@ -3471,7 +3479,7 @@ function App() {
     const agentReady = Boolean(controlAgent && controlAgent.status === "online");
     const repoReady = Boolean(syncRepo);
     const codexReady = Boolean(controlAgent?.codex_version);
-    const bridgeReady = vscodeNotice && !/failed|agent_offline|timeout|ошибка|не удалось/i.test(vscodeNotice);
+    const bridgeReady = vscodeNotice && !/failed|agent_offline|agent_replaced|agent_disconnected|timeout|unavailable|closed|переподключился|отключился|ошибка|не удалось/i.test(vscodeNotice);
     const syncNoticeOk = /прошла|скачал|online/i.test(syncNotice);
     const setupButtonLabel = controlAgent
       ? controlAgent.status === "online" ? "Агент уже online" : "Скачать установщик агента"

@@ -501,7 +501,9 @@ function connect() {
   });
 
   const send = (message: AgentToServer) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(message));
+    return true;
   };
 
   ws.on("open", async () => {
@@ -670,22 +672,24 @@ function connect() {
       try {
         const result = await sendVscodeBridgeCommand(message);
         console.log(`VS Code command result: ${message.command} ${result.ok ? "ok" : result.error ?? "failed"}`);
-        send({
+        const sent = send({
           type: "vscode.result",
           requestId: message.requestId,
           ok: result.ok,
           output: result.output,
           error: result.error
         });
+        console.log(`VS Code command result ${sent ? "sent" : "dropped"}: ${message.command}`);
       } catch (error) {
         const messageText = error instanceof Error ? error.message : String(error);
         console.error(`VS Code command failed: ${message.command}: ${messageText}`);
-        send({
+        const sent = send({
           type: "vscode.result",
           requestId: message.requestId,
           ok: false,
           error: messageText
         });
+        console.log(`VS Code command error ${sent ? "sent" : "dropped"}: ${message.command}`);
       }
       return;
     }
