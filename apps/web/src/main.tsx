@@ -36,6 +36,7 @@ import {
   Square,
   PlugZap,
   Terminal,
+  Trash2,
   UploadCloud,
   UserCircle,
   Wrench,
@@ -3036,6 +3037,36 @@ function App() {
     await refresh();
   }
 
+  async function deleteAgent(agent: Agent) {
+    if (!csrf || busy) return;
+    const agentRepos = repos.filter((repo) => repo.agentId === agent.id);
+    if (agent.status === "online" || agentRepos.length) {
+      setSyncNotice("Удалять можно только offline-агента без проектов.");
+      return;
+    }
+    if (!window.confirm(`Удалить подключение "${agent.name}"? Это действие нельзя отменить.`)) return;
+    setBusy(true);
+    setSyncNotice("");
+    const response = await api(`/api/agents/${encodeURIComponent(agent.id)}`, {
+      method: "DELETE",
+      headers: { "x-csrf-token": csrf }
+    });
+    setBusy(false);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = data.error === "agent_online"
+        ? "Агент online: сначала останови его на компьютере."
+        : data.error === "agent_has_data"
+          ? "У агента есть проекты, чаты или задачи. Сначала удали/перенеси данные."
+          : data.error || "Не получилось удалить агента.";
+      setSyncNotice(message);
+      return;
+    }
+    setAgents((current) => current.filter((item) => item.id !== agent.id));
+    setSyncNotice(`Агент ${agent.name} удалён.`);
+    await refresh();
+  }
+
   async function saveProfile(event: React.FormEvent) {
     event.preventDefault();
     if (!csrf) return;
@@ -3419,6 +3450,7 @@ function App() {
                 const firstRepo = agentRepos[0];
                 const agentOnline = agent.status === "online";
                 const lastSeen = formatDateTime(agent.last_seen_at);
+                const canDeleteAgent = !agentOnline && agentRepos.length === 0;
                 return (
                   <article className={`agent-connection ${agentOnline ? "online" : "offline"}`} key={agent.id}>
                     <div className="agent-connection-title">
@@ -3442,6 +3474,15 @@ function App() {
                       </button>
                       <button className="secondary compact" disabled title="Остановить удалённо нельзя: агент останавливается только на своём компьютере.">
                         <Square size={14} /> Stop locally
+                      </button>
+                      <button
+                        className="secondary compact danger-compact"
+                        disabled={busy || !canDeleteAgent}
+                        title={canDeleteAgent ? "Удалить пустое offline-подключение" : "Удалять можно только offline-агента без проектов"}
+                        type="button"
+                        onClick={() => void deleteAgent(agent)}
+                      >
+                        <Trash2 size={14} /> Удалить
                       </button>
                     </div>
                     {agentOnline && !agentRepos.length && (

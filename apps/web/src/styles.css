@@ -1110,6 +1110,15 @@ textarea:focus {
   font-size: 12px;
 }
 
+.secondary.compact.danger-compact {
+  color: #8a1f15;
+}
+
+.secondary.compact.danger-compact:hover:not(:disabled) {
+  border-color: rgba(217, 45, 32, 0.34);
+  background: rgba(217, 45, 32, 0.08);
+}
+
 .profile-work {
   max-width: 980px;
 }

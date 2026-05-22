@@ -1930,6 +1930,27 @@ async function createApp(): Promise<FastifyInstance> {
     return { setup };
   });
 
+  app.delete("/api/agents/:agentId", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const agentId = (request.params as { agentId: string }).agentId;
+    if (!canAccessAgent(auth.user, agentId)) return reply.code(404).send({ error: "not_found" });
+    if (agents.has(agentId)) return reply.code(409).send({ error: "agent_online" });
+    const agent = db.prepare("SELECT id FROM agents WHERE id = ?").get(agentId) as { id: string } | undefined;
+    if (!agent) return reply.code(404).send({ error: "not_found" });
+    const counts = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM repos WHERE agent_id = ?) AS repos,
+        (SELECT COUNT(*) FROM chats WHERE agent_id = ?) AS chats,
+        (SELECT COUNT(*) FROM jobs WHERE agent_id = ?) AS jobs
+    `).get(agentId, agentId, agentId) as { repos: number; chats: number; jobs: number };
+    if (counts.repos || counts.chats || counts.jobs) {
+      return reply.code(409).send({ error: "agent_has_data", counts });
+    }
+    db.prepare("DELETE FROM agents WHERE id = ?").run(agentId);
+    return { ok: true };
+  });
+
   app.get("/api/agents", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth) return;
