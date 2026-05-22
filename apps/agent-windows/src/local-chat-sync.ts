@@ -9,10 +9,11 @@ type LocalAttachment = NonNullable<ChatMessage["attachments"]>[number];
 
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
-const MAX_ACTION_OUTPUT_CHARS = 1000;
-const MAX_ACTIONS_PER_MESSAGE = 40;
-const MAX_SYNC_DIFF_CHARS = 8000;
-const MAX_CHAT_SYNC_ATTACHMENT_BYTES = 900 * 1024;
+const MAX_SYNC_MESSAGES = 80;
+const MAX_ACTION_OUTPUT_CHARS = 300;
+const MAX_ACTIONS_PER_MESSAGE = 8;
+const MAX_SYNC_DIFF_CHARS = 2500;
+const MAX_CHAT_SYNC_ATTACHMENT_BYTES = 350 * 1024;
 const CODEX_CONTEXT_TAGS = [
   "environment_context",
   "permissions instructions",
@@ -69,7 +70,7 @@ export async function syncLocalChats(config: AgentConfig, send: Send): Promise<v
 }
 
 function messagesForSync(messages: ChatMessage[]): ChatMessage[] {
-  const recent = messages.slice(-120);
+  const recent = messages.slice(-MAX_SYNC_MESSAGES);
   let remainingAttachmentBytes = MAX_CHAT_SYNC_ATTACHMENT_BYTES;
   return recent
     .slice()
