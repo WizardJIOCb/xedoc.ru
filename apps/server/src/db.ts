@@ -107,6 +107,7 @@ export type ChatRow = {
   agent_id: string;
   repo_id: string;
   title: string;
+  title_override: string | null;
   source: string;
   external_id: string | null;
   cwd: string | null;
@@ -257,6 +258,7 @@ export function openDb(path: string): DatabaseSync {
       agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
       repo_id TEXT NOT NULL,
       title TEXT NOT NULL,
+      title_override TEXT,
       source TEXT NOT NULL DEFAULT 'web',
       external_id TEXT,
       cwd TEXT,
@@ -434,6 +436,9 @@ export function openDb(path: string): DatabaseSync {
   }
   if (!chatColumns.some((column) => column.name === "hidden_at")) {
     db.exec("ALTER TABLE chats ADD COLUMN hidden_at TEXT");
+  }
+  if (!chatColumns.some((column) => column.name === "title_override")) {
+    db.exec("ALTER TABLE chats ADD COLUMN title_override TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_chat_created ON jobs(chat_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_at ON chat_messages(chat_id, created_at)");

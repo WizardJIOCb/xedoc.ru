@@ -507,3 +507,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-vscode-bridg
 2. Открыть проект в web.
 3. Нажать `Sync` в левом списке проекта или в меню `Sync`.
 4. При необходимости нажать `Обновить` в VS Code bridge панели `codex.rodion.pro -> Chats`.
+
+
+Для простого сценария “VS Code открыт с Codex, хочу включить/выключить агента для сайта” используй вот эти:
+
+Запустить агента:
+
+C:\Projects\codex.rodion.pro\start-agent.bat
+Остановить агента:
+
+C:\Projects\codex.rodion.pro\stop-agent.bat
+start-agent.bat запускает обычного фонового Windows-агента, который видит VS Code bridge и синхронизирует чаты с codex.rodion.pro. Окна/трея у него может не быть, он работает скрытым процессом. Логи здесь:
+
+C:\Projects\codex.rodion.pro\data\prod-agent.log
+C:\Projects\codex.rodion.pro\data\prod-agent.err.log
+start-native-agent.bat сейчас не нужен для простого запуска. Это dev/release запуск нативного Tauri-приложения с UI, он тяжелее и требует Rust/Cargo. Для ежедневного “включить/выключить агента” лучше start-agent.bat / stop-agent.bat.

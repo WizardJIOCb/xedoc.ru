@@ -94,6 +94,7 @@ function readCodexChats(config: AgentConfig): LocalChat[] {
   if (!home) return [];
   const statePath = join(home, ".codex", "state_5.sqlite");
   if (!existsSync(statePath)) return [];
+  const sessionTitles = readCodexSessionTitles(home);
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
     const rows = db.prepare(`
@@ -130,7 +131,7 @@ function readCodexChats(config: AgentConfig): LocalChat[] {
         repoId: repo.id,
         source: "codex" as const,
         externalId: row.id,
-        title: chatTitle([row.title, firstUserMessage(messages), row.first_user_message], "Codex chat"),
+        title: chatTitle([sessionTitles.get(row.id), row.title, firstUserMessage(messages), row.first_user_message], "Codex chat"),
         cwd: cleanPath(row.cwd),
         updatedAt: lastMessageAt(messages) ?? timeFromNumber(row.updated_at_ms ?? row.updated_at),
         messages
@@ -141,6 +142,24 @@ function readCodexChats(config: AgentConfig): LocalChat[] {
   } finally {
     db.close();
   }
+}
+
+function readCodexSessionTitles(home: string): Map<string, string> {
+  const titles = new Map<string, string>();
+  const path = join(home, ".codex", "session_index.jsonl");
+  if (!existsSync(path)) return titles;
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line) as { id?: unknown; thread_name?: unknown };
+      if (typeof row.id === "string" && typeof row.thread_name === "string" && row.thread_name.trim()) {
+        titles.set(row.id, row.thread_name.trim());
+      }
+    } catch {
+      // Ignore corrupt local index rows.
+    }
+  }
+  return titles;
 }
 
 function readCodexRollout(path: string): ChatMessage[] {

@@ -122,6 +122,7 @@ function latestCodexTurnState(path: string): CodexTurnState | undefined {
   let latestActivityAt = 0;
   let latestAssistantAt = 0;
   let latestToolAt = 0;
+  let taskCompletedAt = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let row: any;
@@ -132,15 +133,27 @@ function latestCodexTurnState(path: string): CodexTurnState | undefined {
     }
     const timestamp = Date.parse(typeof row.timestamp === "string" ? row.timestamp : "");
     if (!Number.isFinite(timestamp)) continue;
+    if (row.type === "event_msg" && row.payload?.type === "task_started") {
+      startedAt = timestamp;
+      latestActivityAt = timestamp;
+      latestAssistantAt = 0;
+      latestToolAt = 0;
+      taskCompletedAt = 0;
+      continue;
+    }
     if (row.type === "response_item" && row.payload?.type === "message" && row.payload?.role === "user") {
       startedAt = timestamp;
       latestActivityAt = timestamp;
       latestAssistantAt = 0;
       latestToolAt = 0;
+      taskCompletedAt = 0;
       continue;
     }
     if (!startedAt) continue;
     latestActivityAt = Math.max(latestActivityAt, timestamp);
+    if (row.type === "event_msg" && row.payload?.type === "task_complete") {
+      taskCompletedAt = Math.max(taskCompletedAt, timestamp);
+    }
     if (row.type === "response_item" && row.payload?.type === "message" && row.payload?.role === "assistant") {
       latestAssistantAt = Math.max(latestAssistantAt, timestamp);
     }
@@ -159,7 +172,7 @@ function latestCodexTurnState(path: string): CodexTurnState | undefined {
   return {
     startedAt,
     latestActivityAt,
-    completedAt: latestAssistantAt && latestAssistantAt >= latestToolAt ? latestAssistantAt : undefined
+    completedAt: taskCompletedAt || (latestAssistantAt && latestAssistantAt >= latestToolAt ? latestAssistantAt : undefined)
   };
 }
 

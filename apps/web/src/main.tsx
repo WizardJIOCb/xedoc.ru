@@ -1441,6 +1441,8 @@ function App() {
   const [originalProjectPath, setOriginalProjectPath] = useState("");
   const [chatTitle, setChatTitle] = useState("");
   const [chatMenuId, setChatMenuId] = useState("");
+  const [renamingChatId, setRenamingChatId] = useState("");
+  const [renameTitle, setRenameTitle] = useState("");
   const [chatProperties, setChatProperties] = useState<Chat | null>(null);
   const [chatSettingsTitle, setChatSettingsTitle] = useState("");
   const [linkedChatId, setLinkedChatId] = useState("");
@@ -2353,6 +2355,17 @@ function App() {
     if (selectedRepo) loadHiddenLocalChats(selectedRepo);
   }
 
+  function startRenameChat(chat: Chat) {
+    setRenamingChatId(chat.id);
+    setRenameTitle(chat.title);
+    setChatMenuId("");
+  }
+
+  function cancelRenameChat() {
+    setRenamingChatId("");
+    setRenameTitle("");
+  }
+
   useEffect(() => {
     api("/api/me").then(async (response) => {
       if (!response.ok) return;
@@ -2879,6 +2892,36 @@ function App() {
       setLogs([]);
       if (nextChats[0]) await loadChat(nextChats[0].id);
     }
+    await loadChats(selectedRepo);
+  }
+
+  async function renameChat(event: React.FormEvent, chat: Chat) {
+    event.preventDefault();
+    if (!csrf || !selectedRepo) return;
+    const title = renameTitle.trim();
+    if (!title) return;
+    setBusy(true);
+    setChatNotice("");
+    setChatNoticeOk(false);
+    const response = await api(`/api/chats/${encodeURIComponent(chat.id)}`, {
+      method: "PUT",
+      headers: { "x-csrf-token": csrf },
+      body: JSON.stringify({ title })
+    });
+    const data = await response.json().catch(() => ({}));
+    setBusy(false);
+    if (!response.ok) {
+      setChatNoticeOk(false);
+      setChatNotice(data.error || "Chat rename failed.");
+      return;
+    }
+    const updated = data.chat as Chat;
+    setChats((current) => current.map((item) => item.id === updated.id ? updated : item));
+    if (chatProperties?.id === updated.id) {
+      setChatProperties(updated);
+      setChatSettingsTitle(updated.title);
+    }
+    cancelRenameChat();
     await loadChats(selectedRepo);
   }
 
@@ -4329,39 +4372,61 @@ function App() {
                         </form>
                         {chats.map((chat) => (
                           <div className={activeChatId === chat.id ? "nav-chat-row active" : "nav-chat-row"} key={chat.id}>
-                            {(() => {
-                              const chatIsBusy = activeBusyChatIds.has(chat.id)
-                                || (localBusyRepoKey === currentRepoKey && localBusyChatTitle === chat.title)
-                                || (localBusyRepoKey === currentRepoKey && localBusyChatId === chat.id);
-                              return (
-                            <button className="nav-leaf chat-child" onClick={() => {
-                              setMobileMenuOpen(false);
-                              setView("projects");
-                              loadChat(chat.id, undefined, true).catch(() => undefined);
-                            }}>
-                              <span className="nav-chat-title">
-                                {chatIsBusy && <RefreshCw className="spin" size={13} />}
-                                <span>{chat.title}</span>
-                              </span>
-                              <small>{chatIdentityText(chat)} · {formatDateTime(chat.updatedAt)}</small>
-                            </button>
-                              );
-                            })()}
-                            <button className="nav-menu-trigger" disabled={busy} onClick={() => setChatMenuId((value) => value === chat.id ? "" : chat.id)} title="Chat menu">
-                              <MoreHorizontal size={15} />
-                            </button>
-                            {chatMenuId === chat.id && (
-                              <div className="nav-chat-menu">
-                                <button type="button" onClick={() => openChatProperties(chat)}>Свойства</button>
-                                <button type="button" disabled={shareBusy} onClick={() => shareChat(chat)}>Ссылка</button>
-                                <button
-                                  type="button"
-                                  disabled={activeJob?.chatId === chat.id && ["queued", "assigned", "running"].includes(activeJob.status)}
-                                  onClick={() => hideChat(chat)}
-                                >
-                                  Скрыть
+                            {renamingChatId === chat.id ? (
+                              <form className="nav-chat-rename" onSubmit={(event) => renameChat(event, chat)}>
+                                <input
+                                  autoFocus
+                                  value={renameTitle}
+                                  onChange={(event) => setRenameTitle(event.target.value)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Escape") cancelRenameChat();
+                                  }}
+                                />
+                                <button disabled={busy || !renameTitle.trim()} title="Сохранить имя" type="submit">
+                                  <Check size={14} />
                                 </button>
-                              </div>
+                                <button title="Отмена" type="button" onClick={cancelRenameChat}>
+                                  <X size={14} />
+                                </button>
+                              </form>
+                            ) : (
+                              <>
+                                {(() => {
+                                  const chatIsBusy = activeBusyChatIds.has(chat.id)
+                                    || (localBusyRepoKey === currentRepoKey && localBusyChatTitle === chat.title)
+                                    || (localBusyRepoKey === currentRepoKey && localBusyChatId === chat.id);
+                                  return (
+                                    <button className="nav-leaf chat-child" type="button" onClick={() => {
+                                      setMobileMenuOpen(false);
+                                      setView("projects");
+                                      loadChat(chat.id, undefined, true).catch(() => undefined);
+                                    }}>
+                                      <span className="nav-chat-title">
+                                        {chatIsBusy && <RefreshCw className="spin" size={13} />}
+                                        <span>{chat.title}</span>
+                                      </span>
+                                      <small>{chatIdentityText(chat)} · {formatDateTime(chat.updatedAt)}</small>
+                                    </button>
+                                  );
+                                })()}
+                                <button className="nav-menu-trigger" disabled={busy} type="button" onClick={() => setChatMenuId((value) => value === chat.id ? "" : chat.id)} title="Chat menu">
+                                  <MoreHorizontal size={15} />
+                                </button>
+                                {chatMenuId === chat.id && (
+                                  <div className="nav-chat-menu">
+                                    <button type="button" onClick={() => startRenameChat(chat)}>Переименовать</button>
+                                    <button type="button" onClick={() => openChatProperties(chat)}>Свойства</button>
+                                    <button type="button" disabled={shareBusy} onClick={() => shareChat(chat)}>Ссылка</button>
+                                    <button
+                                      type="button"
+                                      disabled={activeJob?.chatId === chat.id && ["queued", "assigned", "running"].includes(activeJob.status)}
+                                      onClick={() => hideChat(chat)}
+                                    >
+                                      Скрыть
+                                    </button>
+                                  </div>
+                                )}
+                              </>
                             )}
                           </div>
                         ))}

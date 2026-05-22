@@ -11,3 +11,4 @@ apps/server/public/
 apps/agent-windows/agent.config.json
 apps/desktop-agent/src-tauri/target/
 dist-native/
+setup-agent.bat

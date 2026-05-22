@@ -22,6 +22,7 @@ import {
   ProfileUpdateSchema,
   RegisterSchema,
   SslSchema,
+  UpdateChatSchema,
   UpdateProjectSchema,
   VscodeCommandRequestSchema,
   type AgentToServer,
@@ -953,8 +954,9 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
     const latestExists = db.prepare("SELECT 1 FROM chat_messages WHERE chat_id = ? AND source = ? AND external_id = ?")
       .get(chat.id, latestSyncedMessage.source, latestSyncedMessage.externalId) as { 1: number } | undefined;
     if (latestExists) {
-      if (changed || chat.title !== syncTitle) {
-        db.prepare("UPDATE chats SET title = ?, updated_at = ? WHERE id = ?").run(syncTitle, sync.updatedAt || stamp, chat.id);
+      const nextTitle = chat.title_override ?? syncTitle;
+      if (changed || chat.title !== nextTitle) {
+        db.prepare("UPDATE chats SET title = ?, updated_at = ? WHERE id = ?").run(nextTitle, sync.updatedAt || stamp, chat.id);
         broadcast({
           type: "chats.updated",
           agentId,
@@ -975,16 +977,18 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
     chat = linkedChat;
     changed = pruneSyncedContextMessages(chat.id) || changed;
     const nextCwd = chat.cwd ?? sync.cwd ?? null;
-    if (chat.title !== syncTitle || chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
+    const nextTitle = chat.title_override ?? syncTitle;
+    if (chat.title !== nextTitle || chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
       db.prepare("UPDATE chats SET title=?, cwd=?, updated_at=? WHERE id=?")
-        .run(syncTitle, nextCwd, sync.updatedAt, chat.id);
+        .run(nextTitle, nextCwd, sync.updatedAt, chat.id);
       changed = true;
     }
   } else if (chat) {
     const nextCwd = sync.cwd ?? null;
-    if (chat.repo_id !== sync.repoId || chat.title !== syncTitle || chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
+    const nextTitle = chat.title_override ?? syncTitle;
+    if (chat.repo_id !== sync.repoId || chat.title !== nextTitle || chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
       db.prepare("UPDATE chats SET repo_id=?, title=?, cwd=?, updated_at=? WHERE id=?")
-        .run(sync.repoId, syncTitle, nextCwd, sync.updatedAt, chat.id);
+        .run(sync.repoId, nextTitle, nextCwd, sync.updatedAt, chat.id);
       changed = true;
     }
   } else {
@@ -2424,7 +2428,9 @@ async function createApp(): Promise<FastifyInstance> {
     if (!auth || !requireCsrf(db, request, reply)) return;
     const chatId = (request.params as { id: string }).id;
     if (!canAccessChat(auth.user, chatId)) return reply.code(404).send({ error: "not_found" });
-    const body = request.body as { title?: string; linkedChatId?: string };
+    const parsed = UpdateChatSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_chat", details: parsed.error.flatten() });
+    const body = parsed.data;
     const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
     const stamp = nowIso();
@@ -2432,18 +2438,21 @@ async function createApp(): Promise<FastifyInstance> {
       const linked = db.prepare("SELECT * FROM chats WHERE id = ? AND agent_id = ? AND repo_id = ? AND source IN ('codex','vscode')")
         .get(body.linkedChatId, chat.agent_id, chat.repo_id) as ChatRow | undefined;
       if (!linked) return reply.code(404).send({ error: "linked_chat_not_found" });
-      db.prepare("UPDATE chats SET title=?, hidden_at=NULL, updated_at=? WHERE id=?")
-        .run(body.title?.trim() || linked.title, stamp, linked.id);
+      const nextTitle = body.title ?? linked.title;
+      db.prepare("UPDATE chats SET title=?, title_override=?, hidden_at=NULL, updated_at=? WHERE id=?")
+        .run(nextTitle, body.title ?? linked.title_override, stamp, linked.id);
       if (linked.id !== chatId) {
         const currentMessages = db.prepare("SELECT id FROM chat_messages WHERE chat_id = ? LIMIT 1").get(chatId) as { id: string } | undefined;
         if (!currentMessages) db.prepare("UPDATE chats SET hidden_at = COALESCE(hidden_at, ?), updated_at=? WHERE id=?").run(stamp, stamp, chatId);
       }
     } else {
-      db.prepare("UPDATE chats SET title=COALESCE(?, title), updated_at=? WHERE id=?")
-        .run(body.title?.trim() || null, stamp, chatId);
+      const nextTitle = body.title;
+      if (!nextTitle) return reply.code(400).send({ error: "title_required" });
+      db.prepare("UPDATE chats SET title=?, title_override=?, updated_at=? WHERE id=?")
+        .run(nextTitle, nextTitle, stamp, chatId);
     }
     const updated = db.prepare("SELECT * FROM chats WHERE id = ?").get(body.linkedChatId || chatId) as ChatRow;
-    broadcast({ type: "chats.updated", agentId: updated.agent_id, repoId: updated.repo_id });
+    broadcast({ type: "chats.updated", agentId: updated.agent_id, repoId: updated.repo_id, chatId: updated.id });
     return { chat: serializeChat(updated) };
   });
 

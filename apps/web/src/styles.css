@@ -517,6 +517,37 @@ textarea:focus {
   background: var(--panel-2);
 }
 
+.nav-chat-rename {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px 28px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.nav-chat-rename input {
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.nav-chat-rename button {
+  width: 28px;
+  min-height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: #ffffff;
+}
+
+.nav-chat-rename button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+}
+
 .nav-leaf.project {
   color: #374151;
 }

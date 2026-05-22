@@ -396,6 +396,14 @@ export const CreateChatSchema = z.object({
 });
 export type CreateChat = z.infer<typeof CreateChatSchema>;
 
+export const UpdateChatSchema = z.object({
+  title: z.string().trim().min(1).max(160).optional(),
+  linkedChatId: z.string().min(1).optional()
+}).refine((value) => value.title !== undefined || value.linkedChatId !== undefined, {
+  message: "title_or_linked_chat_required"
+});
+export type UpdateChat = z.infer<typeof UpdateChatSchema>;
+
 export const CreateProjectSchema = z.object({
   agentId: z.string().min(1),
   name: z.string().min(1).max(120),
