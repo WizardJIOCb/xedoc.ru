@@ -2827,7 +2827,7 @@ function App() {
     setPrompt("");
     setAttachments([]);
     setAttachmentNotice("");
-    setVscodeNotice("Задача запущена в web. VS Code можно обновить вручную после завершения.");
+    setVscodeNotice("");
     await loadChat(targetChatId, jobId);
   }
 
@@ -3069,11 +3069,6 @@ function App() {
       return;
     }
     setVscodeNotice(data.output || (options.auto ? "VS Code chat refreshed." : "VS Code bridge command completed."));
-  }
-
-  async function refreshCurrentVscodeThread() {
-    if (!selectedRepo || !activeCodexThreadId) return;
-    await runVscodeCommand("reopenThread", selectedRepo.agentId, { threadId: activeCodexThreadId });
   }
 
   async function syncGit(event: React.FormEvent) {
@@ -4076,28 +4071,6 @@ function App() {
     const showCodexBusy = localCodexBusy || activeRunBusy;
     return (
       <form className="composer" ref={composerRef} onSubmit={createJob}>
-        <div className="composer-bridge">
-          <button
-            className="secondary"
-            disabled={vscodeBusy || activeRunBusy || !activeCodexThreadId}
-            type="button"
-            onClick={refreshCurrentVscodeThread}
-            title={activeRunBusy ? "Дождись завершения web-задачи, потом обнови чат в VS Code." : "Переоткрыть текущий Codex thread в VS Code."}
-          >
-            <RefreshCw className={vscodeBusy ? "spin" : ""} size={16} />
-            Обновить чат в VS Code
-          </button>
-          <button
-            className="secondary"
-            disabled={vscodeBusy}
-            type="button"
-            onClick={() => runVscodeCommand("openSidebar", selectedRepo.agentId)}
-          >
-            <PanelLeftOpen size={16} />
-            Codex
-          </button>
-          {vscodeNotice && <span className="composer-bridge-notice">{vscodeNotice}</span>}
-        </div>
         {attachments.length > 0 && (
           <div className="attachment-list">
             {attachments.map((attachment) => (
