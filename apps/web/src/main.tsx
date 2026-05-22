@@ -3142,7 +3142,8 @@ function App() {
     setSyncNotice("");
     const response = await api(`/api/agents/${encodeURIComponent(agent.id)}`, {
       method: "DELETE",
-      headers: { "x-csrf-token": csrf }
+      headers: { "x-csrf-token": csrf },
+      body: "{}"
     });
     setBusy(false);
     const data = await response.json().catch(() => ({}));
