@@ -1455,8 +1455,9 @@ function App() {
   const chatLoadingPercent = progressPercent(chatLoadingProgress);
   const chatLoadingDeterminate = Boolean(chatLoadingProgress?.totalBytes);
   const chatLoadingLabel = chatLoadingProgress ? chatLoadingPhaseLabel(chatLoadingProgress.phase) : "Загружаю чат";
-  const selectedAgent = agents.find((agent) => agent.status === "online") ?? agents[0];
-  const online = selectedAgent?.status === "online";
+  const selectedRepoAgent = selectedRepo ? agents.find((agent) => agent.id === selectedRepo.agentId) : undefined;
+  const selectedAgent = selectedRepoAgent ?? agents.find((agent) => agent.status === "online") ?? agents[0];
+  const online = Boolean(selectedAgent && selectedAgent.status === "online");
   const localActivity = selectedAgent?.localActivity;
   const activeJobFinalMessageSeen = Boolean(activeJob && messages.some((message) => (
     message.role === "assistant"
