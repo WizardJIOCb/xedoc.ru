@@ -1567,6 +1567,9 @@ function App() {
   const loadChatsAbortRef = useRef<AbortController | null>(null);
   const loadChatAbortRef = useRef<AbortController | null>(null);
   const loadChatInFlightRef = useRef<{ chatId: string; controller: AbortController; foreground: boolean } | null>(null);
+  const wsMessageQueueRef = useRef<any[]>([]);
+  const wsFlushRafRef = useRef<number | undefined>(undefined);
+  const scrollStateRafRef = useRef<number | undefined>(undefined);
   const localChatSyncRefreshRef = useRef(0);
   const syncAutoPingRef = useRef("");
   const chatLoadingStartedRef = useRef(0);
@@ -1636,6 +1639,147 @@ function App() {
     setShowChatScrollTop(!atTop);
     setShowChatScrollBottom(!atBottom);
     if (atBottom) setShowJumpToLatest(false);
+  }
+
+  function scheduleChatBottomStateUpdate(source: "scroll" | "measure" = "measure") {
+    if (scrollStateRafRef.current) return;
+    scrollStateRafRef.current = window.requestAnimationFrame(() => {
+      scrollStateRafRef.current = undefined;
+      updateChatBottomState(source);
+    });
+  }
+
+  function flushQueuedUiMessages() {
+    const queued = wsMessageQueueRef.current;
+    wsMessageQueueRef.current = [];
+    if (!queued.length) return;
+
+    const jobLogs: any[] = [];
+    const jobProgress = new Map<string, any>();
+    const agentActivity = new Map<string, any>();
+    const agentStatus = new Map<string, any>();
+    const reposUpdated = new Map<string, any>();
+    const rest: any[] = [];
+
+    for (const message of queued) {
+      if (message.type === "job.log") jobLogs.push(message);
+      else if (message.type === "job.progress") jobProgress.set(message.jobId, message);
+      else if (message.type === "agent.activity") agentActivity.set(message.agentId, message);
+      else if (message.type === "agent.status") agentStatus.set(message.agentId, message);
+      else if (message.type === "repos.updated") reposUpdated.set(message.agentId, message);
+      else rest.push(message);
+    }
+
+    if (jobLogs.length) {
+      setLogs((current) => {
+        const activeJobId = activeJobIdRef.current;
+        const nextLogs = jobLogs.filter((message) => activeJobId === message.jobId);
+        return nextLogs.length ? [...current, ...nextLogs] : current;
+      });
+    }
+
+    if (jobProgress.size) {
+      const progressMessages = [...jobProgress.values()];
+      const progressById = new Map(progressMessages.map((message) => [message.jobId, message]));
+      setProgressByJob((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const message of progressMessages) {
+          if (next[message.jobId] !== message) {
+            next[message.jobId] = message;
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+      const patchJob = (job: Job): Job => {
+        const progress = progressById.get(job.id);
+        return progress ? { ...job, status: "running", progress } : job;
+      };
+      const patchJobs = (current: Job[]) => current.some((job) => progressById.has(job.id)) ? current.map(patchJob) : current;
+      setAllJobs(patchJobs);
+      setJobs(patchJobs);
+      setActiveJob((current) => current && progressById.has(current.id) ? patchJob(current) : current);
+    }
+
+    if (agentActivity.size) {
+      setAgents((current) => {
+        let changed = false;
+        const next = current.map((agent) => {
+          const message = agentActivity.get(agent.id);
+          if (!message) return agent;
+          const currentJobId = message.localActivity.status === "idle" ? null : agent.current_job_id;
+          if (agent.localActivity === message.localActivity && agent.current_job_id === currentJobId) return agent;
+          changed = true;
+          return { ...agent, localActivity: message.localActivity, current_job_id: currentJobId };
+        });
+        return changed ? next : current;
+      });
+    }
+
+    if (agentStatus.size) {
+      setAgents((current) => {
+        let changed = false;
+        const next = current.map((agent) => {
+          const message = agentStatus.get(agent.id);
+          if (!message || agent.status === message.status) return agent;
+          changed = true;
+          return { ...agent, status: message.status };
+        });
+        return changed ? next : current;
+      });
+    }
+
+    if (reposUpdated.size) {
+      setRepos((current) => {
+        let next = current;
+        let changed = false;
+        for (const message of reposUpdated.values()) {
+          const mappedRepos = message.repos.map((repo: Omit<Repo, "agentId">) => ({ ...repo, agentId: message.agentId }));
+          const restRepos = next.filter((repo) => repo.agentId !== message.agentId);
+          const previous = next.filter((repo) => repo.agentId === message.agentId);
+          const previousKey = JSON.stringify(previous.map((repo) => [repo.id, repo.name, repo.pathMasked, repo.currentBranch, repo.dirty]));
+          const nextKey = JSON.stringify(mappedRepos.map((repo: Repo) => [repo.id, repo.name, repo.pathMasked, repo.currentBranch, repo.dirty]));
+          if (previousKey !== nextKey) {
+            next = [...restRepos, ...mappedRepos];
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+    }
+
+    for (const message of rest) {
+      if (message.type === "chats.updated") {
+        const repo = selectedRepoRef.current;
+        const selectedRepoUpdated = Boolean(repo && message.agentId === repo.agentId && message.repoId === repo.id);
+        if (repo && selectedRepoUpdated) scheduleLoadChats(repo);
+        if (
+          selectedRepoUpdated
+          && activeChatIdRef.current
+          && (!message.chatId || message.chatId === activeChatIdRef.current)
+        ) {
+          scheduleLoadChat(activeChatIdRef.current, "sync");
+        }
+      } else if (message.type === "job.created" || message.type === "job.updated") {
+        const status = typeof message.status === "string" ? message.status : "";
+        if (typeof message.jobId === "string" && typeof message.status === "string") {
+          applyJobStatusUpdate(message.jobId, message.status);
+        }
+        scheduleLoadAllJobs();
+        if (message.jobId && activeJobIdRef.current === message.jobId) scheduleLoadJob(message.jobId);
+        if (activeChatIdRef.current && (message.type === "job.created" || isTerminalJobStatus(status))) scheduleLoadChat(activeChatIdRef.current);
+      }
+    }
+  }
+
+  function enqueueUiMessage(message: any) {
+    wsMessageQueueRef.current.push(message);
+    if (wsFlushRafRef.current) return;
+    wsFlushRafRef.current = window.requestAnimationFrame(() => {
+      wsFlushRafRef.current = undefined;
+      flushQueuedUiMessages();
+    });
   }
 
   function scrollChatToLatest(behavior: ScrollBehavior = "smooth") {
@@ -2196,63 +2340,10 @@ function App() {
     const connect = () => {
       ws = new WebSocket(`${protocol}://${location.host}/api/ui/ws`);
       ws.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        if (message.type === "job.log") {
-          setLogs((current) => (activeJobIdRef.current === message.jobId ? [...current, message] : current));
-          return;
-        }
-        if (message.type === "job.progress") {
-          setProgressByJob((current) => ({ ...current, [message.jobId]: message }));
-          const patchJob = (job: Job): Job => job.id === message.jobId ? { ...job, status: "running", progress: message } : job;
-          setAllJobs((current) => current.map(patchJob));
-          setJobs((current) => current.map(patchJob));
-          setActiveJob((current) => current && current.id === message.jobId ? patchJob(current) : current);
-          return;
-        }
-        if (message.type === "agent.activity") {
-          setAgents((current) => current.map((agent) => (
-            agent.id === message.agentId ? {
-              ...agent,
-              localActivity: message.localActivity,
-              current_job_id: message.localActivity.status === "idle" ? null : agent.current_job_id
-            } : agent
-          )));
-          return;
-        }
-        if (message.type === "agent.status") {
-          setAgents((current) => current.map((agent) => (
-            agent.id === message.agentId ? { ...agent, status: message.status } : agent
-          )));
-          return;
-        }
-        if (message.type === "repos.updated") {
-          setRepos((current) => {
-            const rest = current.filter((repo) => repo.agentId !== message.agentId);
-            return [...rest, ...message.repos.map((repo: Omit<Repo, "agentId">) => ({ ...repo, agentId: message.agentId }))];
-          });
-          return;
-        }
-        if (message.type === "chats.updated") {
-          const repo = selectedRepoRef.current;
-          const selectedRepoUpdated = Boolean(repo && message.agentId === repo.agentId && message.repoId === repo.id);
-          if (repo && selectedRepoUpdated) scheduleLoadChats(repo);
-          if (
-            selectedRepoUpdated
-            && activeChatIdRef.current
-            && (!message.chatId || message.chatId === activeChatIdRef.current)
-          ) {
-            scheduleLoadChat(activeChatIdRef.current, "sync");
-          }
-          return;
-        }
-        if (message.type === "job.created" || message.type === "job.updated") {
-          const status = typeof message.status === "string" ? message.status : "";
-          if (typeof message.jobId === "string" && typeof message.status === "string") {
-            applyJobStatusUpdate(message.jobId, message.status);
-          }
-          scheduleLoadAllJobs();
-          if (message.jobId && activeJobIdRef.current === message.jobId) scheduleLoadJob(message.jobId);
-          if (activeChatIdRef.current && (message.type === "job.created" || isTerminalJobStatus(status))) scheduleLoadChat(activeChatIdRef.current);
+        try {
+          enqueueUiMessage(JSON.parse(event.data));
+        } catch {
+          // Ignore malformed UI events; the websocket will continue.
         }
       };
       ws.onclose = () => {
@@ -2268,6 +2359,8 @@ function App() {
       if (loadChatTimerRef.current) window.clearTimeout(loadChatTimerRef.current);
       if (loadJobTimerRef.current) window.clearTimeout(loadJobTimerRef.current);
       if (loadAllJobsTimerRef.current) window.clearTimeout(loadAllJobsTimerRef.current);
+      if (wsFlushRafRef.current) window.cancelAnimationFrame(wsFlushRafRef.current);
+      if (scrollStateRafRef.current) window.cancelAnimationFrame(scrollStateRafRef.current);
       ws?.close();
     };
   }, [csrf]);
@@ -2290,8 +2383,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const updateFromScroll = () => updateChatBottomState("scroll");
-    const updateFromMeasure = () => updateChatBottomState("measure");
+    const updateFromScroll = () => scheduleChatBottomStateUpdate("scroll");
+    const updateFromMeasure = () => scheduleChatBottomStateUpdate("measure");
     const scroller = getChatScroller();
     if (scroller !== document.documentElement && scroller !== document.body) {
       scroller.addEventListener("scroll", updateFromScroll, { passive: true });
@@ -4199,7 +4292,7 @@ function App() {
       </aside>
       {mobileMenuOpen && <button className="mobile-menu-backdrop" aria-label="Закрыть меню" type="button" onClick={() => setMobileMenuOpen(false)} />}
 
-      <section className="shell" ref={shellRef} onScroll={() => updateChatBottomState("scroll")}>
+      <section className="shell" ref={shellRef} onScroll={() => scheduleChatBottomStateUpdate("scroll")}>
       <header className="app-header">
         <div className="topbar">
           <div className="top-nav-controls">
