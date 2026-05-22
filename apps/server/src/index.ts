@@ -880,6 +880,26 @@ function replaceChatMessageAttachments(
   }
 }
 
+function chatMessageAttachmentsChanged(
+  messageId: string,
+  attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }> | undefined
+): boolean {
+  if (attachments === undefined) return false;
+  const safeAttachments = attachments.filter((attachment) => isPreviewableImageMime(attachment.mimeType));
+  const totalSize = safeAttachments.reduce((sum, attachment) => sum + attachment.size, 0);
+  const incoming = totalSize > 12 * 1024 * 1024 ? [] : safeAttachments;
+  const existing = db.prepare("SELECT name,mime_type,size FROM chat_attachments WHERE chat_message_id = ? ORDER BY created_at ASC")
+    .all(messageId) as Array<Pick<AttachmentRow, "name" | "mime_type" | "size">>;
+  if (existing.length !== incoming.length) return true;
+  return incoming.some((attachment, index) => {
+    const current = existing[index];
+    return !current
+      || current.name !== attachment.name
+      || current.mime_type !== attachment.mimeType
+      || current.size !== attachment.size;
+  });
+}
+
 function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: "chat.sync" }>): void {
   const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?").get(agentId, sync.repoId) as RepoRow | undefined;
   if (!repo) return;
@@ -957,15 +977,20 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
         .get(chat.id, message.source, message.externalId) as ChatMessageRow | undefined
       : undefined;
     if (existing) {
-      if (
-        existing.role !== message.role
+      const messageChanged = existing.role !== message.role
         || existing.content !== content
         || existing.metadata_json !== metadataJson
-        || existing.created_at !== message.createdAt
+        || existing.created_at !== message.createdAt;
+      const attachmentsChanged = chatMessageAttachmentsChanged(existing.id, message.attachments);
+      if (
+        messageChanged
+        || attachmentsChanged
       ) {
-        db.prepare("UPDATE chat_messages SET role=?, content=?, metadata_json=?, created_at=? WHERE id=?")
-          .run(message.role, content, metadataJson, message.createdAt, existing.id);
-        if (message.attachments !== undefined) replaceChatMessageAttachments(existing.id, message.attachments, message.createdAt);
+        if (messageChanged) {
+          db.prepare("UPDATE chat_messages SET role=?, content=?, metadata_json=?, created_at=? WHERE id=?")
+            .run(message.role, content, metadataJson, message.createdAt, existing.id);
+        }
+        if (attachmentsChanged) replaceChatMessageAttachments(existing.id, message.attachments, message.createdAt);
         changed = true;
       }
     } else {
