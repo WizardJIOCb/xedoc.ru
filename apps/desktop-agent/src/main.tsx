@@ -6,7 +6,9 @@ import {
   Download,
   ExternalLink,
   Folder,
+  Gauge,
   KeyRound,
+  LoaderCircle,
   MonitorCog,
   Play,
   RefreshCw,
@@ -47,6 +49,14 @@ type SettingsPayload = {
   token?: string;
 };
 
+type LiveAgentState = {
+  title: string;
+  detail: string;
+  percent: number;
+  tone: "idle" | "active" | "good" | "bad";
+  spinning: boolean;
+};
+
 const DEFAULT_STATUS: AgentStatus = {
   configured: false,
   running: false,
@@ -85,6 +95,93 @@ function statusTone(status: AgentStatus) {
   return "bad";
 }
 
+function cleanAgentLogLine(line: string) {
+  return line.replace(/^agent(?::error)?:\s*/, "").trim();
+}
+
+function inferLiveState(status: AgentStatus): LiveAgentState {
+  if (!status.running) {
+    return {
+      title: status.lastError ? "Stopped with attention needed" : "Agent stopped",
+      detail: status.lastError ?? "Start the agent to receive jobs and sync chats.",
+      percent: status.lastError ? 100 : 0,
+      tone: status.lastError ? "bad" : "idle",
+      spinning: false
+    };
+  }
+
+  const latest = [...status.logs].reverse().map(cleanAgentLogLine);
+  const connectedLine = latest.find((line) => line.startsWith("Connected to "));
+
+  for (const line of latest) {
+    if (line.startsWith("Job failed:") || line.includes(" failed:")) {
+      return {
+        title: "Needs attention",
+        detail: line,
+        percent: 100,
+        tone: "bad",
+        spinning: false
+      };
+    }
+    if (line.startsWith("Job finished:")) {
+      return {
+        title: "Job completed",
+        detail: line,
+        percent: 100,
+        tone: "good",
+        spinning: false
+      };
+    }
+    if (line.includes("[progress]")) {
+      const detail = line.replace(/^\[progress\]\s*/, "");
+      return {
+        title: liveTitle(detail),
+        detail,
+        percent: livePercent(detail),
+        tone: "active",
+        spinning: true
+      };
+    }
+    if (line.startsWith("Incoming ")) {
+      return {
+        title: "Message received",
+        detail: line,
+        percent: 12,
+        tone: "active",
+        spinning: true
+      };
+    }
+  }
+  return {
+    title: "Connected",
+    detail: connectedLine ?? "Waiting for jobs and chat sync requests.",
+    percent: 100,
+    tone: "good",
+    spinning: false
+  };
+}
+
+function liveTitle(detail: string) {
+  if (detail.startsWith("sync:") || detail.includes(" sync")) return "Syncing chats";
+  if (detail.includes(" thinking")) return "Codex is thinking";
+  if (detail.includes(" command:")) return "Running command";
+  if (detail.includes(" finalizing:")) return "Finalizing";
+  if (detail.startsWith("git:") || detail.includes(" git:")) return "Syncing git";
+  if (detail.startsWith("deploy:") || detail.includes(" deploy:")) return "Deploying";
+  if (detail.startsWith("scan:") || detail.includes(" scan:")) return "Scanning projects";
+  return "Processing";
+}
+
+function livePercent(detail: string) {
+  if (detail.includes("completed") || detail.includes("finished")) return 100;
+  if (detail.includes("finalizing")) return 88;
+  if (detail.includes("command")) return 62;
+  if (detail.includes("thinking") || detail.includes("working")) return 42;
+  if (detail.includes("started") || detail.includes("Starting")) return 18;
+  if (detail.includes("sync")) return 55;
+  return 28;
+}
+
 function App() {
   const [status, setStatus] = useState<AgentStatus>(DEFAULT_STATUS);
   const [serverUrl, setServerUrl] = useState(DEFAULT_STATUS.serverUrl);
@@ -97,7 +194,8 @@ function App() {
   const tone = statusTone(status);
   const canStart = status.configured && !status.running;
 
-  const recentLogs = useMemo(() => status.logs.slice(-8).reverse(), [status.logs]);
+  const recentLogs = useMemo(() => status.logs.slice(-18).reverse(), [status.logs]);
+  const liveState = useMemo(() => inferLiveState(status), [status]);
 
   async function refresh() {
     const next = await call<AgentStatus>("get_status");
@@ -248,6 +346,19 @@ function App() {
         <div className="panel-title">
           <h2>Agent log</h2>
           {status.running ? <CheckCircle2 className="ok" size={18} /> : <CircleOff className="muted" size={18} />}
+        </div>
+        <div className={`live-card ${liveState.tone}`}>
+          <div className="live-icon">
+            {liveState.spinning ? <LoaderCircle size={18} /> : <Gauge size={18} />}
+          </div>
+          <div className="live-copy">
+            <strong>{liveState.title}</strong>
+            <span>{liveState.detail}</span>
+          </div>
+          <div className="live-percent">{liveState.percent}%</div>
+          <div className="live-track" aria-hidden="true">
+            <div style={{ width: `${liveState.percent}%` }} />
+          </div>
         </div>
         <div className="log-box">
           {recentLogs.length ? (

@@ -247,6 +247,103 @@ button:disabled {
   margin-bottom: 0;
 }
 
+.live-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 8px 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  border: 1px solid #d8d5cd;
+  border-radius: 7px;
+  background: #f8f7f2;
+  padding: 10px;
+}
+
+.live-card.active {
+  border-color: #b8dccc;
+  background: #eefaf4;
+}
+
+.live-card.good {
+  border-color: #b8dccc;
+  background: #f0faf5;
+}
+
+.live-card.bad {
+  border-color: #efb7b2;
+  background: #fff0ef;
+}
+
+.live-card.idle {
+  background: #f8f7f2;
+}
+
+.live-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #2d7357;
+}
+
+.live-card.bad .live-icon {
+  color: #a91f17;
+}
+
+.live-card.active .live-icon svg {
+  animation: spin 1.1s linear infinite;
+}
+
+.live-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.live-copy strong {
+  font-size: 13px;
+}
+
+.live-copy span {
+  color: #596173;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-percent {
+  color: #596173;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.live-track {
+  grid-column: 1 / -1;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e0ddd5;
+}
+
+.live-track div {
+  height: 100%;
+  min-width: 8px;
+  border-radius: inherit;
+  background: #00895d;
+  transition: width 0.3s ease;
+}
+
+.live-card.bad .live-track div {
+  background: #c8342b;
+}
+
+.live-card.idle .live-track div {
+  background: #9a9488;
+}
+
 .ok {
   color: #00895d;
 }
@@ -283,6 +380,12 @@ pre {
   gap: 8px;
   color: #9da5b3;
   font-size: 13px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 720px) {

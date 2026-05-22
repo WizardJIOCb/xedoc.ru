@@ -27,6 +27,34 @@ let lastLocalActivitySyncKey = "";
 let localChatSyncPromise: Promise<number> | null = null;
 let localChatSyncQueuedReason = "";
 
+function shortId(value: string | undefined): string {
+  return value ? value.slice(0, 8) : "n/a";
+}
+
+function incomingSummary(message: ServerToAgent): string {
+  if (message.type === "job.run") {
+    return [
+      `job=${shortId(message.job.id)}`,
+      `repo=${message.job.repoId}`,
+      `kind=${message.job.kind}`,
+      `sandbox=${message.job.sandbox}`,
+      `prompt=${message.job.prompt.length} chars`,
+      `attachments=${message.job.attachments?.length ?? 0}`
+    ].join(" ");
+  }
+  if ("requestId" in message) {
+    const repoId = "repoId" in message ? ` repo=${message.repoId}` : "";
+    const command = message.type === "vscode.command" ? ` command=${message.command}` : "";
+    return `request=${shortId(message.requestId)}${repoId}${command}`;
+  }
+  if (message.type === "job.cancel") return `job=${shortId(message.jobId)}`;
+  return "request received";
+}
+
+function logProgress(message: string): void {
+  console.log(`[progress] ${message}`);
+}
+
 async function ensureGitRepo(path: string): Promise<void> {
   mkdirSync(path, { recursive: true });
   const probe = await runCapture("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], undefined, 15000);
@@ -441,16 +469,15 @@ async function runLocalChatSyncQueue(reason: string, send: (message: AgentToServ
     const startedAt = Date.now();
     try {
       let currentSent = 0;
+      logProgress(`sync: Local chat sync started (${currentReason}).`);
       await syncLocalChats(config, (message) => {
         currentSent += 1;
         send(message);
       });
       sent += currentSent;
-      if (currentReason === "connect" || currentReason.startsWith("queued:")) {
-        console.log(`Local chat sync completed (${currentReason}): ${currentSent} chats in ${Date.now() - startedAt}ms`);
-      }
+      logProgress(`sync: Local chat sync completed (${currentReason}): ${currentSent} chats in ${Date.now() - startedAt}ms.`);
     } catch (error) {
-      console.error(`Local chat sync failed (${currentReason}): ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`[progress] sync: Local chat sync failed (${currentReason}): ${error instanceof Error ? error.message : String(error)}`);
     }
     currentReason = localChatSyncQueuedReason ? `queued:${localChatSyncQueuedReason}` : "";
     localChatSyncQueuedReason = "";
@@ -493,8 +520,10 @@ function connect() {
       console.error("Invalid server message", error);
       return;
     }
+    console.log(`Incoming ${message.type}: ${incomingSummary(message)}`);
 
     if (message.type === "repo.scan") {
+      logProgress("scan: Scanning configured projects.");
       send({
         type: "agent.heartbeat",
         currentJobId,
@@ -502,16 +531,21 @@ function connect() {
         codexUsage: await probeCodexUsage(),
         repos: await scanRepos(config)
       });
+      logProgress("scan: Project scan sent.");
       return;
     }
 
     if (message.type === "job.cancel") {
-      if (message.jobId === currentJobId) currentRunner?.cancel();
+      if (message.jobId === currentJobId) {
+        logProgress(`cancel: Cancelling job ${shortId(message.jobId)}.`);
+        currentRunner?.cancel();
+      }
       return;
     }
 
     if (message.type === "project.create") {
       try {
+        logProgress(`project: Creating ${message.project.name}.`);
         if (config.repos.some((repo) => repo.id === message.project.id)) throw new Error("Project id already exists.");
         await ensureGitRepo(message.project.path);
         config.repos.push({
@@ -528,14 +562,17 @@ function connect() {
         });
         saveAgentConfig(config);
         await sendProjectResult(send, message.requestId, true);
+        logProgress(`project: Created ${message.project.name}.`);
       } catch (error) {
         await sendProjectResult(send, message.requestId, false, error instanceof Error ? error.message : String(error));
+        console.error(`[progress] project: Create failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       return;
     }
 
     if (message.type === "project.update") {
       try {
+        logProgress(`project: Updating ${message.repoId}.`);
         const repo = config.repos.find((item) => item.id === message.repoId);
         if (!repo) throw new Error("Project not found in agent config.");
         if (message.patch.path) {
@@ -552,61 +589,78 @@ function connect() {
         if (!repo.allowedSandboxes.includes(repo.defaultSandbox)) repo.defaultSandbox = repo.allowedSandboxes[0] ?? "read-only";
         saveAgentConfig(config);
         await sendProjectResult(send, message.requestId, true);
+        logProgress(`project: Updated ${message.repoId}.`);
       } catch (error) {
         await sendProjectResult(send, message.requestId, false, error instanceof Error ? error.message : String(error));
+        console.error(`[progress] project: Update failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       return;
     }
 
     if (message.type === "project.delete") {
       try {
+        logProgress(`project: Deleting ${message.repoId}.`);
         const index = config.repos.findIndex((item) => item.id === message.repoId);
         if (index === -1) throw new Error("Project not found in agent config.");
         config.repos.splice(index, 1);
         saveAgentConfig(config);
         await sendProjectResult(send, message.requestId, true);
+        logProgress(`project: Deleted ${message.repoId}.`);
       } catch (error) {
         await sendProjectResult(send, message.requestId, false, error instanceof Error ? error.message : String(error));
+        console.error(`[progress] project: Delete failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       return;
     }
 
     if (message.type === "git.sync") {
       try {
+        logProgress(`git: Sync started for ${message.repoId}.`);
         const output = await gitSync(message.repoId, message.message, message.remoteUrl);
         await sendGitResult(send, message.requestId, true, output);
+        logProgress(`git: Sync completed for ${message.repoId}.`);
       } catch (error) {
         await sendGitResult(send, message.requestId, false, "", error instanceof Error ? error.message : String(error));
+        console.error(`[progress] git: Sync failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       return;
     }
 
     if (message.type === "project.deploy") {
       try {
+        logProgress(`deploy: Deploy started for ${message.repoId}.`);
         const output = await deployProject(message.repoId);
         await sendDeployResult(send, message.requestId, true, output);
+        logProgress(`deploy: Deploy completed for ${message.repoId}.`);
       } catch (error) {
         await sendDeployResult(send, message.requestId, false, "", error instanceof Error ? error.message : String(error));
+        console.error(`[progress] deploy: Deploy failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       return;
     }
 
     if (message.type === "project.nginx") {
       try {
+        logProgress(`nginx: Configure started for ${message.repoId}.`);
         const output = await configureNginx(message.repoId);
         await sendNginxResult(send, message.requestId, true, output);
+        logProgress(`nginx: Configure completed for ${message.repoId}.`);
       } catch (error) {
         await sendNginxResult(send, message.requestId, false, "", error instanceof Error ? error.message : String(error));
+        console.error(`[progress] nginx: Configure failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       return;
     }
 
     if (message.type === "project.ssl") {
       try {
+        logProgress(`ssl: Configure started for ${message.repoId}.`);
         const output = await configureSsl(message.repoId);
         await sendSslResult(send, message.requestId, true, output);
+        logProgress(`ssl: Configure completed for ${message.repoId}.`);
       } catch (error) {
         await sendSslResult(send, message.requestId, false, "", error instanceof Error ? error.message : String(error));
+        console.error(`[progress] ssl: Configure failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       return;
     }
@@ -638,6 +692,7 @@ function connect() {
 
     if (message.type === "chat.sync.request") {
       try {
+        logProgress("sync: Manual chat sync requested.");
         const sent = await runLocalChatSync("request", send);
         send({
           type: "chat.sync.result",
@@ -645,6 +700,7 @@ function connect() {
           ok: true,
           sent
         });
+        logProgress(`sync: Manual chat sync sent ${sent} chats.`);
       } catch (error) {
         send({
           type: "chat.sync.result",
@@ -652,12 +708,14 @@ function connect() {
           ok: false,
           error: error instanceof Error ? redact(error.message) : redact(String(error))
         });
+        console.error(`[progress] sync: Manual chat sync failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       return;
     }
 
     if (message.type === "job.run") {
       if (currentRunner) {
+        console.log(`Job rejected: ${shortId(message.job.id)} because another job is running.`);
         send({
           type: "job.done",
           jobId: message.job.id,
@@ -669,13 +727,29 @@ function connect() {
       }
       currentJobId = message.job.id;
       currentRunner = new Runner();
+      const startedAt = Date.now();
+      console.log(`Job received: ${shortId(message.job.id)} repo=${message.job.repoId} kind=${message.job.kind}.`);
       try {
         const result = await currentRunner.run({
           config,
           job: message.job,
-          sendLog: (log) => send({ ...log, message: redact(log.message) }),
-          sendProgress: (progress) => send({ ...progress, message: redact(progress.message) })
+          sendLog: (log) => {
+            const redactedMessage = redact(log.message);
+            if (log.stream === "system" || log.stream === "stderr") {
+              console.log(`Job log ${shortId(log.jobId)} ${log.stream}: ${redactedMessage.slice(0, 500)}`);
+            }
+            send({ ...log, message: redactedMessage });
+          },
+          sendProgress: (progress) => {
+            const redactedMessage = redact(progress.message);
+            const diffText = progress.filesChanged !== undefined
+              ? ` (${progress.filesChanged} files, +${progress.added ?? 0} -${progress.deleted ?? 0})`
+              : "";
+            logProgress(`job ${shortId(progress.jobId)} ${progress.phase}: ${redactedMessage.slice(0, 500)}${diffText}`);
+            send({ ...progress, message: redactedMessage });
+          }
         });
+        console.log(`Job finished: ${shortId(message.job.id)} ${result.status} in ${Date.now() - startedAt}ms.`);
         send({
           ...result,
           finalMessage: result.finalMessage ? redact(result.finalMessage) : undefined,
@@ -684,6 +758,7 @@ function connect() {
           gitDiff: result.gitDiff ? redact(result.gitDiff) : undefined
         });
       } catch (error) {
+        console.error(`Job failed: ${shortId(message.job.id)} ${error instanceof Error ? error.message : String(error)}`);
         send({
           type: "job.done",
           jobId: message.job.id,
