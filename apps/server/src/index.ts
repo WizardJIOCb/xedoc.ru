@@ -66,6 +66,7 @@ import {
 const config = loadConfig();
 const db = openDb(config.databasePath);
 const AGENT_OFFLINE_GRACE_MS = 8000;
+const WEBSOCKET_MAX_PAYLOAD_BYTES = 10 * 1024 * 1024;
 
 type AgentConnection = {
   id: string;
@@ -1729,7 +1730,11 @@ async function createOrLoginOAuthUser(profile: OAuthProfile, linkUserId?: string
 async function createApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 20 * 1024 * 1024 });
   await app.register(fastifyCookie);
-  await app.register(fastifyWebsocket);
+  await app.register(fastifyWebsocket, {
+    options: {
+      maxPayload: WEBSOCKET_MAX_PAYLOAD_BYTES
+    }
+  });
 
   app.addHook("onRequest", async (_request, reply) => {
     reply.header("X-Content-Type-Options", "nosniff");
