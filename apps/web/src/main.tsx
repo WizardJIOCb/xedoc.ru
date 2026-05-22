@@ -871,7 +871,7 @@ function renderRichText(value: string, className = "rich-text") {
       paragraph.push(lines[index] ?? "");
       index += 1;
     }
-    blocks.push(<p key={blocks.length}>{renderInlineMarkdown(paragraph.join(" "))}</p>);
+    blocks.push(<p key={blocks.length}>{renderInlineMarkdown(paragraph.join("\n"))}</p>);
   }
 
   return <div className={className}>{blocks.length ? blocks : <p>{value}</p>}</div>;

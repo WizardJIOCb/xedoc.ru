@@ -606,6 +606,7 @@ function chatRepoId(chatId: string): string {
 
 type SerializeAttachmentOptions = {
   includeData?: boolean;
+  includeChatData?: boolean;
   lightMetadata?: boolean;
 };
 
@@ -719,7 +720,7 @@ function serializeChatAttachment(attachment: ChatAttachmentRow, options: Seriali
     mimeType: attachment.mime_type,
     size: attachment.size,
     url: `/api/chat-attachments/${encodeURIComponent(attachment.id)}`,
-    dataBase64: options.includeData && isPreviewableImageMime(attachment.mime_type) ? attachment.data_base64 : undefined,
+    dataBase64: (options.includeData || options.includeChatData) && isPreviewableImageMime(attachment.mime_type) ? attachment.data_base64 : undefined,
     createdAt: attachment.created_at
   };
 }
@@ -2340,7 +2341,7 @@ async function createApp(): Promise<FastifyInstance> {
     return {
       chat: serializeChat(chat),
       jobs: rows.map((row) => serializeJob(row, { includeDiff: false })),
-      messages: serializeMessagesForChat(chatId, messages, { lightMetadata: true })
+      messages: serializeMessagesForChat(chatId, messages, { includeChatData: true, lightMetadata: true })
     };
   });
 

@@ -2377,6 +2377,10 @@ h2 > strong {
   margin: 0;
 }
 
+.rich-text p {
+  white-space: pre-wrap;
+}
+
 .rich-text h3 {
   font-size: 14px;
   line-height: 1.35;
