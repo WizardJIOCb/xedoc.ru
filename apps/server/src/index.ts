@@ -907,8 +907,8 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
     const latestExists = db.prepare("SELECT 1 FROM chat_messages WHERE chat_id = ? AND source = ? AND external_id = ?")
       .get(chat.id, latestSyncedMessage.source, latestSyncedMessage.externalId) as { 1: number } | undefined;
     if (latestExists) {
-      if (changed) {
-        db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?").run(sync.updatedAt || stamp, chat.id);
+      if (changed || chat.title !== syncTitle) {
+        db.prepare("UPDATE chats SET title = ?, updated_at = ? WHERE id = ?").run(syncTitle, sync.updatedAt || stamp, chat.id);
         broadcast({
           type: "chats.updated",
           agentId,
@@ -929,9 +929,9 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
     chat = linkedChat;
     changed = pruneSyncedContextMessages(chat.id) || changed;
     const nextCwd = chat.cwd ?? sync.cwd ?? null;
-    if (chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
-      db.prepare("UPDATE chats SET cwd=?, updated_at=? WHERE id=?")
-        .run(nextCwd, sync.updatedAt, chat.id);
+    if (chat.title !== syncTitle || chat.cwd !== nextCwd || chat.updated_at !== sync.updatedAt) {
+      db.prepare("UPDATE chats SET title=?, cwd=?, updated_at=? WHERE id=?")
+        .run(syncTitle, nextCwd, sync.updatedAt, chat.id);
       changed = true;
     }
   } else if (chat) {
