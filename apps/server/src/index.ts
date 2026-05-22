@@ -607,7 +607,12 @@ function chatRepoId(chatId: string): string {
 type SerializeAttachmentOptions = {
   includeData?: boolean;
   includeChatData?: boolean;
+  includeChatDataLimitBytes?: number;
   lightMetadata?: boolean;
+};
+
+type ChatAttachmentWithMessageTime = ChatAttachmentRow & {
+  message_created_at: string;
 };
 
 function serializeMessageMetadata(metadataJson: string | null, options: SerializeAttachmentOptions = {}) {
@@ -666,14 +671,30 @@ function serializeMessagesForChat(chatId: string, messages: ChatMessageRow[], op
     ORDER BY a.created_at ASC
   `).all(chatId) as AttachmentRow[];
   const chatAttachments = db.prepare(`
-    SELECT a.*
+    SELECT a.*, m.created_at AS message_created_at
     FROM chat_attachments a
     JOIN chat_messages m ON m.id = a.chat_message_id
     WHERE m.chat_id = ?
     ORDER BY a.created_at ASC
-  `).all(chatId) as ChatAttachmentRow[];
+  `).all(chatId) as ChatAttachmentWithMessageTime[];
   const jobAttachmentsByMessage = new Map<string, AttachmentRow[]>();
-  const chatAttachmentsByMessage = new Map<string, ChatAttachmentRow[]>();
+  const chatAttachmentsByMessage = new Map<string, ChatAttachmentWithMessageTime[]>();
+  const inlineChatAttachmentIds = new Set<string>();
+  if (options.includeChatDataLimitBytes && options.includeChatDataLimitBytes > 0) {
+    let remainingBytes = options.includeChatDataLimitBytes;
+    [...chatAttachments]
+      .filter((attachment) => isPreviewableImageMime(attachment.mime_type))
+      .sort((a, b) => {
+        const byMessage = Date.parse(b.message_created_at) - Date.parse(a.message_created_at);
+        if (byMessage !== 0) return byMessage;
+        return Date.parse(b.created_at) - Date.parse(a.created_at);
+      })
+      .forEach((attachment) => {
+        if (attachment.size > remainingBytes) return;
+        inlineChatAttachmentIds.add(attachment.id);
+        remainingBytes -= attachment.size;
+      });
+  }
   jobAttachments.forEach((attachment) => {
     if (!attachment.chat_message_id) return;
     const current = jobAttachmentsByMessage.get(attachment.chat_message_id) ?? [];
@@ -696,7 +717,10 @@ function serializeMessagesForChat(chatId: string, messages: ChatMessageRow[], op
     createdAt: message.created_at,
     attachments: [
       ...(jobAttachmentsByMessage.get(message.id) ?? []).map((attachment) => serializeAttachment(attachment, options)),
-      ...(chatAttachmentsByMessage.get(message.id) ?? []).map((attachment) => serializeChatAttachment(attachment, options))
+      ...(chatAttachmentsByMessage.get(message.id) ?? []).map((attachment) => serializeChatAttachment(attachment, {
+        ...options,
+        includeChatData: options.includeChatData || inlineChatAttachmentIds.has(attachment.id)
+      }))
     ]
   }));
 }
@@ -2341,7 +2365,7 @@ async function createApp(): Promise<FastifyInstance> {
     return {
       chat: serializeChat(chat),
       jobs: rows.map((row) => serializeJob(row, { includeDiff: false })),
-      messages: serializeMessagesForChat(chatId, messages, { includeChatData: true, lightMetadata: true })
+      messages: serializeMessagesForChat(chatId, messages, { includeChatDataLimitBytes: 1024 * 1024, lightMetadata: true })
     };
   });
 

@@ -2085,7 +2085,16 @@ function App() {
       }
       if (loadChatAbortRef.current !== controller) return;
       if (showLoader) setChatLoadingProgress({ phase: "parse", loadedBytes, totalBytes, percent: 92, startedAt: loadingStartedAt });
-      data = JSON.parse(responseText) as ChatPayload;
+      try {
+        data = JSON.parse(responseText) as ChatPayload;
+      } catch (error) {
+        clearChatLoader(chatId, loadingStartedAt);
+        if (showLoader) {
+          setChatNoticeOk(false);
+          setChatNotice("Не удалось разобрать ответ чата. Обнови страницу и попробуй открыть чат ещё раз.");
+        }
+        throw error;
+      }
       const etag = response.headers.get("etag");
       if (etag) chatCacheRef.current.set(chatId, { etag, data });
       }
