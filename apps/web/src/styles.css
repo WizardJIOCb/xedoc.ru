@@ -2944,10 +2944,33 @@ pre {
   color: #8a1f15;
 }
 
+.notice.warning {
+  border-color: rgba(217, 119, 6, 0.24);
+  background: rgba(251, 191, 36, 0.12);
+  color: #7c2d12;
+}
+
 .notice.success {
   border-color: rgba(16, 163, 127, 0.24);
   background: rgba(16, 163, 127, 0.08);
   color: #047857;
+}
+
+.agent-bind-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agent-bind-notice p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-bind-notice .secondary {
+  flex: 0 0 auto;
 }
 
 label {
@@ -3206,6 +3229,15 @@ button:disabled {
 
   .agent-settings-actions {
     justify-content: space-between;
+  }
+
+  .agent-bind-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-bind-notice .secondary {
+    width: 100%;
   }
 
   .chat-work {

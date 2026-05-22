@@ -1456,8 +1456,18 @@ function App() {
   const chatLoadingDeterminate = Boolean(chatLoadingProgress?.totalBytes);
   const chatLoadingLabel = chatLoadingProgress ? chatLoadingPhaseLabel(chatLoadingProgress.phase) : "Загружаю чат";
   const selectedRepoAgent = selectedRepo ? agents.find((agent) => agent.id === selectedRepo.agentId) : undefined;
-  const selectedAgent = selectedRepoAgent ?? agents.find((agent) => agent.status === "online") ?? agents[0];
+  const onlineAgent = agents.find((agent) => agent.status === "online");
+  const selectedAgent = selectedRepoAgent ?? onlineAgent ?? agents[0];
   const online = Boolean(selectedAgent && selectedAgent.status === "online");
+  const selectedRepoAgentHost = selectedRepoAgent?.hostname?.trim().toLowerCase();
+  const onlineAgentOnSameHost = selectedRepoAgent && selectedRepoAgent.status !== "online"
+    ? agents.find((agent) => (
+      agent.id !== selectedRepoAgent.id
+      && agent.status === "online"
+      && Boolean(selectedRepoAgentHost)
+      && agent.hostname?.trim().toLowerCase() === selectedRepoAgentHost
+    ))
+    : undefined;
   const localActivity = selectedAgent?.localActivity;
   const activeJobFinalMessageSeen = Boolean(activeJob && messages.some((message) => (
     message.role === "assistant"
@@ -4266,6 +4276,19 @@ function App() {
               {selectedRepo.domain && <> · {selectedRepo.domain}</>}
               {selectedRepo.serverPath && <> · {selectedRepo.serverPath}</>}
             </div>
+            {selectedRepoAgent && selectedRepoAgent.status !== "online" && (
+              <div className="notice warning agent-bind-notice">
+                <p>
+                  Этот проект привязан к <strong>{selectedRepoAgent.name}</strong>, сейчас он offline.
+                  {onlineAgentOnSameHost
+                    ? <> На этом же ПК online <strong>{onlineAgentOnSameHost.name}</strong>, но у него нет этих проектов и чатов, поэтому Sync получает 503.</>
+                    : <> Пока агент проекта offline, локальные чаты не синхронизируются.</>}
+                </p>
+                <button className="secondary compact" disabled={busy} type="button" onClick={() => void downloadAgentSetup(selectedRepoAgent)}>
+                  <Download size={15} /> Setup для {selectedRepoAgent.name}
+                </button>
+              </div>
+            )}
             <form className="git-panel" onSubmit={syncGit}>
               <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
               <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
