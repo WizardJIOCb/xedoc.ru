@@ -2857,6 +2857,12 @@ pre {
   color: #8a1f15;
 }
 
+.notice.success {
+  border-color: rgba(16, 163, 127, 0.24);
+  background: rgba(16, 163, 127, 0.08);
+  color: #047857;
+}
+
 label {
   display: grid;
   gap: 5px;

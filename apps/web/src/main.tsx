@@ -1402,6 +1402,7 @@ function App() {
   const [vscodeBusy, setVscodeBusy] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [chatNotice, setChatNotice] = useState("");
+  const [chatNoticeOk, setChatNoticeOk] = useState(false);
   const [projectNotice, setProjectNotice] = useState("");
   const [attachmentNotice, setAttachmentNotice] = useState("");
   const [view, setView] = useState<"projects" | "settings" | "profile" | "sync">("projects");
@@ -1772,6 +1773,7 @@ function App() {
     if (!repo || !csrf || localChatSyncing) return;
     setLocalChatSyncing(true);
     setChatNotice("");
+    setChatNoticeOk(false);
     setSyncNotice("");
     try {
       const response = await api(`/api/agents/${encodeURIComponent(repo.agentId)}/sync-local-chats`, {
@@ -1781,6 +1783,7 @@ function App() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        setChatNoticeOk(false);
         setChatNotice(data.error === "agent_offline" ? "Агент offline: локальные чаты пока нельзя синхронизировать." : "Не получилось синхронизировать локальные чаты.");
         setSyncNotice(data.error === "agent_offline" ? "Агент offline: синхронизация недоступна." : data.error || "Не получилось синхронизировать локальные чаты.");
         return;
@@ -1809,6 +1812,7 @@ function App() {
       setChatLoadingId(chatId);
       setChatLoadingProgress({ phase: "request", loadedBytes: 0, percent: 4, startedAt: loadingStartedAt });
       setChatNotice("");
+      setChatNoticeOk(false);
     }
     const timeout = window.setTimeout(() => controller.abort(), 30000);
     try {
@@ -1829,7 +1833,10 @@ function App() {
       if (!response.ok) {
         loadChatAbortRef.current = null;
         clearChatLoader(chatId, loadingStartedAt);
-        if (showLoader) setChatNotice("Не удалось загрузить чат. Попробуй открыть его ещё раз.");
+        if (showLoader) {
+          setChatNoticeOk(false);
+          setChatNotice("Не удалось загрузить чат. Попробуй открыть его ещё раз.");
+        }
         return;
       }
       const totalHeader = Number(response.headers.get("content-length") ?? 0);
@@ -1900,7 +1907,10 @@ function App() {
       }
       clearChatLoader(chatId, loadingStartedAt);
       if (!isAbortError(error)) {
-        if (showLoader) setChatNotice("Загрузка чата прервалась. Попробуй открыть его ещё раз.");
+        if (showLoader) {
+          setChatNoticeOk(false);
+          setChatNotice("Загрузка чата прервалась. Попробуй открыть его ещё раз.");
+        }
         throw error;
       }
     } finally {
@@ -2523,6 +2533,7 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
+      setChatNoticeOk(false);
       setChatNotice(data.error === "agent_local_busy" ? "Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web." : data.error || "Job start failed.");
       return;
     }
@@ -2581,6 +2592,7 @@ function App() {
     event.preventDefault();
     if (!selectedRepo || (!prompt.trim() && !attachments.length) || !csrf) return;
     if (localCodexBusy) {
+      setChatNoticeOk(false);
       setChatNotice("Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web.");
       return;
     }
@@ -2639,6 +2651,7 @@ function App() {
     if (!chat || !csrf) return;
     setShareBusy(true);
     setChatNotice("");
+    setChatNoticeOk(false);
     setChatMenuId("");
     const response = await api(`/api/chats/${encodeURIComponent(chat.id)}/share`, {
       method: "POST",
@@ -2649,15 +2662,18 @@ function App() {
     setShareBusy(false);
     if (!response.ok) {
       setChatNotice(data.error || "Не получилось создать публичную ссылку на чат.");
+      setChatNoticeOk(false);
       return;
     }
     const url = String(data.url || data.share?.url || "");
     if (url) {
       await navigator.clipboard?.writeText(url).catch(() => undefined);
       setChatNotice(`Ссылка на чат скопирована: ${url}`);
+      setChatNoticeOk(true);
       return;
     }
     setChatNotice("Публичная ссылка создана, но сервер не вернул URL.");
+    setChatNoticeOk(false);
   }
 
   async function hideChat(chat: Chat) {
@@ -2666,6 +2682,7 @@ function App() {
     if (activeInChat) return;
     setBusy(true);
     setChatNotice("");
+    setChatNoticeOk(false);
     const response = await api(`/api/chats/${chat.id}/hide`, {
       method: "POST",
       headers: { "x-csrf-token": csrf },
@@ -2674,6 +2691,7 @@ function App() {
     const data = await response.json().catch(() => ({}));
     setBusy(false);
     if (!response.ok) {
+      setChatNoticeOk(false);
       setChatNotice(data.error === "chat_has_running_job" ? "Stop the running job before hiding this chat." : data.error || "Chat hide failed.");
       return;
     }
@@ -2698,6 +2716,7 @@ function App() {
     if (!csrf || !selectedRepo || !chatProperties) return;
     setBusy(true);
     setChatNotice("");
+    setChatNoticeOk(false);
     const response = await api(`/api/chats/${chatProperties.id}`, {
       method: "PUT",
       headers: { "x-csrf-token": csrf },
@@ -2709,6 +2728,7 @@ function App() {
     const data = await response.json().catch(() => ({}));
     setBusy(false);
     if (!response.ok) {
+      setChatNoticeOk(false);
       setChatNotice(data.error || "Chat properties save failed.");
       return;
     }
@@ -3934,7 +3954,10 @@ function App() {
                           <button
                             className="nav-sync-chat"
                             disabled={localChatSyncing || !online}
-                            onClick={() => syncLocalChats(repo).catch(() => setChatNotice("Не получилось синхронизировать локальные чаты."))}
+                            onClick={() => syncLocalChats(repo).catch(() => {
+                              setChatNoticeOk(false);
+                              setChatNotice("Не получилось синхронизировать локальные чаты.");
+                            })}
                             title="Синхронизировать локальные чаты Codex/VS Code"
                             type="button"
                           >
@@ -4169,7 +4192,7 @@ function App() {
                 ))}
                 {!hiddenLocalChats.length && <span className="small-empty">Нет скрытых локальных чатов для этого проекта.</span>}
               </div>
-              {chatNotice && <div className="notice danger">{chatNotice}</div>}
+              {chatNotice && <div className={chatNoticeOk ? "notice success" : "notice danger"}>{chatNotice}</div>}
               <button disabled={busy || !chatSettingsTitle.trim()} type="submit"><Save size={16} /> Save chat</button>
             </form>
           )}
@@ -4179,8 +4202,15 @@ function App() {
               <h2><MessageSquare size={18} /> {activeChat?.title ?? "Project chat"}</h2>
               <div className="section-actions">
                 {activeChat && (
-                  <button className="secondary" disabled={shareBusy} onClick={() => shareChat(activeChat)} type="button">
-                    <Link2 size={16} /> Ссылка
+                  <button
+                    aria-label="Скопировать ссылку на чат"
+                    className="icon tiny"
+                    disabled={shareBusy}
+                    onClick={() => shareChat(activeChat)}
+                    title="Скопировать ссылку на чат"
+                    type="button"
+                  >
+                    <Link2 size={16} />
                   </button>
                 )}
                 <button className="icon tiny" onClick={() => openProjectSettings(selectedRepo)} title="Настройки"><Settings size={16} /></button>
@@ -4205,7 +4235,7 @@ function App() {
             </form>
             {activeChat ? (
               <>
-                {chatNotice && <div className="notice danger">{chatNotice}</div>}
+                {chatNotice && <div className={chatNoticeOk ? "notice success" : "notice danger"}>{chatNotice}</div>}
                 <section className="workspace">
                   <section className="job-detail">
                     <section className="chat-thread" ref={chatThreadRef}>
