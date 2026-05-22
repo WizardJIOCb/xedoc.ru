@@ -844,17 +844,6 @@ textarea:focus {
   line-height: 1.45;
 }
 
-.settings-card-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: start;
-}
-
-.settings-card-head h2 {
-  margin: 0 0 4px;
-}
-
 .sync-work {
   max-width: 980px;
 }
@@ -970,6 +959,24 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.agent-add-button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--text);
+  font-weight: 800;
+}
+
+.agent-add-button:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-style: solid;
 }
 
 .secondary.compact {
@@ -3170,7 +3177,6 @@ button:disabled {
   .sync-setup-card,
   .sync-grid,
   .sync-actions,
-  .settings-card-head,
   .agent-settings-row,
   .oauth-row {
     grid-template-columns: 1fr;

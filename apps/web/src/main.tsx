@@ -3273,14 +3273,9 @@ function App() {
             </div>
           )}
           <div className="settings-card">
-            <div className="settings-card-head">
-              <div>
-                <h2>Agents</h2>
-                <p>Для другого компьютера нужен отдельный агент, иначе устройства будут перехватывать один и тот же статус.</p>
-              </div>
-              <button className="secondary" disabled={busy} type="button" onClick={() => void createAnotherComputerSetup()}>
-                <Plus size={16} /> Add another computer
-              </button>
+            <div>
+              <h2>Agents</h2>
+              <p>Для другого компьютера нужен отдельный агент, иначе устройства будут перехватывать один и тот же статус.</p>
             </div>
             {agents.map((agent) => (
               <div className="settings-row agent-settings-row" key={agent.id}>
@@ -3303,6 +3298,9 @@ function App() {
               </div>
             ))}
             {!agents.length && <span className="small-empty">No agents yet.</span>}
+            <button className="agent-add-button" disabled={busy} type="button" onClick={() => void createAnotherComputerSetup()}>
+              <Plus size={16} /> Add another computer
+            </button>
           </div>
         </section>
       </section>
