@@ -623,16 +623,23 @@ textarea:focus {
   scrollbar-gutter: stable;
 }
 
+.app-header {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+}
+
 .topbar {
-  min-height: 72px;
+  min-height: 60px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.9);
 }
 
 .top-nav-controls {
@@ -720,11 +727,15 @@ textarea:focus {
 }
 
 .machine {
-  min-height: 42px;
+  min-height: 36px;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 9px 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .machine small {
@@ -3038,6 +3049,15 @@ button:disabled {
     overflow-y: visible;
   }
 
+  .app-header {
+    position: sticky;
+    top: max(6px, env(safe-area-inset-top));
+    z-index: 45;
+    gap: 6px;
+    padding: 7px;
+    border-radius: 8px;
+  }
+
   .nav-brand strong {
     display: block;
   }
@@ -3049,8 +3069,8 @@ button:disabled {
 
   .topbar {
     grid-template-columns: auto minmax(0, 1fr) auto;
-    min-height: 56px;
-    padding: 8px;
+    min-height: 48px;
+    gap: 7px;
   }
 
   .top-title {
@@ -3079,13 +3099,30 @@ button:disabled {
   }
 
   .machine {
-    flex-direction: column;
-    gap: 4px;
+    min-height: auto;
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+    gap: 2px 8px;
+    font-size: 12px;
   }
 
   .machine small {
+    grid-column: 1 / -1;
     margin-left: 0;
     text-align: left;
+    font-size: 10px;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .machine span,
+  .machine strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .git-panel,
@@ -3430,6 +3467,30 @@ button:disabled {
 
   .shell {
     gap: 6px;
+  }
+
+  .app-header {
+    top: max(4px, env(safe-area-inset-top));
+    gap: 5px;
+    padding: 6px;
+  }
+
+  .topbar {
+    min-height: 44px;
+  }
+
+  .top-actions,
+  .top-nav-controls {
+    gap: 5px;
+  }
+
+  .topbar .icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .machine {
+    font-size: 11px;
   }
 
   .chat-work {

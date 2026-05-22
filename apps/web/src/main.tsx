@@ -4025,40 +4025,42 @@ function App() {
       {mobileMenuOpen && <button className="mobile-menu-backdrop" aria-label="Закрыть меню" type="button" onClick={() => setMobileMenuOpen(false)} />}
 
       <section className="shell" ref={shellRef} onScroll={() => updateChatBottomState("scroll")}>
-      <header className="topbar">
-        <div className="top-nav-controls">
-          <button
-            className="icon sidebar-toggle"
-            type="button"
-            onClick={() => setSidebarCollapsed((value) => !value)}
-            title={sidebarCollapsed ? "Показать боковую панель" : "Скрыть боковую панель"}
-          >
-            {sidebarCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
-          </button>
-          <button className="icon mobile-menu-toggle" type="button" onClick={() => setMobileMenuOpen(true)} title="Меню">
-            <Menu size={19} />
-          </button>
+      <header className="app-header">
+        <div className="topbar">
+          <div className="top-nav-controls">
+            <button
+              className="icon sidebar-toggle"
+              type="button"
+              onClick={() => setSidebarCollapsed((value) => !value)}
+              title={sidebarCollapsed ? "Показать боковую панель" : "Скрыть боковую панель"}
+            >
+              {sidebarCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}
+            </button>
+            <button className="icon mobile-menu-toggle" type="button" onClick={() => setMobileMenuOpen(true)} title="Меню">
+              <Menu size={19} />
+            </button>
+          </div>
+          <div className="top-title">
+            <span className={`status ${online ? "ok" : "bad"}`}>{online ? <Wifi size={16} /> : <WifiOff size={16} />} {online ? "Home PC online" : "Home PC offline"}</span>
+            <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
+          </div>
+          <div className="top-actions">
+            {selectedRepo && <button className="icon" onClick={clearProjectSelection} title="Проекты"><ArrowLeft size={18} /></button>}
+            <button className="icon" onClick={refresh} title="Обновить"><RefreshCw size={18} /></button>
+            <button className="icon" onClick={logout} title="Выйти"><LogOut size={18} /></button>
+          </div>
         </div>
-        <div className="top-title">
-          <span className={`status ${online ? "ok" : "bad"}`}>{online ? <Wifi size={16} /> : <WifiOff size={16} />} {online ? "Home PC online" : "Home PC offline"}</span>
-          <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
-        </div>
-        <div className="top-actions">
-          {selectedRepo && <button className="icon" onClick={clearProjectSelection} title="Проекты"><ArrowLeft size={18} /></button>}
-          <button className="icon" onClick={refresh} title="Обновить"><RefreshCw size={18} /></button>
-          <button className="icon" onClick={logout} title="Выйти"><LogOut size={18} /></button>
-        </div>
-      </header>
 
-      <section className="machine-strip">
-        {agents.map((agent) => (
-          <article className="machine" key={agent.id}>
-            <strong>{agent.name}</strong>
-            <span>{agent.hostname || agent.id}</span>
-            <small>{agent.codex_version || "codex not probed"} · {agent.git_version || "git not probed"}</small>
-          </article>
-        ))}
-      </section>
+        <section className="machine-strip">
+          {agents.map((agent) => (
+            <article className="machine" key={agent.id}>
+              <strong>{agent.name}</strong>
+              <span>{agent.hostname || agent.id}</span>
+              <small>{agent.codex_version || "codex not probed"} · {agent.git_version || "git not probed"}</small>
+            </article>
+          ))}
+        </section>
+      </header>
 
       {view === "settings" && renderSettings()}
       {view === "profile" && renderProfile()}
