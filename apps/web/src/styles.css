@@ -760,10 +760,32 @@ textarea:focus {
 }
 
 .project-card {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 6px;
+  position: relative;
   min-width: 0;
+}
+
+.project-card .project-main {
+  padding-right: 48px;
+}
+
+.project-settings-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: #ffffff;
+}
+
+.project-settings-button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--panel-2);
 }
 
 .project-main,

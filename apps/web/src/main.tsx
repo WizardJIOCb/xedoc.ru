@@ -4123,10 +4123,10 @@ function App() {
                   <small>{repo.pathMasked}</small>
                   {repo.domain && <small>{repo.domain}</small>}
                 </button>
-                <button className="icon tiny" onClick={() => {
+                <button className="project-settings-button" onClick={() => {
                   setRepoKey(`${repo.agentId}:${repo.id}`);
                   openProjectSettings(repo);
-                }} title="Настройки проекта"><Settings size={16} /></button>
+                }} title="Настройки проекта" type="button"><Settings size={15} /></button>
               </article>
             ))}
           </div>
