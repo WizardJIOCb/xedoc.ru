@@ -9,7 +9,7 @@ type LocalAttachment = NonNullable<ChatMessage["attachments"]>[number];
 
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
-const MAX_SYNC_MESSAGES = 80;
+const MAX_SYNC_MESSAGES = 160;
 const MAX_ACTION_OUTPUT_CHARS = 300;
 const MAX_ACTIONS_PER_MESSAGE = 8;
 const MAX_SYNC_DIFF_CHARS = 2500;
