@@ -1126,6 +1126,45 @@ function shouldCollapseCompletedTurnMessage(message: ChatMessage) {
   return message.role === "assistant" || message.role === "tool";
 }
 
+function messageTimeMs(value: string | undefined | null, fallback: number) {
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function messageRoleOrder(message: ChatMessage) {
+  if (message.role === "user") return 0;
+  if (message.role === "system" || message.role === "tool") return 1;
+  return 2;
+}
+
+function orderChatMessagesForDisplay(messages: ChatMessage[], jobs: Job[]) {
+  const jobsById = new Map(jobs.map((job) => [job.id, job]));
+  return messages
+    .map((message, index) => {
+      const createdMs = messageTimeMs(message.createdAt, index);
+      const jobId = messageJobId(message);
+      const job = jobId ? jobsById.get(jobId) : undefined;
+      let turnMs = createdMs;
+
+      if (job && isJobPromptMessage(message, job.id)) {
+        turnMs = messageTimeMs(job.createdAt, createdMs);
+      } else if (job && isJobFinalMessage(message, job.id)) {
+        turnMs = messageTimeMs(job.createdAt, createdMs) + 1;
+      } else if ((message.role === "assistant" || message.role === "tool") && typeof message.metadata?.startedAt === "string") {
+        turnMs = messageTimeMs(message.metadata.startedAt, createdMs) + 1;
+      }
+
+      return { message, index, turnMs, createdMs };
+    })
+    .sort((left, right) =>
+      left.turnMs - right.turnMs
+      || messageRoleOrder(left.message) - messageRoleOrder(right.message)
+      || left.createdMs - right.createdMs
+      || left.index - right.index
+    )
+    .map((entry) => entry.message);
+}
+
 const CHAT_TOP_THRESHOLD_PX = 120;
 const CHAT_BOTTOM_THRESHOLD_PX = 16;
 const CHAT_SYNC_REFRESH_MIN_MS = 10000;
@@ -1205,6 +1244,7 @@ function metadataCodexActions(message: ChatMessage): CodexAction[] {
 }
 
 function buildChatTimeline(messages: ChatMessage[], jobs: Job[], keepLatestTurnExpanded = false): ChatTimelineItem[] {
+  const orderedMessages = orderChatMessagesForDisplay(messages, jobs);
   const hiddenMessageIds = new Set<string>();
   const collapsedByFinalId = new Map<string, CollapsedRunSummary>();
   const collapseMessages = (finalMessage: ChatMessage, collapsedMessages: ChatMessage[], job?: Job) => {
@@ -1234,35 +1274,35 @@ function buildChatTimeline(messages: ChatMessage[], jobs: Job[], keepLatestTurnE
     .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
 
   for (const job of completedJobs) {
-    const promptIndex = messages.findIndex((message) => isJobPromptMessage(message, job.id));
-    const finalIndex = messages.findIndex((message) => isJobFinalMessage(message, job.id));
+    const promptIndex = orderedMessages.findIndex((message) => isJobPromptMessage(message, job.id));
+    const finalIndex = orderedMessages.findIndex((message) => isJobFinalMessage(message, job.id));
     if (finalIndex < 0) continue;
-    const startIndex = promptIndex >= 0 ? promptIndex : messages.findIndex((message) => Date.parse(message.createdAt) >= Date.parse(job.createdAt));
+    const startIndex = promptIndex >= 0 ? promptIndex : orderedMessages.findIndex((message) => Date.parse(message.createdAt) >= Date.parse(job.createdAt));
     const from = startIndex >= 0 ? startIndex + 1 : 0;
-    const collapsedMessages = messages
+    const collapsedMessages = orderedMessages
       .slice(from, finalIndex)
       .filter((message) => shouldCollapseRunMessage(message, job.id))
       .filter((message) => !hiddenMessageIds.has(message.id));
-    collapseMessages(messages[finalIndex]!, collapsedMessages, job);
+    collapseMessages(orderedMessages[finalIndex]!, collapsedMessages, job);
   }
 
-  for (let index = 0; index < messages.length; index += 1) {
-    if (messages[index]?.role !== "user") continue;
-    const nextUserIndex = messages.findIndex((message, nextIndex) => nextIndex > index && message.role === "user");
-    const segmentEnd = nextUserIndex >= 0 ? nextUserIndex : messages.length;
-    if (keepLatestTurnExpanded && segmentEnd === messages.length) continue;
-    const segment = messages.slice(index + 1, segmentEnd).filter((message) => !hiddenMessageIds.has(message.id));
+  for (let index = 0; index < orderedMessages.length; index += 1) {
+    if (orderedMessages[index]?.role !== "user") continue;
+    const nextUserIndex = orderedMessages.findIndex((message, nextIndex) => nextIndex > index && message.role === "user");
+    const segmentEnd = nextUserIndex >= 0 ? nextUserIndex : orderedMessages.length;
+    if (keepLatestTurnExpanded && segmentEnd === orderedMessages.length) continue;
+    const segment = orderedMessages.slice(index + 1, segmentEnd).filter((message) => !hiddenMessageIds.has(message.id));
     const finalMessage = segment.slice().reverse().find((message) => message.role === "assistant");
     if (!finalMessage || collapsedByFinalId.has(finalMessage.id)) continue;
-    const finalIndex = messages.findIndex((message) => message.id === finalMessage.id);
-    const collapsedMessages = messages
+    const finalIndex = orderedMessages.findIndex((message) => message.id === finalMessage.id);
+    const collapsedMessages = orderedMessages
       .slice(index + 1, finalIndex)
       .filter((message) => !hiddenMessageIds.has(message.id))
       .filter(shouldCollapseCompletedTurnMessage);
     collapseMessages(finalMessage, collapsedMessages);
   }
 
-  return messages
+  return orderedMessages
     .filter((message) => !hiddenMessageIds.has(message.id))
     .map((message) => ({
       message,
