@@ -4,6 +4,7 @@ setlocal
 set "ROOT=%~dp0"
 set "MODE=%~1"
 if "%MODE%"=="" set "MODE=dev"
+set "CMC_DESKTOP_AGENT_ROOT=%ROOT%"
 if exist "%USERPROFILE%\.cargo\bin\cargo.exe" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 
 if /I "%MODE%"=="--help" goto :help

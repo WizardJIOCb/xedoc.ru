@@ -393,11 +393,16 @@ fn reap_child(state: &State<'_, DesktopState>) {
 
 fn load_config(app: &tauri::AppHandle) -> Result<DesktopConfig, String> {
     let path = desktop_config_path(app)?;
-    if !path.exists() {
-        return Ok(DesktopConfig::default());
+    let mut config = if path.exists() {
+        let raw = fs::read_to_string(path).map_err(|error| format!("Could not read desktop config: {error}"))?;
+        serde_json::from_str(&raw).map_err(|error| format!("Could not parse desktop config: {error}"))?
+    } else {
+        DesktopConfig::default()
+    };
+    if let Some(agent_root) = desktop_agent_root_override() {
+        config.agent_root = agent_root.to_string_lossy().to_string();
     }
-    let raw = fs::read_to_string(path).map_err(|error| format!("Could not read desktop config: {error}"))?;
-    serde_json::from_str(&raw).map_err(|error| format!("Could not parse desktop config: {error}"))
+    Ok(config)
 }
 
 fn save_config(app: &tauri::AppHandle, config: &DesktopConfig) -> Result<(), String> {
@@ -488,7 +493,7 @@ fn best_agent_config_value(app: &tauri::AppHandle, config: &DesktopConfig) -> Op
             continue;
         };
         let repo_count = config_repo_count(&value);
-        if best.as_ref().map(|(count, _)| repo_count > *count).unwrap_or(true) {
+        if best.as_ref().map(|(count, _)| repo_count >= *count).unwrap_or(true) {
             best = Some((repo_count, value));
         }
     }
@@ -801,7 +806,13 @@ fn expand_home(value: &str) -> String {
 }
 
 fn default_agent_root() -> PathBuf {
-    home_dir().join("codex-agent")
+    desktop_agent_root_override().unwrap_or_else(|| home_dir().join("codex-agent"))
+}
+
+fn desktop_agent_root_override() -> Option<PathBuf> {
+    env::var_os("CMC_DESKTOP_AGENT_ROOT")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
 }
 
 fn home_dir() -> PathBuf {
