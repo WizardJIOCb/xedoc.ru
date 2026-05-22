@@ -20,6 +20,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$out=Join-Path $root 'data\prod-agent.log'; $err=Join-Path $root 'data\prod-agent.err.log'; " ^
   "$script=Join-Path $root 'scripts\run-agent.ps1'; " ^
   "$p=Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$script) -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; " ^
+  "$p.Id | Set-Content -Path (Join-Path $root 'data\prod-agent-launcher.pid') -Encoding ASCII; " ^
   "Write-Host ('Codex agent started. PID: ' + $p.Id); Write-Host ('Logs: ' + $out);"
 
 pause
