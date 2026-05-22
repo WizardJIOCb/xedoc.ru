@@ -386,6 +386,13 @@ function titleFromContent(value: string | undefined | null): string | undefined 
     .replace(/\s+/g, " ")
     .trim();
   if (!content || isCodexContextMessage(content) || /^# Context from my IDE setup:/i.test(content)) return undefined;
+  const normalized = content.toLowerCase();
+  if (
+    normalized.includes("новый чат для https://codex.rodion.pro")
+    && (normalized.includes("sync") || normalized.includes("синхрон"))
+  ) {
+    return "Синхронизировать новый чат";
+  }
   return content.slice(0, 120);
 }
 

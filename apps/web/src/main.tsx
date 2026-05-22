@@ -448,6 +448,22 @@ function formatDateTime(value?: string | null) {
   });
 }
 
+function chatSourceLabel(source?: string | null) {
+  if (source === "codex") return "Codex";
+  if (source === "vscode") return "VS Code";
+  return "Web";
+}
+
+function shortChatExternalId(chat?: Pick<Chat, "externalId"> | null) {
+  return chat?.externalId ? chat.externalId.slice(0, 8) : "";
+}
+
+function chatIdentityText(chat?: Pick<Chat, "source" | "externalId"> | null) {
+  if (!chat) return "";
+  const id = shortChatExternalId(chat);
+  return id ? `${chatSourceLabel(chat.source)} · ${id}` : chatSourceLabel(chat.source);
+}
+
 function isPreviewableImage(mimeType: string) {
   return ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"].includes(mimeType.toLowerCase());
 }
@@ -4278,7 +4294,7 @@ function App() {
                                 {chatIsBusy && <RefreshCw className="spin" size={13} />}
                                 <span>{chat.title}</span>
                               </span>
-                              <small>{formatDateTime(chat.updatedAt)}</small>
+                              <small>{chatIdentityText(chat)} · {formatDateTime(chat.updatedAt)}</small>
                             </button>
                               );
                             })()}
@@ -4497,7 +4513,14 @@ function App() {
 
           <section className="chat-work">
             <div className="section-head">
-              <h2><MessageSquare size={18} /> <span>{activeChat?.title ?? "Project chat"}</span></h2>
+              <div className="chat-heading">
+                <h2><MessageSquare size={18} /> <span>{activeChat?.title ?? "Project chat"}</span></h2>
+                {activeChat && (
+                  <small title={activeChat.externalId || undefined}>
+                    {chatIdentityText(activeChat)}
+                  </small>
+                )}
+              </div>
               <div className="section-actions">
                 {activeChat && (
                   <button
