@@ -5,7 +5,7 @@
 html,
 body,
 #root {
-  min-height: 100%;
+  height: 100%;
   margin: 0;
 }
 
@@ -24,8 +24,12 @@ input {
 
 .shell {
   width: min(920px, calc(100vw - 32px));
+  height: 100%;
   margin: 0 auto;
   padding: 24px 0 32px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .topbar {
@@ -84,6 +88,7 @@ h2 {
 }
 
 .status-grid {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
@@ -133,6 +138,12 @@ h2 {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 label {
@@ -224,6 +235,30 @@ button:disabled {
   background: #f1efe8;
 }
 
+.connection-panel {
+  flex: 0 0 auto;
+}
+
+.connection-panel.collapsed {
+  padding-block: 12px;
+}
+
+.connection-panel.collapsed .panel-title {
+  margin-bottom: 0;
+}
+
+.collapse-icon {
+  transition: transform 0.18s ease;
+}
+
+.connection-panel.collapsed .collapse-icon {
+  transform: rotate(-90deg);
+}
+
+.connection-body {
+  display: grid;
+}
+
 .message,
 .error {
   margin: 12px 0 0;
@@ -244,6 +279,10 @@ button:disabled {
 }
 
 .logs-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   margin-bottom: 0;
 }
 
@@ -353,8 +392,8 @@ button:disabled {
 }
 
 .log-box {
-  min-height: 160px;
-  max-height: 280px;
+  flex: 1 1 auto;
+  min-height: 120px;
   overflow: auto;
   border: 1px solid #d8d5cd;
   border-radius: 7px;
@@ -392,6 +431,7 @@ pre {
   .shell {
     width: min(100vw - 20px, 920px);
     padding-top: 14px;
+    padding-bottom: 16px;
   }
 
   .topbar {

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   CheckCircle2,
+  ChevronDown,
   CircleOff,
   Download,
   ExternalLink,
@@ -190,6 +191,7 @@ function App() {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [connectionOpen, setConnectionOpen] = useState(false);
 
   const tone = statusTone(status);
   const canStart = status.configured && !status.running;
@@ -256,90 +258,105 @@ function App() {
         </article>
       </section>
 
-      <section className="panel">
+      <section className={`panel connection-panel ${connectionOpen ? "open" : "collapsed"}`}>
         <div className="panel-title">
           <h2>Connection</h2>
-          <button className="icon-button" type="button" disabled={busy} onClick={() => void refresh()} title="Refresh">
-            <RefreshCw size={17} />
-          </button>
-        </div>
-
-        <label>
-          <span>Server WebSocket URL</span>
-          <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
-        </label>
-        <label>
-          <span>Agent ID</span>
-          <input value={agentId} onChange={(event) => setAgentId(event.target.value)} />
-        </label>
-        <label>
-          <span>Installed agent folder</span>
-          <div className="input-with-icon">
-            <Folder size={17} />
-            <input
-              value={agentRoot}
-              onChange={(event) => setAgentRoot(event.target.value)}
-              placeholder="%USERPROFILE%\\codex-agent"
-            />
+          <div className="panel-actions">
+            <button className="icon-button" type="button" disabled={busy} onClick={() => void refresh()} title="Refresh">
+              <RefreshCw size={17} />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setConnectionOpen((value) => !value)}
+              title={connectionOpen ? "Collapse connection settings" : "Expand connection settings"}
+              aria-expanded={connectionOpen}
+            >
+              <ChevronDown className="collapse-icon" size={18} />
+            </button>
           </div>
-        </label>
-        <label>
-          <span>Agent token</span>
-          <input
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            placeholder={status.tokenConfigured ? "Stored token is already configured" : "Paste setup token once"}
-            type="password"
-          />
-        </label>
-
-        <div className="actions">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void runAction("Existing setup imported", () => call<void>("import_existing_setup"))}
-          >
-            <Download size={17} />
-            Import existing setup
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              void runAction("Settings saved", () =>
-                call<void>("save_settings", {
-                  settings: { serverUrl, agentId, agentRoot, token: token || undefined } satisfies SettingsPayload
-                })
-              )
-            }
-          >
-            <Save size={17} />
-            Save
-          </button>
-          <button
-            type="button"
-            disabled={busy || !canStart}
-            onClick={() => void runAction("Agent started", () => call<void>("start_agent"))}
-          >
-            <Play size={17} />
-            Start
-          </button>
-          <button
-            type="button"
-            disabled={busy || !status.running}
-            onClick={() => void runAction("Agent stopped", () => call<void>("stop_agent"))}
-          >
-            <Square size={17} />
-            Stop
-          </button>
-          <button type="button" disabled={busy} onClick={() => void runAction("Web opened", () => call<void>("open_web"))}>
-            <ExternalLink size={17} />
-            Open web
-          </button>
         </div>
 
-        {message ? <p className="message">{message}</p> : null}
-        {status.lastError ? <p className="error">{status.lastError}</p> : null}
+        {connectionOpen ? (
+          <div className="connection-body">
+            <label>
+              <span>Server WebSocket URL</span>
+              <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
+            </label>
+            <label>
+              <span>Agent ID</span>
+              <input value={agentId} onChange={(event) => setAgentId(event.target.value)} />
+            </label>
+            <label>
+              <span>Installed agent folder</span>
+              <div className="input-with-icon">
+                <Folder size={17} />
+                <input
+                  value={agentRoot}
+                  onChange={(event) => setAgentRoot(event.target.value)}
+                  placeholder="%USERPROFILE%\\codex-agent"
+                />
+              </div>
+            </label>
+            <label>
+              <span>Agent token</span>
+              <input
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                placeholder={status.tokenConfigured ? "Stored token is already configured" : "Paste setup token once"}
+                type="password"
+              />
+            </label>
+
+            <div className="actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void runAction("Existing setup imported", () => call<void>("import_existing_setup"))}
+              >
+                <Download size={17} />
+                Import existing setup
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void runAction("Settings saved", () =>
+                    call<void>("save_settings", {
+                      settings: { serverUrl, agentId, agentRoot, token: token || undefined } satisfies SettingsPayload
+                    })
+                  )
+                }
+              >
+                <Save size={17} />
+                Save
+              </button>
+              <button
+                type="button"
+                disabled={busy || !canStart}
+                onClick={() => void runAction("Agent started", () => call<void>("start_agent"))}
+              >
+                <Play size={17} />
+                Start
+              </button>
+              <button
+                type="button"
+                disabled={busy || !status.running}
+                onClick={() => void runAction("Agent stopped", () => call<void>("stop_agent"))}
+              >
+                <Square size={17} />
+                Stop
+              </button>
+              <button type="button" disabled={busy} onClick={() => void runAction("Web opened", () => call<void>("open_web"))}>
+                <ExternalLink size={17} />
+                Open web
+              </button>
+            </div>
+
+            {message ? <p className="message">{message}</p> : null}
+            {status.lastError ? <p className="error">{status.lastError}</p> : null}
+          </div>
+        ) : null}
       </section>
 
       <section className="panel logs-panel">
