@@ -4199,7 +4199,7 @@ function App() {
 
           <section className="chat-work">
             <div className="section-head">
-              <h2><MessageSquare size={18} /> {activeChat?.title ?? "Project chat"}</h2>
+              <h2><MessageSquare size={18} /> <span>{activeChat?.title ?? "Project chat"}</span></h2>
               <div className="section-actions">
                 {activeChat && (
                   <button

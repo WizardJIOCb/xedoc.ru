@@ -683,12 +683,14 @@ textarea:focus {
 
 .section-head {
   justify-content: space-between;
+  min-width: 0;
 }
 
 .section-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
   min-width: 0;
 }
 
@@ -1604,7 +1606,14 @@ h2 {
   align-items: center;
   gap: 7px;
   margin: 0;
+  min-width: 0;
   font-size: 15px;
+}
+
+h2 > span,
+h2 > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .job-head {
@@ -3098,6 +3107,33 @@ button:disabled {
     overflow: hidden;
   }
 
+  .chat-work > .section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 6px;
+  }
+
+  .chat-work > .section-head h2 {
+    align-items: flex-start;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .chat-work > .section-head h2 svg {
+    flex: 0 0 auto;
+    margin-top: 1px;
+  }
+
+  .chat-work > .section-head .section-actions {
+    gap: 5px;
+  }
+
+  .chat-work > .section-head .icon {
+    width: 34px;
+    height: 34px;
+  }
+
   .chat-thread {
     gap: 12px;
     padding: 8px;
@@ -3398,6 +3434,19 @@ button:disabled {
 
   .chat-work {
     padding: 5px;
+  }
+
+  .chat-work > .section-head {
+    gap: 4px;
+  }
+
+  .chat-work > .section-head .section-actions {
+    gap: 4px;
+  }
+
+  .chat-work > .section-head .icon {
+    width: 31px;
+    height: 31px;
   }
 
   .chat-thread {
