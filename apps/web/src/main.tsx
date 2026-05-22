@@ -3319,15 +3319,23 @@ function App() {
   }
 
   function renderSync() {
-    const agentSeenAt = formatDateTime(selectedAgent?.last_seen_at);
+    const reposByAgent = new Map<string, Repo[]>();
+    repos.forEach((repo) => {
+      const current = reposByAgent.get(repo.agentId) ?? [];
+      current.push(repo);
+      reposByAgent.set(repo.agentId, current);
+    });
     const repoKeyValue = syncRepo ? `${syncRepo.agentId}:${syncRepo.id}` : "";
-    const agentReady = Boolean(selectedAgent && selectedAgent.status === "online");
+    const syncRepoAgent = syncRepo ? agents.find((agent) => agent.id === syncRepo.agentId) : undefined;
+    const controlAgent = syncRepoAgent ?? selectedAgent;
+    const agentSeenAt = formatDateTime(controlAgent?.last_seen_at);
+    const agentReady = Boolean(controlAgent && controlAgent.status === "online");
     const repoReady = Boolean(syncRepo);
-    const codexReady = Boolean(selectedAgent?.codex_version);
+    const codexReady = Boolean(controlAgent?.codex_version);
     const bridgeReady = vscodeNotice && !/failed|agent_offline|timeout|ошибка|не удалось/i.test(vscodeNotice);
     const syncNoticeOk = /прошла|скачал|online/i.test(syncNotice);
-    const setupButtonLabel = selectedAgent
-      ? selectedAgent.status === "online" ? "Агент уже online" : "Скачать установщик агента"
+    const setupButtonLabel = controlAgent
+      ? controlAgent.status === "online" ? "Агент уже online" : "Скачать установщик агента"
       : "Создать агента и скачать установщик";
     const statusRows = [
       {
@@ -3338,17 +3346,17 @@ function App() {
       {
         label: "Windows agent",
         ok: agentReady,
-        value: selectedAgent ? `${selectedAgent.name} · ${selectedAgent.status}${agentSeenAt ? ` · ${agentSeenAt}` : ""}` : "Агент не найден"
+        value: controlAgent ? `${controlAgent.name} · ${controlAgent.status}${agentSeenAt ? ` · ${agentSeenAt}` : ""}` : "Агент не найден"
       },
       {
         label: "Codex CLI",
         ok: codexReady,
-        value: selectedAgent?.codex_version || "Версия ещё не получена от агента"
+        value: controlAgent?.codex_version || "Версия ещё не получена от агента"
       },
       {
         label: "Git",
-        ok: Boolean(selectedAgent?.git_version),
-        value: selectedAgent?.git_version || "Версия ещё не получена от агента"
+        ok: Boolean(controlAgent?.git_version),
+        value: controlAgent?.git_version || "Версия ещё не получена от агента"
       },
       {
         label: "Project allowlist",
@@ -3379,9 +3387,71 @@ function App() {
                 Полный репозиторий не скачивается.
               </p>
             </div>
-            <button className="sync-setup-button" disabled={busy || Boolean(selectedAgent && selectedAgent.status === "online")} type="button" onClick={() => void downloadAgentSetup()}>
+            <button className="sync-setup-button" disabled={busy || Boolean(controlAgent && controlAgent.status === "online")} type="button" onClick={() => void downloadAgentSetup(controlAgent)}>
               <Download size={16} /> {setupButtonLabel}
             </button>
+          </div>
+
+          <div className="settings-card sync-guide-card">
+            <h2><ShieldCheck size={18} /> Что означает online</h2>
+            <p>
+              Online значит, что сервер видит WebSocket от агента. Окно может быть закрыто или спрятано в фоне: агент всё равно работает как node-процесс или через Codex Agent.
+              Останавливать его нужно на том компьютере: кнопкой <strong>Stop</strong> в Codex Agent или файлом <code>%USERPROFILE%\codex-agent\stop-agent.bat</code>.
+            </p>
+            <div className="sync-steps">
+              <article><strong>1</strong><span>Скачать setup для нужного агента</span></article>
+              <article><strong>2</strong><span>На этом ПК установить Node.js LTS, Codex CLI и выполнить <code>codex login</code></span></article>
+              <article><strong>3</strong><span>Запустить <code>setup-agent.bat</code>; он сохранит token и allowlist проектов</span></article>
+              <article><strong>4</strong><span>Для второго ПК создать отдельного агента, чтобы статусы не перехватывались</span></article>
+            </div>
+          </div>
+
+          <div className="settings-card">
+            <div className="section-head">
+              <h2><Bot size={18} /> Доступные подключения</h2>
+              <button className="secondary" disabled={busy} type="button" onClick={() => void createAnotherComputerSetup()}>
+                <Plus size={16} /> Новый компьютер
+              </button>
+            </div>
+            <div className="agent-connection-list">
+              {agents.map((agent) => {
+                const agentRepos = reposByAgent.get(agent.id) ?? [];
+                const firstRepo = agentRepos[0];
+                const agentOnline = agent.status === "online";
+                const lastSeen = formatDateTime(agent.last_seen_at);
+                return (
+                  <article className={`agent-connection ${agentOnline ? "online" : "offline"}`} key={agent.id}>
+                    <div className="agent-connection-title">
+                      <span className={`status ${agentOnline ? "ok" : "bad"}`}>{agentOnline ? <Wifi size={14} /> : <WifiOff size={14} />} {agentOnline ? "Online" : "Offline"}</span>
+                      <strong>{agent.name}</strong>
+                    </div>
+                    <div className="agent-connection-meta">
+                      <span>ID: <code>{agent.id}</code></span>
+                      <span>Host: {agent.hostname || "ещё не подключался"}</span>
+                      <span>Projects: {agentRepos.length}</span>
+                      {lastSeen && <span>Last seen: {lastSeen}</span>}
+                    </div>
+                    <div className="agent-connection-actions">
+                      <button className="secondary compact" disabled={!firstRepo} type="button" onClick={() => {
+                        if (firstRepo) setSyncRepoKey(`${firstRepo.agentId}:${firstRepo.id}`);
+                      }}>
+                        <Check size={14} /> Выбрать
+                      </button>
+                      <button className="secondary compact" disabled={busy || agentOnline} type="button" onClick={() => void downloadAgentSetup(agent)}>
+                        <Download size={14} /> Setup
+                      </button>
+                      <button className="secondary compact" disabled title="Остановить удалённо нельзя: агент останавливается только на своём компьютере.">
+                        <Square size={14} /> Stop locally
+                      </button>
+                    </div>
+                    {agentOnline && !agentRepos.length && (
+                      <p>Подключение живое, но проектов у этого агента нет. Для существующих проектов запусти setup того агента, к которому они привязаны.</p>
+                    )}
+                  </article>
+                );
+              })}
+              {!agents.length && <span className="small-empty">Агенты ещё не созданы.</span>}
+            </div>
           </div>
 
           <div className="sync-grid">
@@ -3396,6 +3466,9 @@ function App() {
 
           <div className="settings-card">
             <h2><FolderGit2 size={18} /> Project sync target</h2>
+            <p>
+              Локальные чаты синхронизируются через агента выбранного проекта. Если проект привязан к offline-агенту, Sync будет недоступен, даже если другой агент online.
+            </p>
             <label>
               Project
               <select value={repoKeyValue} onChange={(event) => setSyncRepoKey(event.target.value)}>
@@ -3407,13 +3480,13 @@ function App() {
               </select>
             </label>
             <div className="sync-actions">
-              <button disabled={!agentReady || vscodeBusy} type="button" onClick={() => runVscodeCommand("ping", selectedAgent?.id)}>
+              <button disabled={!agentReady || vscodeBusy} type="button" onClick={() => runVscodeCommand("ping", controlAgent?.id)}>
                 <Terminal size={16} /> Ping VS Code
               </button>
-              <button disabled={!agentReady || vscodeBusy} type="button" onClick={() => runVscodeCommand("newCodexPanel", selectedAgent?.id)}>
+              <button disabled={!agentReady || vscodeBusy} type="button" onClick={() => runVscodeCommand("newCodexPanel", controlAgent?.id)}>
                 <Bot size={16} /> Open Codex panel
               </button>
-              <button disabled={!agentReady || vscodeBusy || !activeCodexThreadId} type="button" onClick={() => runVscodeCommand("reopenThread", selectedAgent?.id, { threadId: activeCodexThreadId })}>
+              <button disabled={!agentReady || vscodeBusy || !activeCodexThreadId} type="button" onClick={() => runVscodeCommand("reopenThread", controlAgent?.id, { threadId: activeCodexThreadId })}>
                 <MessageSquare size={16} /> Reopen active chat
               </button>
               <button disabled={!syncRepo || !agentReady || localChatSyncing} type="button" onClick={() => syncRepo && syncLocalChats(syncRepo)}>
@@ -3425,14 +3498,22 @@ function App() {
           </div>
 
           <div className="settings-card">
-            <h2><Play size={18} /> После перезагрузки</h2>
+            <h2><Play size={18} /> Запуск и права</h2>
             <div className="settings-row">
-              <span>Запускай установленный агент</span>
-              <strong>codex-agent\start-agent.bat</strong>
+              <span>Запустить установленный runtime-агент</span>
+              <strong>%USERPROFILE%\codex-agent\start-agent.bat</strong>
             </div>
             <div className="settings-row">
-              <span>Ожидаемый лог агента</span>
-              <strong>Connected to wss://codex.rodion.pro/api/agent/ws</strong>
+              <span>Остановить runtime-агент</span>
+              <strong>%USERPROFILE%\codex-agent\stop-agent.bat</strong>
+            </div>
+            <div className="settings-row">
+              <span>Запустить native-менеджер из репозитория</span>
+              <strong>start-native-agent.bat</strong>
+            </div>
+            <div className="settings-row">
+              <span>Права агента</span>
+              <strong>только исходящий WebSocket, только проекты из allowlist</strong>
             </div>
           </div>
         </section>
