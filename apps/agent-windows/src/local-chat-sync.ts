@@ -13,7 +13,7 @@ const MAX_SYNC_MESSAGES = 80;
 const MAX_ACTION_OUTPUT_CHARS = 300;
 const MAX_ACTIONS_PER_MESSAGE = 8;
 const MAX_SYNC_DIFF_CHARS = 2500;
-const MAX_CHAT_SYNC_ATTACHMENT_BYTES = 350 * 1024;
+const MAX_CHAT_SYNC_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const CODEX_CONTEXT_TAGS = [
   "environment_context",
   "permissions instructions",
@@ -194,12 +194,12 @@ function readCodexRollout(path: string): ChatMessage[] {
     if (row.type === "response_item" && row.payload?.type === "message") {
       const role = normalizeRole(row.payload.role);
       const phase = typeof row.payload.phase === "string" ? row.payload.phase : "";
-      if (role === "assistant" && phase === "commentary") continue;
       const attachments = collectImageAttachments(row.payload.content);
       const rawContent = textFromContent(row.payload.content);
       const content = cleanSyncedContent(rawContent, attachments);
       if (role && content && !isCodexContextMessage(content)) {
         const metadata: Record<string, unknown> = { localPath: path };
+        if (phase) metadata.phase = phase;
         if (role === "assistant" && pendingActions.length) {
           metadata.codexActions = pendingActions.slice(-MAX_ACTIONS_PER_MESSAGE).map(compactAction);
           pendingActions = [];
