@@ -6,8 +6,9 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-if (-not $env:CMC_AGENT_TOKEN) {
-  $env:CMC_AGENT_TOKEN = [Environment]::GetEnvironmentVariable("CMC_AGENT_TOKEN", "User")
+$UserAgentToken = [Environment]::GetEnvironmentVariable("CMC_AGENT_TOKEN", "User")
+if ($UserAgentToken) {
+  $env:CMC_AGENT_TOKEN = $UserAgentToken
 }
 
 if (-not $env:CMC_AGENT_TOKEN) {
