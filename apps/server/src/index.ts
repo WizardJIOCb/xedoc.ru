@@ -459,6 +459,12 @@ function markAgentStatus(agentId: string, status: "online" | "offline"): void {
   broadcast({ type: "agent.status", agentId, status });
 }
 
+function repoInfosForAgent(agentId: string): RepoInfo[] {
+  const rows = db.prepare("SELECT * FROM repos WHERE agent_id = ? ORDER BY name")
+    .all(agentId) as RepoRow[];
+  return rows.map(mapRepo);
+}
+
 function upsertRepos(agentId: string, repos: RepoInfo[]): void {
   const stamp = nowIso();
   const upsert = db.prepare(`
@@ -496,7 +502,7 @@ function upsertRepos(agentId: string, repos: RepoInfo[]): void {
       stamp
     );
   }
-  broadcast({ type: "repos.updated", agentId, repos });
+  broadcast({ type: "repos.updated", agentId, repos: repoInfosForAgent(agentId) });
 }
 
 function appendLog(log: Omit<LogRow, "id">): void {
