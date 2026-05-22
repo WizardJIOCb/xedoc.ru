@@ -3048,6 +3048,7 @@ pre {
   background: #ffffff;
   color: var(--text);
   font-size: 13px;
+  white-space: pre-line;
 }
 
 .notice.danger {

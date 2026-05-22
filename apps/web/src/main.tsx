@@ -3161,6 +3161,20 @@ function App() {
     await refresh();
   }
 
+  function showAgentStopGuide(agent: Agent) {
+    const lines = [
+      `${agent.name} останавливается только на компьютере ${agent.hostname || agent.id}.`,
+      "",
+      "Если установлен runtime-агент:",
+      "%USERPROFILE%\\codex-agent\\stop-agent.bat",
+      "",
+      "Если Windows пишет Access is denied, запусти этот .bat через Run as administrator.",
+      "",
+      "Если открыт Codex Agent native app, нажми Stop в его окне."
+    ];
+    setSyncNotice(lines.join("\n"));
+  }
+
   async function saveProfile(event: React.FormEvent) {
     event.preventDefault();
     if (!csrf) return;
@@ -3566,8 +3580,13 @@ function App() {
                       <button className="secondary compact" disabled={busy || agentOnline} type="button" onClick={() => void downloadAgentSetup(agent)}>
                         <Download size={14} /> Setup
                       </button>
-                      <button className="secondary compact" disabled title="Остановить удалённо нельзя: агент останавливается только на своём компьютере.">
-                        <Square size={14} /> Stop locally
+                      <button
+                        className="secondary compact"
+                        title="Показать, как остановить агента на его компьютере"
+                        type="button"
+                        onClick={() => showAgentStopGuide(agent)}
+                      >
+                        <Square size={14} /> Как остановить
                       </button>
                       <button
                         className="secondary compact danger-compact"
