@@ -9,6 +9,10 @@ type LocalAttachment = NonNullable<ChatMessage["attachments"]>[number];
 
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
+const MAX_ACTION_OUTPUT_CHARS = 1000;
+const MAX_ACTIONS_PER_MESSAGE = 40;
+const MAX_SYNC_DIFF_CHARS = 8000;
+const MAX_CHAT_SYNC_ATTACHMENT_BYTES = 900 * 1024;
 const CODEX_CONTEXT_TAGS = [
   "environment_context",
   "permissions instructions",
@@ -59,9 +63,29 @@ export async function syncLocalChats(config: AgentConfig, send: Send): Promise<v
       title: chat.title.slice(0, 300),
       cwd: chat.cwd,
       updatedAt: chat.updatedAt,
-      messages: chat.messages.slice(-120)
+      messages: messagesForSync(chat.messages)
     });
   }
+}
+
+function messagesForSync(messages: ChatMessage[]): ChatMessage[] {
+  const recent = messages.slice(-120);
+  let remainingAttachmentBytes = MAX_CHAT_SYNC_ATTACHMENT_BYTES;
+  return recent
+    .slice()
+    .reverse()
+    .map((message) => {
+      const attachments = message.attachments ?? [];
+      const size = attachments.reduce((sum, attachment) => sum + attachment.size, 0);
+      if (!attachments.length) return message;
+      if (size <= remainingAttachmentBytes) {
+        remainingAttachmentBytes -= size;
+        return message;
+      }
+      const { attachments: _attachments, ...rest } = message;
+      return rest;
+    })
+    .reverse();
 }
 
 function readCodexChats(config: AgentConfig): LocalChat[] {
@@ -174,7 +198,7 @@ function readCodexRollout(path: string): ChatMessage[] {
       if (role && content && !isCodexContextMessage(content)) {
         const metadata: Record<string, unknown> = { localPath: path };
         if (role === "assistant" && pendingActions.length) {
-          metadata.codexActions = pendingActions.map((action) => ({ ...action }));
+          metadata.codexActions = pendingActions.slice(-MAX_ACTIONS_PER_MESSAGE).map(compactAction);
           pendingActions = [];
         }
         if (role === "assistant" && currentRunStartedAt) {
@@ -200,9 +224,16 @@ function readCodexRollout(path: string): ChatMessage[] {
     lastAssistant.metadata = { ...lastAssistant.metadata, gitDiffStat: lastChangeStat };
   }
   if (lastAssistant && lastChangeDiff && typeof lastAssistant.metadata?.gitDiff !== "string") {
-    lastAssistant.metadata = { ...lastAssistant.metadata, gitDiff: lastChangeDiff };
+    lastAssistant.metadata = { ...lastAssistant.metadata, gitDiff: truncateText(lastChangeDiff, MAX_SYNC_DIFF_CHARS) };
   }
   return compacted;
+}
+
+function compactAction(action: SyncedCodexAction): SyncedCodexAction {
+  return {
+    ...action,
+    output: truncateText(action.output, MAX_ACTION_OUTPUT_CHARS)
+  };
 }
 
 function actionFromFunctionCall(payload: any, at: string, fallbackIndex: number): SyncedCodexAction | null {
@@ -237,7 +268,12 @@ function cleanActionOutput(value: unknown): string {
   return value
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
-    .slice(0, 20000);
+    .slice(0, MAX_ACTION_OUTPUT_CHARS);
+}
+
+function truncateText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}\n\n[truncated ${value.length - limit} chars]`;
 }
 
 function extractChangeStat(output: unknown): string {
@@ -260,7 +296,7 @@ function extractChangeDiff(output: unknown): string {
   const normalized = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const start = normalized.search(/^diff --git /m);
   if (start < 0) return "";
-  return normalized.slice(start).slice(0, 100000);
+  return truncateText(normalized.slice(start), MAX_SYNC_DIFF_CHARS);
 }
 
 function diffStatFromPatch(output: string): string[] {

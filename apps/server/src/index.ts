@@ -957,7 +957,7 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
       ) {
         db.prepare("UPDATE chat_messages SET role=?, content=?, metadata_json=?, created_at=? WHERE id=?")
           .run(message.role, content, metadataJson, message.createdAt, existing.id);
-        replaceChatMessageAttachments(existing.id, message.attachments, message.createdAt);
+        if (message.attachments !== undefined) replaceChatMessageAttachments(existing.id, message.attachments, message.createdAt);
         changed = true;
       }
     } else {
