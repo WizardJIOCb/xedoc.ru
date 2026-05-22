@@ -192,6 +192,8 @@ function readCodexRollout(path: string): ChatMessage[] {
     }
     if (row.type === "response_item" && row.payload?.type === "message") {
       const role = normalizeRole(row.payload.role);
+      const phase = typeof row.payload.phase === "string" ? row.payload.phase : "";
+      if (role === "assistant" && phase === "commentary") continue;
       const attachments = collectImageAttachments(row.payload.content);
       const rawContent = textFromContent(row.payload.content);
       const content = cleanSyncedContent(rawContent, attachments);

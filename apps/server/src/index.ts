@@ -973,6 +973,26 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
       changed = true;
     }
   }
+  const incomingExternalIds = syncedMessages
+    .map((message) => message.externalId)
+    .filter((externalId): externalId is string => Boolean(externalId));
+  const firstSyncedCreatedAt = syncedMessages[0]?.createdAt;
+  if (incomingExternalIds.length && firstSyncedCreatedAt) {
+    const placeholders = incomingExternalIds.map(() => "?").join(",");
+    const staleExternalIdFilter = sync.source === "codex"
+      ? "AND external_id LIKE 'rollout-%jsonl:%'"
+      : "";
+    const result = db.prepare(`
+      DELETE FROM chat_messages
+      WHERE chat_id = ?
+        AND source = ?
+        AND external_id IS NOT NULL
+        ${staleExternalIdFilter}
+        AND created_at >= ?
+        AND external_id NOT IN (${placeholders})
+    `).run(chat.id, sync.source, firstSyncedCreatedAt, ...incomingExternalIds);
+    if (result.changes) changed = true;
+  }
   if (changed) {
     db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?").run(sync.updatedAt || stamp, chat.id);
     broadcast({
