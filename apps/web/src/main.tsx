@@ -2966,11 +2966,13 @@ function App() {
     await refresh();
   }
 
-  async function downloadAgentSetup() {
+  async function downloadAgentSetup(agentOverride?: Agent) {
     if (!csrf || busy) return;
     setBusy(true);
     setSyncNotice("");
-    const existingOfflineAgent = selectedAgent && selectedAgent.status !== "online" ? selectedAgent : null;
+    setSettingsNotice("");
+    const targetAgent = agentOverride ?? selectedAgent;
+    const existingOfflineAgent = targetAgent && targetAgent.status !== "online" ? targetAgent : null;
     const response = existingOfflineAgent
       ? await api(`/api/agents/${encodeURIComponent(existingOfflineAgent.id)}/setup`, {
         method: "POST",
@@ -3000,7 +3002,9 @@ function App() {
     }
     setAgentSetup(setup);
     downloadTextFile(setup.setupFileName || "setup-agent.bat", setup.setupBatch || setup.setupPowerShell, "application/x-bat;charset=utf-8");
-    setSyncNotice("Скачал setup-agent.bat. Он скачает компактный agent-package.zip и запустит агента без клонирования репозитория.");
+    const notice = "Скачал setup-agent.bat. Он скачает компактный agent-package.zip и запустит агента без клонирования репозитория.";
+    setSyncNotice(notice);
+    setSettingsNotice(notice);
     await refresh();
   }
 
@@ -3253,9 +3257,22 @@ function App() {
           <div className="settings-card">
             <h2>Agents</h2>
             {agents.map((agent) => (
-              <div className="settings-row" key={agent.id}>
-                <span>{agent.name}</span>
-                <strong>{agent.status}</strong>
+              <div className="settings-row agent-settings-row" key={agent.id}>
+                <div className="agent-settings-main">
+                  <span>{agent.name}</span>
+                  <small>{agent.id}</small>
+                </div>
+                <div className="agent-settings-actions">
+                  <strong>{agent.status}</strong>
+                  <button
+                    className="secondary compact"
+                    disabled={busy || agent.status === "online"}
+                    type="button"
+                    onClick={() => void downloadAgentSetup(agent)}
+                  >
+                    <Download size={15} /> Setup
+                  </button>
+                </div>
               </div>
             ))}
             {!agents.length && <span className="small-empty">No agents yet.</span>}
@@ -3326,7 +3343,7 @@ function App() {
                 Полный репозиторий не скачивается.
               </p>
             </div>
-            <button className="sync-setup-button" disabled={busy || Boolean(selectedAgent && selectedAgent.status === "online")} type="button" onClick={downloadAgentSetup}>
+            <button className="sync-setup-button" disabled={busy || Boolean(selectedAgent && selectedAgent.status === "online")} type="button" onClick={() => void downloadAgentSetup()}>
               <Download size={16} /> {setupButtonLabel}
             </button>
           </div>

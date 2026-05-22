@@ -940,6 +940,33 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.agent-settings-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.agent-settings-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.agent-settings-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-settings-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secondary.compact {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
 .profile-work {
   max-width: 980px;
 }
@@ -3132,8 +3159,13 @@ button:disabled {
   .sync-setup-card,
   .sync-grid,
   .sync-actions,
+  .agent-settings-row,
   .oauth-row {
     grid-template-columns: 1fr;
+  }
+
+  .agent-settings-actions {
+    justify-content: space-between;
   }
 
   .chat-work {
