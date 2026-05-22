@@ -2926,22 +2926,29 @@ button:disabled {
     overflow-y: auto;
   }
 
+  body {
+    font-size: 13px;
+  }
+
   .file-diff-panel {
-    font-size: 10.5px;
-    line-height: 1.35;
+    font-size: 9.5px;
+    line-height: 1.3;
   }
 
   .file-diff-line {
-    grid-template-columns: 34px 34px minmax(0, 1fr);
-    min-width: 520px;
+    grid-template-columns: 28px 28px minmax(0, 1fr);
+    min-width: 0;
   }
 
   .file-diff-line .line-number {
-    padding: 2px 5px;
+    padding: 2px 3px;
   }
 
   .file-diff-line code {
-    padding: 2px 7px;
+    padding: 2px 5px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .app-frame {
@@ -3027,11 +3034,25 @@ button:disabled {
 
   .topbar {
     grid-template-columns: auto minmax(0, 1fr) auto;
+    min-height: 56px;
+    padding: 8px;
   }
 
   .top-title {
     justify-items: start;
     text-align: left;
+  }
+
+  .top-title h1,
+  .login h1,
+  .topbar h1 {
+    font-size: 18px;
+    line-height: 1.15;
+  }
+
+  h2 {
+    font-size: 13px;
+    line-height: 1.25;
   }
 
   .topbar > div {
@@ -3066,22 +3087,25 @@ button:disabled {
   .chat-work {
     width: 100%;
     max-width: 100%;
-    padding: 8px;
+    gap: 8px;
+    padding: 6px;
     overflow: hidden;
   }
 
   .chat-thread {
-    gap: 16px;
-    padding: 10px;
+    gap: 12px;
+    padding: 8px;
     border-radius: 7px;
   }
 
   .message {
     max-width: 100%;
+    gap: 6px;
   }
 
   .message.user {
-    max-width: 94%;
+    max-width: 96%;
+    padding: 8px 9px;
   }
 
   .message.assistant,
@@ -3092,9 +3116,20 @@ button:disabled {
     padding-inline: 0;
   }
 
+  .message-body {
+    font-size: 13px;
+    line-height: 1.42;
+  }
+
+  .message.user .message-body {
+    font-size: 13px;
+  }
+
   .message-meta,
   .message-author-stack span {
     min-width: 0;
+    font-size: 11px;
+    line-height: 1.25;
   }
 
   .message-author-stack span {
@@ -3105,9 +3140,35 @@ button:disabled {
 
   .message-run-settings {
     margin-left: 0;
+    font-size: 10px;
+  }
+
+  .message-author-stack small {
+    font-size: 10px;
+  }
+
+  .system-message-body {
+    font-size: 11px;
+  }
+
+  .rich-text {
+    gap: 6px;
+    line-height: 1.42;
+  }
+
+  .rich-text h3 {
+    font-size: 13px;
+  }
+
+  .rich-text ul,
+  .rich-text ol {
+    gap: 3px;
+    padding-left: 17px;
   }
 
   .rich-text code {
+    padding: 1px 4px;
+    font-size: 0.82em;
     white-space: break-spaces;
   }
 
@@ -3119,8 +3180,23 @@ button:disabled {
     -webkit-overflow-scrolling: touch;
   }
 
+  .rich-code {
+    padding: 7px;
+  }
+
+  .rich-code code,
+  .command-console pre {
+    font-size: 10.5px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   .command-console {
-    padding: 9px;
+    gap: 6px;
+    padding: 7px;
+    border-radius: 7px;
   }
 
   .command-console-head,
@@ -3128,6 +3204,15 @@ button:disabled {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
+    font-size: 10px;
+  }
+
+  .command-card-toggle,
+  .message-actions > button,
+  .run-trace > button {
+    min-height: 26px;
+    padding: 4px 7px;
+    font-size: 11px;
   }
 
   .run-trace > button,
@@ -3145,43 +3230,74 @@ button:disabled {
 
   .codex-change-card {
     width: 100%;
+    border-radius: 7px;
   }
 
   .codex-change-head {
-    gap: 8px;
-    padding: 8px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    padding: 7px;
   }
 
   .codex-change-title {
-    gap: 8px;
+    gap: 7px;
   }
 
   .change-icon {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
     border-radius: 7px;
+  }
+
+  .codex-change-title strong {
+    font-size: 13px;
   }
 
   .codex-change-title small {
     flex-wrap: wrap;
-    gap: 2px 8px;
+    gap: 2px 6px;
+    font-size: 11px;
+    line-height: 1.25;
   }
 
   .codex-change-head button {
-    padding: 5px 8px;
+    min-height: 28px;
+    padding: 4px 7px;
+    font-size: 12px;
   }
 
   .codex-change-file-row {
-    gap: 8px;
-    padding: 8px 9px;
+    gap: 6px;
+    padding: 7px;
+    font-size: 12px;
+  }
+
+  .codex-change-file-row small,
+  .diff-meta {
+    gap: 4px;
+    font-size: 11px;
+  }
+
+  .progress-panel,
+  .progress-files div,
+  .progress-stats span,
+  .metric-grid div {
+    padding: 7px;
+    font-size: 11px;
   }
 
   .composer {
     width: 100%;
     max-width: 100%;
-    padding: 8px;
+    padding: 7px;
     border-radius: 7px;
     overflow: hidden;
+  }
+
+  .composer textarea {
+    min-height: 82px;
+    padding: 9px;
+    font-size: 13px;
   }
 
   .composer-bridge {
@@ -3190,6 +3306,8 @@ button:disabled {
 
   .composer-bridge .secondary {
     flex: 1 1 148px;
+    min-height: 34px;
+    font-size: 12px;
   }
 
   .stat-card.wide {
@@ -3201,11 +3319,14 @@ button:disabled {
   }
 
   .sticky-submit {
-    grid-template-columns: minmax(0, 1fr) 40px 40px 40px;
+    grid-template-columns: minmax(0, 1fr) 38px 38px 38px;
+    gap: 5px;
   }
 
   .sticky-submit .stop {
     grid-column: 1 / -1;
+    min-height: 36px;
+    font-size: 14px;
   }
 
   .sticky-submit .run-button {
@@ -3214,6 +3335,15 @@ button:disabled {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: 14px;
+  }
+
+  .sticky-submit .sandbox-trigger,
+  .sticky-submit .action-trigger {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
   }
 
   .chat-scroll-controls {
@@ -3244,5 +3374,96 @@ button:disabled {
 
   .thinking-chip span:nth-of-type(2) {
     min-width: 64px;
+  }
+}
+
+@media (max-width: 480px) {
+  body {
+    font-size: 12px;
+  }
+
+  .app-frame {
+    padding: 4px;
+  }
+
+  .shell {
+    gap: 6px;
+  }
+
+  .chat-work {
+    padding: 5px;
+  }
+
+  .chat-thread {
+    gap: 10px;
+    padding: 6px;
+  }
+
+  .message-body,
+  .message.user .message-body {
+    font-size: 12px;
+    line-height: 1.38;
+  }
+
+  .message-meta,
+  .message-author-stack span,
+  .message-author-stack small,
+  .message-run-settings {
+    font-size: 10px;
+  }
+
+  .rich-text {
+    gap: 5px;
+  }
+
+  .rich-text h3 {
+    font-size: 12px;
+  }
+
+  .rich-text code {
+    font-size: 0.78em;
+  }
+
+  .rich-code code,
+  .command-console pre,
+  .file-diff-panel {
+    font-size: 9px;
+    line-height: 1.28;
+  }
+
+  .command-console {
+    padding: 6px;
+  }
+
+  .codex-change-title strong {
+    font-size: 12px;
+  }
+
+  .codex-change-title small,
+  .codex-change-file-row,
+  .codex-change-file-row small,
+  .diff-meta,
+  .message-actions > button,
+  .run-trace > button,
+  .command-card-toggle {
+    font-size: 10.5px;
+  }
+
+  .composer {
+    padding: 6px;
+  }
+
+  .composer textarea {
+    min-height: 76px;
+    font-size: 12px;
+  }
+
+  .composer-bridge .secondary {
+    font-size: 11px;
+  }
+
+  .sticky-submit .run-button,
+  .sticky-submit .stop {
+    font-size: 13px;
   }
 }
