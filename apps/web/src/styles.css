@@ -3680,7 +3680,7 @@ button:disabled {
     max-width: 100%;
     padding: 7px;
     border-radius: 7px;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .composer textarea {
@@ -3733,6 +3733,12 @@ button:disabled {
     min-width: 38px;
     height: 38px;
     min-height: 38px;
+  }
+
+  .sandbox-menu,
+  .action-menu {
+    max-height: min(72dvh, calc(100dvh - var(--composer-space, 150px) - env(safe-area-inset-top) - 16px));
+    overscroll-behavior: contain;
   }
 
   .chat-scroll-controls {
