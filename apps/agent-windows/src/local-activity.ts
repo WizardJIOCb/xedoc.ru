@@ -21,6 +21,7 @@ type Candidate = {
   externalId?: string;
   source: string;
   title?: string;
+  rolloutPath?: string;
   updatedAt: number;
   startedAt?: number;
   completedAt?: number;
@@ -104,6 +105,13 @@ function markBusy(key: string, seenAt: number, candidate: Candidate): void {
 }
 
 function isSettledCompletedCandidate(candidate: Candidate): boolean {
+  if (candidate.rolloutPath) {
+    const turn = latestCodexTurnState(candidate.rolloutPath);
+    if (turn && turn.startedAt === candidate.startedAt) {
+      candidate.completedAt = turn.completedAt;
+      candidate.updatedAt = Math.max(candidate.updatedAt, turn.latestActivityAt);
+    }
+  }
   return Boolean(candidate.completedAt && Date.now() - candidate.completedAt > BUSY_COMPLETED_SETTLE_MS);
 }
 
@@ -202,6 +210,7 @@ function recentCodexThreads(config: AgentConfig): Candidate[] {
         externalId: row.id,
         source: "local Codex",
         title: row.title,
+        rolloutPath: row.rollout_path,
         updatedAt,
         startedAt: turn.startedAt,
         completedAt: turn.completedAt
