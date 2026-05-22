@@ -1959,12 +1959,9 @@ h2 > strong {
 }
 
 .message.system {
-  grid-template-columns: minmax(74px, auto) minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
+  gap: 4px;
   width: min(720px, 100%);
-  min-height: 34px;
-  padding: 6px 9px;
+  padding: 7px 9px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1972,9 +1969,27 @@ h2 > strong {
 }
 
 .message.system .message-meta {
-  display: contents;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
   font-size: 11px;
   text-transform: uppercase;
+}
+
+.message.system .message-author-stack {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.message.system .message-author-stack span {
+  min-width: 0;
+}
+
+.message.system .message-author-stack small {
+  display: none;
 }
 
 .system-message-body {

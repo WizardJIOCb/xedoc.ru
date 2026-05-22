@@ -4615,7 +4615,12 @@ function App() {
                                 } : undefined}
                               >
                                 <div className="message-meta">
-                                  {assistantDetails ? (
+                                  {message.role === "system" ? (
+                                    <>
+                                      <span>{author}</span>
+                                      <small>{formatDateTime(message.createdAt)}</small>
+                                    </>
+                                  ) : assistantDetails ? (
                                     <div className="message-author-stack">
                                       <span>
                                         {author}
