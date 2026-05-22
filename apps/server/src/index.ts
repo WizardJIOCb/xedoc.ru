@@ -65,6 +65,7 @@ import {
 
 const config = loadConfig();
 const db = openDb(config.databasePath);
+const AGENT_OFFLINE_GRACE_MS = 8000;
 
 type AgentConnection = {
   id: string;
@@ -2714,8 +2715,11 @@ async function createApp(): Promise<FastifyInstance> {
     socket.on("close", () => {
       if (agents.get(agent.id)?.connectionId !== connectionId) return;
       agents.delete(agent.id);
-      markAgentStatus(agent.id, "offline");
-      db.prepare("UPDATE agents SET current_job_id = NULL WHERE id = ?").run(agent.id);
+      setTimeout(() => {
+        if (agents.has(agent.id)) return;
+        markAgentStatus(agent.id, "offline");
+        db.prepare("UPDATE agents SET current_job_id = NULL WHERE id = ?").run(agent.id);
+      }, AGENT_OFFLINE_GRACE_MS);
       setTimeout(() => {
         if (agents.has(agent.id)) return;
         clearOrphanedAgentJobs(agent.id, undefined, "Agent socket stayed disconnected; marking stale job as disconnected.");

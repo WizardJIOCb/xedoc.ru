@@ -1456,7 +1456,7 @@ function App() {
   const chatLoadingDeterminate = Boolean(chatLoadingProgress?.totalBytes);
   const chatLoadingLabel = chatLoadingProgress ? chatLoadingPhaseLabel(chatLoadingProgress.phase) : "Загружаю чат";
   const selectedAgent = agents.find((agent) => agent.status === "online") ?? agents[0];
-  const online = agents.some((agent) => agent.status === "online");
+  const online = selectedAgent?.status === "online";
   const localActivity = selectedAgent?.localActivity;
   const activeJobFinalMessageSeen = Boolean(activeJob && messages.some((message) => (
     message.role === "assistant"
@@ -4093,15 +4093,15 @@ function App() {
           </div>
         </div>
 
-        <section className="machine-strip">
-          {agents.map((agent) => (
-            <article className="machine" key={agent.id}>
-              <strong>{agent.name}</strong>
-              <span>{agent.hostname || agent.id}</span>
-              <small>{agent.codex_version || "codex not probed"} · {agent.git_version || "git not probed"}</small>
+        {selectedAgent && (
+          <section className="machine-strip">
+            <article className="machine">
+              <strong>{selectedAgent.name}</strong>
+              <span>{selectedAgent.hostname || selectedAgent.id}</span>
+              <small>{selectedAgent.codex_version || "codex not probed"} · {selectedAgent.git_version || "git not probed"}</small>
             </article>
-          ))}
-        </section>
+          </section>
+        )}
       </header>
 
       {view === "settings" && renderSettings()}
