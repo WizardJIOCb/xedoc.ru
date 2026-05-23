@@ -1,11 +1,21 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, extname, join, normalize } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentToServer, ChatMessage } from "@cmc/protocol";
 import type { AgentConfig, RepoConfig } from "./config.js";
 
-type Send = (message: AgentToServer) => void;
+type Send = (message: AgentToServer) => boolean | void;
 type LocalAttachment = NonNullable<ChatMessage["attachments"]>[number];
+type SyncLocalChatsOptions = {
+  force?: boolean;
+  shouldContinue?: () => boolean;
+};
+export type SyncLocalChatsResult = {
+  sent: number;
+  skipped: number;
+  deferred: number;
+};
 
 const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
@@ -32,6 +42,8 @@ const IMAGE_MIME_BY_EXT = new Map([
   [".bmp", "image/bmp"]
 ]);
 
+const chatSyncFingerprints = new Map<string, string>();
+
 type LocalChat = {
   repoId: string;
   source: "codex" | "vscode";
@@ -50,13 +62,31 @@ type SyncedCodexAction = {
   at: string;
 };
 
-export async function syncLocalChats(config: AgentConfig, send: Send): Promise<void> {
+export async function syncLocalChats(
+  config: AgentConfig,
+  send: Send,
+  options: SyncLocalChatsOptions = {}
+): Promise<SyncLocalChatsResult> {
   const chats = [
     ...readCodexChats(config),
     ...readVsCodeChats(config)
   ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 160);
+  let sent = 0;
+  let skipped = 0;
+  let deferred = 0;
   for (const chat of chats) {
-    send({
+    const messages = messagesForSync(chat.messages);
+    const key = chatSyncKey(chat);
+    const fingerprint = chatSyncFingerprint(chat, messages);
+    if (!options.force && chatSyncFingerprints.get(key) === fingerprint) {
+      skipped += 1;
+      continue;
+    }
+    if (options.shouldContinue && !options.shouldContinue()) {
+      deferred += 1;
+      continue;
+    }
+    const delivered = send({
       type: "chat.sync",
       repoId: chat.repoId,
       source: chat.source,
@@ -64,9 +94,60 @@ export async function syncLocalChats(config: AgentConfig, send: Send): Promise<v
       title: chat.title.slice(0, 300),
       cwd: chat.cwd,
       updatedAt: chat.updatedAt,
-      messages: messagesForSync(chat.messages)
+      messages
     });
+    if (delivered === false) {
+      deferred += 1;
+      continue;
+    }
+    chatSyncFingerprints.set(key, fingerprint);
+    sent += 1;
   }
+  return { sent, skipped, deferred };
+}
+
+function chatSyncKey(chat: LocalChat): string {
+  return `${chat.repoId}:${chat.source}:${chat.externalId}`;
+}
+
+function chatSyncFingerprint(chat: LocalChat, messages: ChatMessage[]): string {
+  const hash = createHash("sha256");
+  hash.update(chat.repoId);
+  hash.update("\0");
+  hash.update(chat.source);
+  hash.update("\0");
+  hash.update(chat.externalId);
+  hash.update("\0");
+  hash.update(chat.title);
+  hash.update("\0");
+  hash.update(chat.cwd ?? "");
+  hash.update("\0");
+  hash.update(chat.updatedAt);
+  for (const message of messages) {
+    hash.update("\0m\0");
+    hash.update(message.role);
+    hash.update("\0");
+    hash.update(message.source);
+    hash.update("\0");
+    hash.update(message.externalId ?? "");
+    hash.update("\0");
+    hash.update(message.createdAt);
+    hash.update("\0");
+    hash.update(message.content);
+    hash.update("\0");
+    if (message.metadata) hash.update(JSON.stringify(message.metadata));
+    for (const attachment of message.attachments ?? []) {
+      hash.update("\0a\0");
+      hash.update(attachment.name);
+      hash.update("\0");
+      hash.update(attachment.mimeType);
+      hash.update("\0");
+      hash.update(String(attachment.size));
+      hash.update("\0");
+      hash.update(attachment.dataBase64 ?? "");
+    }
+  }
+  return hash.digest("hex");
 }
 
 function messagesForSync(messages: ChatMessage[]): ChatMessage[] {

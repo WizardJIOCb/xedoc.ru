@@ -5,15 +5,17 @@ import { ServerToAgentSchema, type AgentToServer, type CodexUsage, type LocalCod
 import { loadAgentConfig, saveAgentConfig } from "./config.js";
 import { Runner } from "./codex-runner.js";
 import { detectLocalCodexActivity } from "./local-activity.js";
-import { syncLocalChats } from "./local-chat-sync.js";
+import { syncLocalChats, type SyncLocalChatsResult } from "./local-chat-sync.js";
 import { runCapture } from "./process-utils.js";
 import { makeRedactor } from "./redact.js";
 import { scanRepos } from "./repo-scanner.js";
 import { sendVscodeBridgeCommand } from "./vscode-bridge.js";
 
-const LOCAL_CHAT_SYNC_INTERVAL_MS = 15000;
+const LOCAL_CHAT_SYNC_INTERVAL_MS = 60000;
 const LOCAL_ACTIVITY_INTERVAL_MS = 1000;
-const LOCAL_CHAT_SYNC_SETTLE_DELAYS_MS = [300, 1200, 3000, 8000];
+const LOCAL_CHAT_SYNC_SETTLE_DELAYS_MS = [3000, 10000];
+const LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS = 30000;
+const LOCAL_CHAT_SYNC_BACKPRESSURE_BYTES = 16 * 1024 * 1024;
 const config = loadAgentConfig();
 const redact = makeRedactor(config.redactPatterns);
 const token = process.env[config.tokenEnv];
@@ -24,8 +26,16 @@ let currentJobId: string | undefined;
 let cachedCodexUsage: CodexUsage | undefined;
 let cachedCodexUsageAt = 0;
 let lastLocalActivitySyncKey = "";
+let lastLocalActivityStatus: LocalCodexActivity["status"] = "idle";
+let lastLocalChatSyncStartedAt = 0;
 let localChatSyncPromise: Promise<number> | null = null;
 let localChatSyncQueuedReason = "";
+
+type LocalChatSyncOptions = {
+  force?: boolean;
+  minIntervalMs?: number;
+  shouldContinue?: () => boolean;
+};
 
 function shortId(value: string | undefined): string {
   return value ? value.slice(0, 8) : "n/a";
@@ -448,12 +458,24 @@ function localActivitySyncKey(activity: LocalCodexActivity): string {
   ].join("|");
 }
 
-async function runLocalChatSync(reason: string, send: (message: AgentToServer) => void): Promise<number> {
+async function runLocalChatSync(
+  reason: string,
+  send: (message: AgentToServer) => boolean,
+  options: LocalChatSyncOptions = {}
+): Promise<number> {
+  if (
+    !options.force
+    && options.minIntervalMs
+    && Date.now() - lastLocalChatSyncStartedAt < options.minIntervalMs
+  ) {
+    logProgress(`sync: Local chat sync skipped (${reason}): throttled.`);
+    return 0;
+  }
   if (localChatSyncPromise) {
     localChatSyncQueuedReason = localChatSyncQueuedReason ? `${localChatSyncQueuedReason},${reason}` : reason;
     return localChatSyncPromise;
   }
-  const syncPromise = runLocalChatSyncQueue(reason, send);
+  const syncPromise = runLocalChatSyncQueue(reason, send, options);
   localChatSyncPromise = syncPromise;
   try {
     return await syncPromise;
@@ -462,20 +484,24 @@ async function runLocalChatSync(reason: string, send: (message: AgentToServer) =
   }
 }
 
-async function runLocalChatSyncQueue(reason: string, send: (message: AgentToServer) => void): Promise<number> {
+async function runLocalChatSyncQueue(
+  reason: string,
+  send: (message: AgentToServer) => boolean,
+  options: LocalChatSyncOptions
+): Promise<number> {
   let sent = 0;
   let currentReason = reason;
   while (currentReason) {
     const startedAt = Date.now();
     try {
-      let currentSent = 0;
+      lastLocalChatSyncStartedAt = startedAt;
       logProgress(`sync: Local chat sync started (${currentReason}).`);
-      await syncLocalChats(config, (message) => {
-        currentSent += 1;
-        send(message);
+      const result = await syncLocalChats(config, send, {
+        force: options.force,
+        shouldContinue: options.shouldContinue
       });
-      sent += currentSent;
-      logProgress(`sync: Local chat sync completed (${currentReason}): ${currentSent} chats in ${Date.now() - startedAt}ms.`);
+      sent += result.sent;
+      logProgress(`sync: Local chat sync completed (${currentReason}): ${syncResultSummary(result)} in ${Date.now() - startedAt}ms.`);
     } catch (error) {
       console.error(`[progress] sync: Local chat sync failed (${currentReason}): ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -485,13 +511,20 @@ async function runLocalChatSyncQueue(reason: string, send: (message: AgentToServ
   return sent;
 }
 
-function scheduleLocalChatSyncAfterActivity(activity: LocalCodexActivity, send: (message: AgentToServer) => void): void {
+function syncResultSummary(result: SyncLocalChatsResult): string {
+  return `${result.sent} sent, ${result.skipped} unchanged, ${result.deferred} deferred`;
+}
+
+function scheduleLocalChatSyncAfterActivity(activity: LocalCodexActivity, send: (message: AgentToServer) => boolean): void {
   const key = localActivitySyncKey(activity);
   if (key === lastLocalActivitySyncKey) return;
+  const previousStatus = lastLocalActivityStatus;
   lastLocalActivitySyncKey = key;
-  void runLocalChatSync(`activity:${activity.status}`, send);
+  lastLocalActivityStatus = activity.status;
+  if (previousStatus !== "busy" || activity.status !== "idle") return;
+  void runLocalChatSync("activity:idle", send, { minIntervalMs: LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS });
   for (const delay of LOCAL_CHAT_SYNC_SETTLE_DELAYS_MS) {
-    setTimeout(() => void runLocalChatSync(`activity-settle:${activity.status}:${delay}`, send), delay);
+    setTimeout(() => void runLocalChatSync(`activity-settle:idle:${delay}`, send, { minIntervalMs: LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS }), delay);
   }
 }
 
@@ -502,6 +535,9 @@ function connect() {
 
   const send = (message: AgentToServer) => {
     if (ws.readyState !== WebSocket.OPEN) return false;
+    if (message.type === "chat.sync" && ws.bufferedAmount > LOCAL_CHAT_SYNC_BACKPRESSURE_BYTES) {
+      return false;
+    }
     ws.send(JSON.stringify(message));
     return true;
   };
@@ -511,7 +547,7 @@ function connect() {
     for (const delay of [250, 1000, 3000]) {
       setTimeout(async () => send(await hello()), delay);
     }
-    setTimeout(() => void runLocalChatSync("connect", send), 5000);
+    setTimeout(() => void runLocalChatSync("connect", send, { force: true }), 5000);
   });
 
   ws.on("message", async (raw) => {
@@ -697,7 +733,7 @@ function connect() {
     if (message.type === "chat.sync.request") {
       try {
         logProgress("sync: Manual chat sync requested.");
-        const sent = await runLocalChatSync("request", send);
+        const sent = await runLocalChatSync("request", send, { force: true });
         send({
           type: "chat.sync.result",
           requestId: message.requestId,
@@ -791,8 +827,8 @@ function connect() {
   }, config.heartbeatIntervalMs);
   const chatSync = setInterval(async () => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    await runLocalChatSync("interval", send);
-  }, Math.max(Math.min(config.heartbeatIntervalMs, LOCAL_CHAT_SYNC_INTERVAL_MS), 5000));
+    await runLocalChatSync("interval", send, { shouldContinue: () => ws.bufferedAmount <= LOCAL_CHAT_SYNC_BACKPRESSURE_BYTES });
+  }, Math.max(LOCAL_CHAT_SYNC_INTERVAL_MS, 5000));
   const activitySync = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) return;
     const localActivity = detectLocalCodexActivity(config, currentJobId);
