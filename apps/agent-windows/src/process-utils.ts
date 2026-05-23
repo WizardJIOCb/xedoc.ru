@@ -62,11 +62,17 @@ export function minimalEnv(): NodeJS.ProcessEnv {
     "ComSpec",
     "ProgramData",
     "OPENAI_API_KEY",
-    "CODEX_HOME"
+    "CODEX_HOME",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GH_CONFIG_DIR",
+    "GH_PROMPT_DISABLED"
   ];
   const env: NodeJS.ProcessEnv = {};
   for (const key of allowed) {
     if (process.env[key]) env[key] = process.env[key];
   }
+  env.GH_PROMPT_DISABLED ??= "1";
   return env;
 }

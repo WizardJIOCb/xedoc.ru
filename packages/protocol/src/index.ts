@@ -324,7 +324,9 @@ export const ServerGitSyncSchema = z.object({
   requestId: z.string().min(1),
   repoId: z.string().min(1),
   message: z.string().min(1).max(200),
-  remoteUrl: z.string().max(300).optional()
+  remoteUrl: z.string().max(300).optional(),
+  createRemote: z.boolean().default(false),
+  remoteVisibility: z.enum(["private", "public"]).default("private")
 });
 
 export const ServerDeploySchema = z.object({
@@ -430,7 +432,9 @@ export type UpdateProject = z.infer<typeof UpdateProjectSchema>;
 
 export const GitSyncSchema = z.object({
   message: z.string().min(1).max(200),
-  remoteUrl: z.string().max(300).optional()
+  remoteUrl: z.string().max(300).optional(),
+  createRemote: z.boolean().default(false),
+  remoteVisibility: z.enum(["private", "public"]).default("private")
 });
 export type GitSync = z.infer<typeof GitSyncSchema>;
 

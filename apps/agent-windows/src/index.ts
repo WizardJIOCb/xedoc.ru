@@ -163,7 +163,148 @@ async function gitStatusLineFromOutput(output: string): Promise<string> {
   return lastLine ?? "Git sync completed.";
 }
 
-async function gitSync(repoId: string, message: string, remoteUrl?: string): Promise<string> {
+function githubRepoSlugFromRemote(value: string): string | undefined {
+  const normalized = value.trim().replace(/\.git$/i, "");
+  const shorthand = normalized.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+  if (shorthand) return `${shorthand[1]}/${shorthand[2]}`;
+  const https = normalized.match(/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:[/?#].*)?$/i);
+  if (https) return `${https[1]}/${https[2]}`;
+  const ssh = normalized.match(/^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/i);
+  if (ssh) return `${ssh[1]}/${ssh[2]}`;
+  return undefined;
+}
+
+async function ensureGitHubRepository(
+  remoteUrl: string,
+  visibility: "private" | "public",
+  output: string[],
+  cwd: string
+): Promise<void> {
+  const repoSlug = githubRepoSlugFromRemote(remoteUrl);
+  if (!repoSlug) throw new Error("GitHub repository URL must be github.com/owner/repo or owner/repo.");
+  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+  if (token) {
+    await ensureGitHubRepositoryWithApi(repoSlug, visibility, output, token);
+    return;
+  }
+
+  if (/^(https:\/\/|git@)/i.test(remoteUrl)) {
+    const remoteCheck = await runCapture("git", ["ls-remote", remoteUrl], cwd, 30000);
+    output.push(`$ git ls-remote ${remoteUrl}`);
+    const remoteText = [remoteCheck.stdout.trim(), remoteCheck.stderr.trim()].filter(Boolean).join("\n");
+    if (remoteText) output.push(remoteText);
+    if (remoteCheck.exitCode === 0) {
+      output.push(`GitHub remote is reachable: ${repoSlug}`);
+      return;
+    }
+  }
+
+  const view = await runCapture("gh", ["repo", "view", repoSlug], cwd, 30000);
+  output.push(`$ gh repo view ${repoSlug}`);
+  const viewText = [view.stdout.trim(), view.stderr.trim()].filter(Boolean).join("\n");
+  if (viewText) output.push(viewText);
+  if (view.exitCode === 0) {
+    output.push(`GitHub repository already exists: ${repoSlug}`);
+    return;
+  }
+
+  const createArgs = ["repo", "create", repoSlug, visibility === "public" ? "--public" : "--private"];
+  const create = await runCapture("gh", createArgs, cwd, 60000);
+  output.push(`$ gh ${createArgs.join(" ")}`);
+  const createText = [create.stdout.trim(), create.stderr.trim()].filter(Boolean).join("\n");
+  if (createText) output.push(createText);
+  if (create.exitCode !== 0) {
+    throw new Error(createText || `gh repo create failed with exit code ${create.exitCode}`);
+  }
+}
+
+async function githubApi(
+  path: string,
+  token: string,
+  init: RequestInit = {}
+): Promise<{ status: number; ok: boolean; data: unknown; text: string }> {
+  const response = await fetch(`https://api.github.com${path}`, {
+    ...init,
+    headers: {
+      "accept": "application/vnd.github+json",
+      "authorization": `Bearer ${token}`,
+      "user-agent": "codex.rodion.pro-agent",
+      "x-github-api-version": "2022-11-28",
+      ...(init.headers ?? {})
+    }
+  });
+  const text = await response.text();
+  let data: unknown = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+  return { status: response.status, ok: response.ok, data, text };
+}
+
+function githubApiError(result: { status: number; data: unknown; text: string }): string {
+  if (result.data && typeof result.data === "object" && "message" in result.data && typeof result.data.message === "string") {
+    return result.data.message;
+  }
+  return result.text || `GitHub API returned HTTP ${result.status}`;
+}
+
+function githubField(data: unknown, key: string): string | undefined {
+  return data && typeof data === "object" && key in data && typeof data[key as keyof typeof data] === "string"
+    ? data[key as keyof typeof data] as string
+    : undefined;
+}
+
+async function ensureGitHubRepositoryWithApi(
+  repoSlug: string,
+  visibility: "private" | "public",
+  output: string[],
+  token: string
+): Promise<void> {
+  output.push(`$ GitHub API GET /repos/${repoSlug}`);
+  const existing = await githubApi(`/repos/${repoSlug}`, token);
+  if (existing.ok) {
+    output.push(`GitHub repository already exists: ${repoSlug}`);
+    return;
+  }
+  if (existing.status !== 404) {
+    throw new Error(`GitHub repository check failed: ${githubApiError(existing)}`);
+  }
+
+  const [owner, repoName] = repoSlug.split("/");
+  if (!owner || !repoName) throw new Error("GitHub repository URL must include owner and repo name.");
+
+  const user = await githubApi("/user", token);
+  if (!user.ok) throw new Error(`GitHub auth failed: ${githubApiError(user)}`);
+  const login = githubField(user.data, "login");
+  const createPath = login?.toLowerCase() === owner.toLowerCase() ? "/user/repos" : `/orgs/${owner}/repos`;
+  output.push(`$ GitHub API POST ${createPath}`);
+  const created = await githubApi(createPath, token, {
+    method: "POST",
+    body: JSON.stringify({
+      name: repoName,
+      private: visibility === "private",
+      auto_init: false
+    })
+  });
+  if (!created.ok) {
+    throw new Error(`GitHub repository create failed: ${githubApiError(created)}`);
+  }
+  const fullName = githubField(created.data, "full_name");
+  if (fullName?.toLowerCase() !== repoSlug.toLowerCase()) {
+    throw new Error(`GitHub created ${fullName || "an unexpected repository"}, expected ${repoSlug}.`);
+  }
+  output.push(`GitHub repository created: ${repoSlug}`);
+}
+
+async function gitSync(
+  repoId: string,
+  message: string,
+  remoteUrl?: string,
+  createRemote = false,
+  remoteVisibility: "private" | "public" = "private"
+): Promise<string> {
   const repo = config.repos.find((item) => item.id === repoId);
   if (!repo) throw new Error("Project not found in agent config.");
   await ensureGitRepo(repo.path);
@@ -179,6 +320,10 @@ async function gitSync(repoId: string, message: string, remoteUrl?: string): Pro
     }
     return result;
   };
+
+  if (createRemote && remoteUrl) {
+    await ensureGitHubRepository(remoteUrl, remoteVisibility, output, repo.path);
+  }
 
   if (remoteUrl) {
     const currentRemote = await runGit(["remote", "get-url", "origin"], 15000, [0, 2, 128]);
@@ -258,6 +403,8 @@ async function configureNginx(repoId: string): Promise<string> {
   }
 
   const remotePath = repo.serverPath.replace(/\/+$/g, "");
+  const remoteSubdir = normalizeRemoteSubdir(repo.deploy.remoteSubdir);
+  const webRootPath = remoteSubdir ? `${remotePath}/${remoteSubdir}` : remotePath;
   const availablePath = `/etc/nginx/sites-available/${repo.domain}`;
   const enabledPath = `/etc/nginx/sites-enabled/${repo.domain}`;
   const certificatePath = `/etc/letsencrypt/live/${repo.domain}/fullchain.pem`;
@@ -279,7 +426,7 @@ async function configureNginx(repoId: string): Promise<string> {
     "    listen 80;",
     "    listen [::]:80;",
     `    server_name ${repo.domain};`,
-    `    root ${remotePath};`,
+    `    root ${webRootPath};`,
     "    index index.html;",
     "",
     ...staticLocations,
@@ -299,7 +446,7 @@ async function configureNginx(repoId: string): Promise<string> {
     "    listen 443 ssl;",
     "    listen [::]:443 ssl;",
     `    server_name ${repo.domain};`,
-    `    root ${remotePath};`,
+    `    root ${webRootPath};`,
     "    index index.html;",
     `    ssl_certificate ${certificatePath};`,
     `    ssl_certificate_key ${certificateKeyPath};`,
@@ -313,7 +460,7 @@ async function configureNginx(repoId: string): Promise<string> {
   const encodedHttpConfig = Buffer.from(httpConfig, "utf8").toString("base64");
   const encodedSslConfig = Buffer.from(sslConfig, "utf8").toString("base64");
   const remoteCommand = [
-    `sudo mkdir -p ${shellQuote(remotePath)}`,
+    `sudo mkdir -p ${shellQuote(webRootPath)}`,
     `if [ -f ${shellQuote(certificatePath)} ] && [ -f ${shellQuote(certificateKeyPath)} ]; then printf %s ${shellQuote(encodedSslConfig)} | base64 -d | sudo tee ${shellQuote(availablePath)} >/dev/null; else printf %s ${shellQuote(encodedHttpConfig)} | base64 -d | sudo tee ${shellQuote(availablePath)} >/dev/null; fi`,
     `sudo ln -sfn ${shellQuote(availablePath)} ${shellQuote(enabledPath)}`,
     "sudo nginx -t",
@@ -654,7 +801,7 @@ function connect() {
     if (message.type === "git.sync") {
       try {
         logProgress(`git: Sync started for ${message.repoId}.`);
-        const output = await gitSync(message.repoId, message.message, message.remoteUrl);
+        const output = await gitSync(message.repoId, message.message, message.remoteUrl, message.createRemote, message.remoteVisibility);
         await sendGitResult(send, message.requestId, true, output);
         logProgress(`git: Sync completed for ${message.repoId}.`);
       } catch (error) {

@@ -2194,7 +2194,9 @@ async function createApp(): Promise<FastifyInstance> {
         requestId: id("req"),
         repoId: params.repoId,
         message: parsed.data.message,
-        remoteUrl: parsed.data.remoteUrl?.trim() || undefined
+        remoteUrl: parsed.data.remoteUrl?.trim() || undefined,
+        createRemote: parsed.data.createRemote,
+        remoteVisibility: parsed.data.remoteVisibility
       });
       if (!result.ok) return reply.code(400).send({ error: result.error ?? "git_sync_failed", output: result.output });
       if (result.repos) upsertRepos(params.agentId, result.repos);

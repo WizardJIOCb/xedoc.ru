@@ -14,6 +14,7 @@ import {
   ArrowUp,
   Clock3,
   Download,
+  ExternalLink,
   FolderGit2,
   Github,
   GitBranch,
@@ -30,6 +31,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Rocket,
   Save,
   Settings,
   ShieldCheck,
@@ -68,6 +70,10 @@ const CODEX_MODEL_OPTIONS = [
   { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
   { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" }
 ];
+const PROJECT_DOMAIN_ROOT = "codex.rodion.pro";
+const DEFAULT_GITHUB_OWNER = "WizardJIOCb";
+const DEFAULT_DEPLOY_SSH_TARGET = "myserver";
+const DEFAULT_SERVER_ROOT = "/var/www";
 const SPEED_OPTIONS: Array<{ value: CodexSpeed; label: string; note: string }> = [
   { value: "standard", label: "Standard", note: "Default speed, normal usage" },
   { value: "fast", label: "Fast", note: "Saved with run metadata" }
@@ -395,6 +401,55 @@ function defaultProjectPath(name: string) {
     .replace(/\.{2,}/g, ".")
     .replace(/^-+|-+$/g, "");
   return `C:\\Projects\\${slug || "new-project"}`;
+}
+
+function projectSlug(name: string) {
+  return name
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || "new-project";
+}
+
+function normalizeProjectDomain(value: string) {
+  const trimmed = value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/\.+$/g, "");
+  if (!trimmed) return "";
+  return trimmed.includes(".") ? trimmed : `${trimmed}.${PROJECT_DOMAIN_ROOT}`;
+}
+
+function defaultProjectDomain(name: string) {
+  return `${projectSlug(name)}.${PROJECT_DOMAIN_ROOT}`;
+}
+
+function defaultServerPathForDomain(domain: string) {
+  return domain ? `${DEFAULT_SERVER_ROOT}/${domain}` : "";
+}
+
+function defaultGithubUrlForDomain(domain: string) {
+  return domain ? `https://github.com/${DEFAULT_GITHUB_OWNER}/${domain}` : "";
+}
+
+function defaultProjectValues(name: string) {
+  const domain = defaultProjectDomain(name);
+  return {
+    path: defaultProjectPath(name),
+    domain,
+    serverPath: defaultServerPathForDomain(domain),
+    githubUrl: defaultGithubUrlForDomain(domain)
+  };
+}
+
+function projectUrl(domain?: string) {
+  const normalized = normalizeProjectDomain(domain ?? "");
+  return normalized ? `https://${normalized}` : "";
 }
 
 function splitCommandLine(value: string) {
@@ -1463,6 +1518,7 @@ function App() {
   const [projectDeployRemoteSubdir, setProjectDeployRemoteSubdir] = useState("");
   const [projectDeployBuildCommand, setProjectDeployBuildCommand] = useState("npm.cmd run build");
   const [projectDeployCleanRemote, setProjectDeployCleanRemote] = useState(true);
+  const [projectStartPrompt, setProjectStartPrompt] = useState("");
   const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [codexModel, setCodexModel] = useState("gpt-5.5");
@@ -1487,6 +1543,8 @@ function App() {
   const [nginxBusy, setNginxBusy] = useState(false);
   const [sslNotice, setSslNotice] = useState("");
   const [sslBusy, setSslBusy] = useState(false);
+  const [launchNotice, setLaunchNotice] = useState("");
+  const [launchBusy, setLaunchBusy] = useState(false);
   const [vscodeNotice, setVscodeNotice] = useState("");
   const [vscodeBusy, setVscodeBusy] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
@@ -1526,6 +1584,7 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const selectedRepo = useMemo(() => repos.find((repo) => `${repo.agentId}:${repo.id}` === repoKey), [repoKey, repos]);
+  const selectedProjectUrl = useMemo(() => projectUrl(selectedRepo?.domain), [selectedRepo?.domain]);
   const syncRepo = useMemo(() => (
     repos.find((repo) => `${repo.agentId}:${repo.id}` === syncRepoKey)
     ?? selectedRepo
@@ -2280,6 +2339,7 @@ function App() {
     setDeployNotice("");
     setNginxNotice("");
     setSslNotice("");
+    setLaunchNotice("");
     setActiveChatId("");
     setChatLoadingId("");
     setChatLoadingProgress(null);
@@ -2313,6 +2373,7 @@ function App() {
     setDeployNotice("");
     setNginxNotice("");
     setSslNotice("");
+    setLaunchNotice("");
   }
 
   function openSettingsView() {
@@ -2345,16 +2406,55 @@ function App() {
     refresh();
   }
 
+  function applyProjectDefaultsToForm(options: { includePath: boolean }) {
+    const defaults = defaultProjectValues(projectName);
+    if (options.includePath) setProjectPath(defaults.path);
+    setProjectDomain(defaults.domain);
+    setProjectServerPath(defaults.serverPath);
+    setProjectGithubUrl(defaults.githubUrl);
+    if (!projectDeploySshTarget.trim()) setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
+    if (!projectDeploySourceDir.trim()) setProjectDeploySourceDir("dist");
+    if (!projectDeployBuildCommand.trim()) setProjectDeployBuildCommand("npm.cmd run build");
+  }
+
+  function handleProjectNameChange(value: string) {
+    setProjectName(value);
+    if (projectPanel !== "new") return;
+    const defaults = defaultProjectValues(value);
+    setProjectPath(defaults.path);
+    setProjectDomain(defaults.domain);
+    setProjectServerPath(defaults.serverPath);
+    setProjectGithubUrl(defaults.githubUrl);
+  }
+
+  function handleProjectDomainChange(value: string) {
+    const previousDomain = normalizeProjectDomain(projectDomain);
+    const previousServerPath = defaultServerPathForDomain(previousDomain);
+    const previousGithubUrl = defaultGithubUrlForDomain(previousDomain);
+    setProjectDomain(value);
+    const nextDomain = normalizeProjectDomain(value);
+    if (!nextDomain) return;
+    if (!projectServerPath.trim() || projectServerPath.trim() === previousServerPath) {
+      setProjectServerPath(defaultServerPathForDomain(nextDomain));
+    }
+    if (!projectGithubUrl.trim() || projectGithubUrl.trim() === previousGithubUrl) {
+      setProjectGithubUrl(defaultGithubUrlForDomain(nextDomain));
+    }
+  }
+
   function openNewProject() {
+    const defaults = defaultProjectValues("New Project");
     setProjectName("New Project");
-    setProjectPath(defaultProjectPath("New Project"));
-    setProjectGithubUrl("");
-    setProjectServerPath("");
-    setProjectDomain("");
-    setProjectDeploySshTarget("myserver");
+    setProjectPath(defaults.path);
+    setProjectGithubUrl(defaults.githubUrl);
+    setProjectServerPath(defaults.serverPath);
+    setProjectDomain(defaults.domain);
+    setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
     setProjectDeploySourceDir("dist");
+    setProjectDeployRemoteSubdir("");
     setProjectDeployBuildCommand("npm.cmd run build");
     setProjectDeployCleanRemote(true);
+    setProjectStartPrompt("");
     setOriginalProjectPath("");
     setProjectPanel("new");
   }
@@ -2370,6 +2470,7 @@ function App() {
     setProjectDeployRemoteSubdir(repo.deploy?.remoteSubdir ?? "");
     setProjectDeployBuildCommand(formatBuildCommand(repo.deploy));
     setProjectDeployCleanRemote(repo.deploy?.cleanRemote ?? true);
+    setProjectStartPrompt("");
     setOriginalProjectPath(repo.pathMasked);
     setSandbox(repo.defaultSandbox);
     setProjectPanel("settings");
@@ -2723,17 +2824,75 @@ function App() {
     refresh();
   }
 
+  async function startProjectPrompt(repo: { agentId: string; id: string }, promptText: string): Promise<boolean> {
+    if (!csrf || !promptText.trim()) return false;
+    if (localCodexBusy) {
+      setChatNoticeOk(false);
+      setChatNotice("Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web.");
+      return false;
+    }
+    const chatResponse = await api("/api/chats", {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: JSON.stringify({
+        agentId: repo.agentId,
+        repoId: repo.id,
+        title: promptText.slice(0, 120)
+      })
+    });
+    const chatData = await chatResponse.json().catch(() => ({}));
+    if (!chatResponse.ok) {
+      setChatNoticeOk(false);
+      setChatNotice(chatData.error || "Start prompt chat create failed.");
+      return false;
+    }
+
+    const chatId = chatData.chatId as string;
+    const response = await api("/api/jobs", {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: JSON.stringify({
+        agentId: repo.agentId,
+        repoId: repo.id,
+        chatId,
+        prompt: promptText,
+        sandbox,
+        branchMode: "current",
+        model: codexModel,
+        reasoningEffort,
+        speed: codexSpeed,
+        attachments: []
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setChatNoticeOk(false);
+      setChatNotice(data.error || "Start prompt job failed.");
+      return false;
+    }
+    setRepoKey(`${repo.agentId}:${repo.id}`);
+    setActiveChatId(chatId);
+    setProjectStartPrompt("");
+    setChatNoticeOk(true);
+    setChatNotice("Стартовый prompt запущен. Когда Codex закончит, можно нажать Launch для GitHub и деплоя.");
+    await loadChat(chatId, data.jobId);
+    return true;
+  }
+
   async function saveProject(event: React.FormEvent) {
     event.preventDefault();
     if (!csrf || !selectedAgent || !projectName.trim() || !projectPath.trim()) return;
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const shouldRunPrompt = submitter?.value === "run-prompt" && Boolean(projectStartPrompt.trim());
     setBusy(true);
     const isNew = projectPanel === "new";
+    const normalizedDomain = normalizeProjectDomain(projectDomain);
     const body: Record<string, unknown> = {
       agentId: selectedAgent.id,
       name: projectName.trim(),
       githubUrl: projectGithubUrl.trim(),
       serverPath: projectServerPath.trim(),
-      domain: projectDomain.trim(),
+      domain: normalizedDomain,
       deploy: buildDeployConfig(projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null,
       defaultSandbox: sandbox,
       allowedSandboxes: SANDBOXES
@@ -2752,12 +2911,21 @@ function App() {
       return;
     }
     const data = await response.json();
+    const savedRepoId = isNew ? data.repoId as string | undefined : selectedRepo?.id;
+    const savedAgentId = isNew ? selectedAgent.id : selectedRepo?.agentId ?? selectedAgent.id;
     await refresh();
-    setProjectPanel(null);
     if (isNew && data.repoId) {
       setRepoKey(`${selectedAgent.id}:${data.repoId}`);
       setSandbox("danger-full-access");
     }
+    if (shouldRunPrompt && savedRepoId) {
+      const started = await startProjectPrompt({ agentId: savedAgentId, id: savedRepoId }, projectStartPrompt.trim());
+      setBusy(false);
+      if (!started) return;
+    } else {
+      setBusy(false);
+    }
+    setProjectPanel(null);
   }
 
   async function deleteProject() {
@@ -3047,7 +3215,7 @@ function App() {
   }
 
   async function runGitSync() {
-    if (!selectedRepo || !csrf || !gitMessage.trim()) return;
+    if (!selectedRepo || !csrf || !gitMessage.trim() || launchBusy) return;
     setGitBusy(true);
     setActionMenuOpen(false);
     setGitNotice("Git sync started...");
@@ -3161,6 +3329,76 @@ function App() {
     }
     setSslNotice(data.output || "SSL configured.");
     await refresh();
+  }
+
+  async function launchProject() {
+    if (!selectedRepo || !csrf) return;
+    const output: string[] = [];
+    const append = (label: string, text: string) => {
+      output.push(`== ${label} ==\n${text}`);
+      setLaunchNotice(output.join("\n\n"));
+    };
+    const callProjectAction = async (label: string, path: string, body: Record<string, unknown> = {}) => {
+      setLaunchNotice([...output, `== ${label} ==\nRunning...`].join("\n\n"));
+      const response = await api(path, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify(body)
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.output || data.error || `${label} failed.`);
+      append(label, data.output || "Done.");
+      return data;
+    };
+
+    setLaunchBusy(true);
+    setActionMenuOpen(false);
+    setLaunchNotice("Launch started...");
+    try {
+      const remoteUrl = gitRemoteUrl.trim() || selectedRepo.githubUrl || "";
+      if (remoteUrl) {
+        const data = await callProjectAction(
+          "GitHub + push",
+          `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`,
+          {
+            message: gitMessage.trim() || `Launch ${selectedRepo.name}`,
+            remoteUrl,
+            createRemote: true,
+            remoteVisibility: "private"
+          }
+        );
+        setGitNotice(data.output || "GitHub sync completed.");
+      } else {
+        append("GitHub + push", "Skipped: GitHub repository is not configured.");
+      }
+
+      if (selectedRepo.domain) {
+        const data = await callProjectAction("Nginx", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`);
+        setNginxNotice(data.output || "Nginx configured.");
+      } else {
+        append("Nginx", "Skipped: domain is not configured.");
+      }
+
+      if (selectedRepo.serverPath && selectedRepo.deploy?.sshTarget) {
+        const data = await callProjectAction("Deploy", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`);
+        setDeployNotice(data.output || "Deploy completed.");
+      } else {
+        append("Deploy", "Skipped: server folder or SSH target is not configured.");
+      }
+
+      if (selectedRepo.domain) {
+        const data = await callProjectAction("SSL", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/ssl`);
+        setSslNotice(data.output || "SSL configured.");
+      }
+
+      const url = projectUrl(selectedRepo.domain);
+      if (url) append("Open", url);
+    } catch (error) {
+      append("Launch failed", error instanceof Error ? error.message : String(error));
+    } finally {
+      setLaunchBusy(false);
+      await refresh();
+    }
   }
 
   async function createUser(event: React.FormEvent) {
@@ -4524,14 +4762,16 @@ function App() {
         <form className="project-form" onSubmit={saveProject}>
           <div className="section-head">
             <h2>{projectPanel === "new" ? "New project" : "Project settings"}</h2>
-            <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Close</button>
+            <div className="section-actions">
+              <button className="secondary" type="button" onClick={() => applyProjectDefaultsToForm({ includePath: projectPanel === "new" })}>
+                <Wrench size={15} /> Defaults
+              </button>
+              <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Close</button>
+            </div>
           </div>
           <label>
             Name
-            <input value={projectName} onChange={(event) => {
-              setProjectName(event.target.value);
-              if (projectPanel === "new") setProjectPath(defaultProjectPath(event.target.value));
-            }} />
+            <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
           </label>
           <label>
             Folder on home PC
@@ -4546,9 +4786,20 @@ function App() {
             <input placeholder="/var/www/project.domain" value={projectServerPath} onChange={(event) => setProjectServerPath(event.target.value)} />
           </label>
           <label>
-            Domain
-            <input placeholder="project.domain" value={projectDomain} onChange={(event) => setProjectDomain(event.target.value)} />
+            Domain or subdomain
+            <input
+              placeholder={`playground or playground.${PROJECT_DOMAIN_ROOT}`}
+              value={projectDomain}
+              onBlur={() => setProjectDomain(normalizeProjectDomain(projectDomain))}
+              onChange={(event) => handleProjectDomainChange(event.target.value)}
+            />
           </label>
+          {projectUrl(projectDomain) && (
+            <div className="project-preview">
+              <span>Project URL</span>
+              <a href={projectUrl(projectDomain)} target="_blank" rel="noreferrer">{projectUrl(projectDomain)}</a>
+            </div>
+          )}
           <label>
             Deploy SSH target
             <input placeholder="myserver" value={projectDeploySshTarget} onChange={(event) => setProjectDeploySshTarget(event.target.value)} />
@@ -4569,13 +4820,24 @@ function App() {
             <input checked={projectDeployCleanRemote} type="checkbox" onChange={(event) => setProjectDeployCleanRemote(event.target.checked)} />
             Clean server folder before upload
           </label>
+          <label>
+            Start prompt
+            <textarea
+              placeholder="Опишите первый шаг для Codex после сохранения проекта"
+              value={projectStartPrompt}
+              onChange={(event) => setProjectStartPrompt(event.target.value)}
+            />
+          </label>
           <div className="segments">
             {SANDBOXES.map((item) => (
               <button className={sandbox === item ? "active" : ""} key={item} type="button" onClick={() => setSandbox(item)}>{SANDBOX_LABELS[item]}</button>
             ))}
           </div>
           {projectNotice && <div className="notice danger">{projectNotice}</div>}
-          <button disabled={busy || !online} type="submit"><Save size={16} /> Save project</button>
+          <div className="project-form-actions">
+            <button disabled={busy || !online} type="submit" value="save"><Save size={16} /> Save project</button>
+            <button className="secondary" disabled={busy || !online || !projectStartPrompt.trim()} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
+          </div>
           {projectPanel === "settings" && (
             <button className="danger-button" disabled={busy || !selectedRepo} type="button" onClick={deleteProject}>Remove project from service</button>
           )}
@@ -4675,11 +4937,14 @@ function App() {
             <form className="git-panel" onSubmit={syncGit}>
               <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
               <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
-              <button disabled={gitBusy || !gitMessage.trim()} type="submit"><UploadCloud size={16} /> Commit & push</button>
-              <button disabled={deployBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} type="button" onClick={deployProject}><UploadCloud size={16} /> Deploy</button>
-              <button disabled={nginxBusy || !selectedRepo.serverPath || !selectedRepo.domain || !selectedRepo.deploy?.sshTarget} type="button" onClick={configureNginx}><Settings size={16} /> Nginx</button>
-              <button disabled={sslBusy || !selectedRepo.serverPath || !selectedRepo.domain || !selectedRepo.deploy?.sshTarget} type="button" onClick={configureSsl}><Settings size={16} /> SSL</button>
+              <button disabled={launchBusy || gitBusy || !gitMessage.trim()} type="submit"><UploadCloud size={16} /> Commit & push</button>
+              <button disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} type="button" onClick={launchProject}><Rocket size={16} /> Launch</button>
+              <button disabled={launchBusy || deployBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} type="button" onClick={deployProject}><UploadCloud size={16} /> Deploy</button>
+              <button disabled={launchBusy || nginxBusy || !selectedRepo.serverPath || !selectedRepo.domain || !selectedRepo.deploy?.sshTarget} type="button" onClick={configureNginx}><Settings size={16} /> Nginx</button>
+              <button disabled={launchBusy || sslBusy || !selectedRepo.serverPath || !selectedRepo.domain || !selectedRepo.deploy?.sshTarget} type="button" onClick={configureSsl}><Settings size={16} /> SSL</button>
+              {selectedProjectUrl && <a className="launch-link" href={selectedProjectUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /> Open</a>}
               {gitNotice && <pre>{gitNotice}</pre>}
+              {launchNotice && <pre>{launchNotice}</pre>}
               {deployNotice && <pre>{deployNotice}</pre>}
               {nginxNotice && <pre>{nginxNotice}</pre>}
               {sslNotice && <pre>{sslNotice}</pre>}

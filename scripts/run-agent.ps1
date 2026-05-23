@@ -11,6 +11,15 @@ if ($UserAgentToken) {
   $env:CMC_AGENT_TOKEN = $UserAgentToken
 }
 
+foreach ($Name in @("GH_TOKEN", "GITHUB_TOKEN")) {
+  if (-not (Get-Item -Path "Env:$Name" -ErrorAction SilentlyContinue)) {
+    $UserValue = [Environment]::GetEnvironmentVariable($Name, "User")
+    if ($UserValue) {
+      Set-Item -Path "Env:$Name" -Value $UserValue
+    }
+  }
+}
+
 if (-not $env:CMC_AGENT_TOKEN) {
   throw "CMC_AGENT_TOKEN is not set. Put it in the CMC_AGENT_TOKEN user environment variable."
 }

@@ -1380,7 +1380,7 @@ textarea:focus {
 
 .git-panel {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) repeat(4, minmax(92px, auto));
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) repeat(6, minmax(86px, auto));
   gap: 7px;
   align-items: start;
   padding: 8px;
@@ -1396,6 +1396,63 @@ textarea:focus {
   border-radius: 6px;
   background: #f8f8f5;
   font-size: 12px;
+}
+
+.project-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  font-size: 13px;
+}
+
+.project-preview span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.project-preview a {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.project-form-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+  gap: 8px;
+}
+
+.project-form-actions .secondary {
+  color: var(--muted);
+  background: #ffffff;
+  border: 1px solid var(--line);
+}
+
+.launch-link {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: #ffffff;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.launch-link:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
 }
 
 .composer {
@@ -3389,6 +3446,7 @@ button:disabled {
   }
 
   .git-panel,
+  .project-form-actions,
   .workspace,
   .project-workspace,
   .profile-grid,
@@ -3400,6 +3458,11 @@ button:disabled {
   .agent-settings-row,
   .oauth-row {
     grid-template-columns: 1fr;
+  }
+
+  .project-preview {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .agent-settings-actions {
