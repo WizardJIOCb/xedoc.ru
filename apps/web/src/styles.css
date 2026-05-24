@@ -223,6 +223,10 @@ textarea:focus {
   background: var(--panel-2);
 }
 
+.auth-tabs.single {
+  grid-template-columns: 1fr;
+}
+
 .auth-tabs button {
   min-height: 34px;
   border-radius: 6px;

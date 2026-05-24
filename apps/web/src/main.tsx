@@ -1072,6 +1072,10 @@ function shareTokenFromLocation() {
   return match ? decodeURIComponent(match[1] ?? "") : "";
 }
 
+function registrationOpenFromLocation() {
+  return new URLSearchParams(window.location.search).get("cango") === "sure";
+}
+
 function SharedChatPage({ token }: { token: string }) {
   const [share, setShare] = useState<SharedChat | null>(null);
   const [notice, setNotice] = useState("Загружаю публичный чат...");
@@ -1656,6 +1660,7 @@ function projectOperationPendingContent(label: string, repoName: string, details
 }
 
 function App() {
+  const registrationOpen = useMemo(registrationOpenFromLocation, []);
   const [csrf, setCsrf] = useState<string>();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [email, setEmail] = useState("");
@@ -2731,6 +2736,16 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const error = new URLSearchParams(window.location.search).get("oauth_error");
+    if (!error) return;
+    setAuthNotice(error === "registration_closed" ? "Регистрация временно закрыта." : "OAuth вход не получился.");
+  }, []);
+
+  useEffect(() => {
+    if (!registrationOpen && authMode === "register") setAuthMode("login");
+  }, [authMode, registrationOpen]);
+
+  useEffect(() => {
     if (!csrf) loadAuthOAuthProviders();
   }, [csrf]);
 
@@ -3041,6 +3056,11 @@ function App() {
 
   async function register(event: React.FormEvent) {
     event.preventDefault();
+    if (!registrationOpen) {
+      setAuthMode("login");
+      setAuthNotice("Регистрация временно закрыта.");
+      return;
+    }
     setBusy(true);
     setAuthNotice("");
     const response = await api("/api/register", {
@@ -3050,7 +3070,7 @@ function App() {
     const data = await response.json().catch(() => ({}));
     setBusy(false);
     if (!response.ok) {
-      setAuthNotice(data.error === "user_exists" ? "Пользователь с таким email уже есть." : data.error === "nickname_taken" ? "Этот nickname уже занят." : "Регистрация не получилась.");
+      setAuthNotice(data.error === "registration_closed" ? "Регистрация временно закрыта." : data.error === "user_exists" ? "Пользователь с таким email уже есть." : data.error === "nickname_taken" ? "Этот nickname уже занят." : "Регистрация не получилась.");
       return;
     }
     setCurrentUser(data.user);
@@ -4984,9 +5004,9 @@ function App() {
           <img className="brand-logo large" src="/favicon.svg" alt="" />
           <h1>Codex Control</h1>
           <p>Домашний Codex, управляемый с iPhone.</p>
-          <div className="auth-tabs">
+          <div className={`auth-tabs ${registrationOpen ? "" : "single"}`}>
             <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>Вход</button>
-            <button className={authMode === "register" ? "active" : ""} type="button" onClick={() => setAuthMode("register")}>Регистрация</button>
+            {registrationOpen && <button className={authMode === "register" ? "active" : ""} type="button" onClick={() => setAuthMode("register")}>Регистрация</button>}
           </div>
           <form onSubmit={authMode === "login" ? login : register}>
             <input autoComplete="email" placeholder="email" value={email} onChange={(event) => setEmail(event.target.value)} />
@@ -4997,7 +5017,7 @@ function App() {
             <button disabled={busy || !email.trim() || !password || (authMode === "register" && password.length < 8)} type="submit"><Play size={18} /> {authMode === "login" ? "Войти" : "Создать аккаунт"}</button>
           </form>
           <div className="oauth-login">
-            <span>Войти или зарегистрироваться через</span>
+            <span>{registrationOpen ? "Войти или зарегистрироваться через" : "Войти через"}</span>
             <div>
               {(authOauthProviders.length ? authOauthProviders : ["google", "vk"].map((provider) => ({ provider, connected: false, configured: false } as OAuthProvider))).map((provider) => (
                 <button key={provider.provider} type="button" disabled={busy} onClick={() => startAuthOAuth(provider.provider)} title={provider.configured ? oauthLabel(provider.provider) : `${oauthLabel(provider.provider)} не настроен`}>

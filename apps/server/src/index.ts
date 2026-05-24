@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { join, resolve } from "node:path";
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
@@ -68,6 +68,8 @@ const config = loadConfig();
 const db = openDb(config.databasePath);
 const AGENT_OFFLINE_GRACE_MS = 8000;
 const WEBSOCKET_MAX_PAYLOAD_BYTES = 10 * 1024 * 1024;
+const REGISTRATION_GATE_COOKIE = "cmc_registration_gate";
+const REGISTRATION_GATE_VALUE = "sure";
 
 type AgentConnection = {
   id: string;
@@ -183,6 +185,31 @@ function isOAuthProvider(value: string): value is OAuthProviderId {
 function publicOrigin(request: { protocol: string; hostname: string }): string {
   if (config.publicBaseUrl) return config.publicBaseUrl.replace(/\/+$/, "");
   return `${request.protocol}://${request.hostname}`;
+}
+
+function registrationGateToken(): string {
+  return createHmac("sha256", config.sessionSecret)
+    .update(`registration:${REGISTRATION_GATE_VALUE}`)
+    .digest("base64url");
+}
+
+function setRegistrationGateCookie(reply: FastifyReply): void {
+  reply.setCookie(REGISTRATION_GATE_COOKIE, registrationGateToken(), {
+    httpOnly: true,
+    secure: config.nodeEnv === "production",
+    sameSite: "lax",
+    path: "/",
+    domain: config.cookieDomain,
+    maxAge: 30 * 60
+  });
+}
+
+function clearRegistrationGateCookie(reply: FastifyReply): void {
+  reply.clearCookie(REGISTRATION_GATE_COOKIE, { path: "/", domain: config.cookieDomain });
+}
+
+function hasRegistrationGateCookie(request: { cookies: Record<string, string | undefined> }): boolean {
+  return request.cookies[REGISTRATION_GATE_COOKIE] === registrationGateToken();
 }
 
 function oauthEnvPrefix(provider: OAuthProviderId): string {
@@ -2191,7 +2218,7 @@ async function createUserSession(reply: FastifyReply, userId: string) {
   return { user: serializeUser(user), csrfToken: session.csrf_token };
 }
 
-async function createOrLoginOAuthUser(profile: OAuthProfile, linkUserId?: string): Promise<string> {
+async function createOrLoginOAuthUser(profile: OAuthProfile, linkUserId?: string, allowCreate = false): Promise<{ userId: string; created: boolean }> {
   const stamp = nowIso();
   if (linkUserId) {
     const existing = db.prepare("SELECT user_id FROM oauth_connections WHERE provider = ? AND provider_user_id = ? AND user_id != ?")
@@ -2205,22 +2232,25 @@ async function createOrLoginOAuthUser(profile: OAuthProfile, linkUserId?: string
         display_name=excluded.display_name,
         connected_at=excluded.connected_at
     `).run(linkUserId, profile.provider, profile.providerUserId, profile.displayName ?? null, stamp);
-    return linkUserId;
+    return { userId: linkUserId, created: false };
   }
   const connection = db.prepare("SELECT user_id FROM oauth_connections WHERE provider = ? AND provider_user_id = ?")
     .get(profile.provider, profile.providerUserId) as { user_id: string } | undefined;
-  if (connection) return connection.user_id;
+  if (connection) return { userId: connection.user_id, created: false };
   let user = db.prepare("SELECT * FROM users WHERE email = ?").get(profile.email) as UserRow | undefined;
+  let created = false;
   if (!user) {
+    if (!allowCreate) throw new Error("registration_closed");
     const userId = id("usr");
     const role = userCount() === 0 ? "admin" : "user";
     db.prepare("INSERT INTO users (id,email,password_hash,role,nickname,created_at) VALUES (?,?,?,?,?,?)")
       .run(userId, profile.email, await hashSecret(randomToken("oauth_password")), role, null, stamp);
     user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow;
+    created = true;
   }
   db.prepare("INSERT OR IGNORE INTO oauth_connections (user_id,provider,provider_user_id,display_name,connected_at) VALUES (?,?,?,?,?)")
     .run(user.id, profile.provider, profile.providerUserId, profile.displayName ?? null, stamp);
-  return user.id;
+  return { userId: user.id, created };
 }
 
 async function createApp(): Promise<FastifyInstance> {
@@ -2242,6 +2272,12 @@ async function createApp(): Promise<FastifyInstance> {
     reply.header("X-Frame-Options", "DENY");
     reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
     reply.header("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss: https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; img-src 'self' data: https://mc.yandex.ru https://mc.yandex.com https://yastatic.net;");
+    if (_request.method === "GET") {
+      const url = new URL(_request.raw.url ?? "/", "https://codex.rodion.pro");
+      if (url.pathname === "/" && url.searchParams.get("cango") === REGISTRATION_GATE_VALUE) {
+        setRegistrationGateCookie(reply);
+      }
+    }
   });
 
   app.get("/api/health", async () => ({ ok: true, now: nowIso() }));
@@ -2299,13 +2335,14 @@ async function createApp(): Promise<FastifyInstance> {
         deviceId: query.device_id,
         state: query.state
       });
-      const userId = await createOrLoginOAuthUser(profile, row.user_id ?? undefined);
+      const { userId, created } = await createOrLoginOAuthUser(profile, row.user_id ?? undefined, hasRegistrationGateCookie(request));
       if (row.user_id) return reply.redirect(safeReturnTo(row.return_to ?? "/profile"));
       await createUserSession(reply, userId);
+      if (created) clearRegistrationGateCookie(reply);
       return reply.redirect(safeReturnTo(row.return_to ?? "/"));
     } catch (error) {
       request.log.warn({ provider, error: error instanceof Error ? error.message : String(error) }, "OAuth callback failed");
-      return reply.redirect(`/?oauth_error=${encodeURIComponent("oauth_failed")}`);
+      return reply.redirect(`/?oauth_error=${encodeURIComponent(error instanceof Error && error.message === "registration_closed" ? "registration_closed" : "oauth_failed")}`);
     }
   });
 
@@ -2385,6 +2422,7 @@ async function createApp(): Promise<FastifyInstance> {
   });
 
   app.post("/api/register", async (request, reply) => {
+    if (!hasRegistrationGateCookie(request)) return reply.code(403).send({ error: "registration_closed" });
     const parsed = RegisterSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_registration", details: parsed.error.flatten() });
     const email = parsed.data.email.trim().toLowerCase();
@@ -2398,7 +2436,9 @@ async function createApp(): Promise<FastifyInstance> {
     const userId = id("usr");
     db.prepare("INSERT INTO users (id,email,password_hash,role,nickname,created_at) VALUES (?,?,?,?,?,?)")
       .run(userId, email, await hashSecret(parsed.data.password), userCount() === 0 ? "admin" : "user", nickname, nowIso());
-    return reply.code(201).send(await createUserSession(reply, userId));
+    const session = await createUserSession(reply, userId);
+    clearRegistrationGateCookie(reply);
+    return reply.code(201).send(session);
   });
 
   app.post("/api/logout", async (request, reply) => {
