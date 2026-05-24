@@ -2038,19 +2038,17 @@ function App() {
       const nextChats = (await response.json()).chats;
       if (loadChatsAbortRef.current !== controller) return;
       loadChatsAbortRef.current = null;
-      setChats(nextChats);
+      const activeId = activeChatIdRef.current;
+      setChats((current) => {
+        if (selectFirst || !activeId || nextChats.some((chat: Chat) => chat.id === activeId)) return nextChats;
+        const active = current.find((chat) => chat.id === activeId);
+        if (!active) return nextChats;
+        return [active, ...nextChats.filter((chat: Chat) => chat.id !== activeId)]
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+      });
       if (selectFirst && nextChats[0]) {
         await loadChat(nextChats[0].id, undefined, true);
         return;
-      }
-      if (activeChatId && !nextChats.some((chat: Chat) => chat.id === activeChatId)) {
-        setActiveChatId("");
-        setChatLoadingId("");
-        setChatLoadingProgress(null);
-        setJobs([]);
-        setMessages([]);
-        setActiveJob(null);
-        setLogs([]);
       }
     } catch (error) {
       if (!isAbortError(error)) throw error;
@@ -2331,9 +2329,11 @@ function App() {
   }
 
   function selectProject(repo: Repo) {
+    const nextRepoKey = `${repo.agentId}:${repo.id}`;
+    const sameRepo = repoKey === nextRepoKey;
     setMobileMenuOpen(false);
     setView("projects");
-    setRepoKey(`${repo.agentId}:${repo.id}`);
+    setRepoKey(nextRepoKey);
     setSandbox(repo.defaultSandbox);
     setGitMessage(`Update ${repo.name}`);
     setGitRemoteUrl(repo.githubUrl ?? "");
@@ -2342,17 +2342,19 @@ function App() {
     setNginxNotice("");
     setSslNotice("");
     setLaunchNotice("");
-    setActiveChatId("");
-    setChatLoadingId("");
-    setChatLoadingProgress(null);
-    setJobs([]);
-    setMessages([]);
-    setActiveJob(null);
-    setLogs([]);
+    if (!sameRepo) {
+      setActiveChatId("");
+      setChatLoadingId("");
+      setChatLoadingProgress(null);
+      setJobs([]);
+      setMessages([]);
+      setActiveJob(null);
+      setLogs([]);
+    }
     setProjectPanel(null);
     setChatProperties(null);
     setChatMenuId("");
-    loadChats(repo, true);
+    loadChats(repo, !sameRepo);
     void syncLocalChats(repo);
   }
 
