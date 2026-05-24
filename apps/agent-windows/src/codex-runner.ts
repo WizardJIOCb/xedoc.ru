@@ -33,10 +33,15 @@ type RunContext = {
 export class Runner {
   private child: ChildProcessWithoutNullStreams | null = null;
   private cancelled = false;
+  private stopCurrent: (() => void) | null = null;
 
   cancel() {
     this.cancelled = true;
-    if (this.child) this.child.kill();
+    if (this.stopCurrent) {
+      this.stopCurrent();
+      return;
+    }
+    void killProcessTree(this.child);
   }
 
   async run(context: RunContext): Promise<AgentJobDone> {
@@ -144,11 +149,68 @@ export class Runner {
       let rawOutputTail = "";
       let codexThreadId: string | undefined;
       let progressBusy = false;
-      const timer = setTimeout(() => {
+      let settled = false;
+      let forceFinishTimer: NodeJS.Timeout | undefined;
+      let progressTimer: NodeJS.Timeout | undefined;
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (forceFinishTimer) clearTimeout(forceFinishTimer);
+        if (progressTimer) clearInterval(progressTimer);
+        this.stopCurrent = null;
+        this.child = null;
+      };
+      const finish = async (exitCode: number | null, failureMessage?: string) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const status = failureMessage
+          ? "failed"
+          : this.cancelled
+            ? "cancelled"
+            : exitCode === 0
+              ? "completed"
+              : "failed";
+        const resultMessage = failureMessage
+          ?? (this.cancelled ? "Job cancelled." : exitCode === 0 ? "Codex finished." : "Codex process failed.");
+        context.sendProgress(progress(
+          context.job.id,
+          "finalizing",
+          "Collecting git diff and saving the result.",
+          await diffProgress(repo.path)
+        ));
+        const gitStatus = await runCapture("git", ["-C", repo.path, "status", "--short"]);
+        const gitDiffStat = await runCapture("git", ["-C", repo.path, "diff", "--stat"]);
+        const gitDiff = await runCapture("git", ["-C", repo.path, "diff", "--", "."], undefined, 30000);
+        context.sendProgress(progress(
+          context.job.id,
+          status,
+          resultMessage,
+          await diffProgress(repo.path)
+        ));
+        resolve({
+          type: "job.done",
+          jobId: context.job.id,
+          status,
+          exitCode,
+          finalMessage: failureMessage
+            ?? (this.cancelled ? "Job cancelled." : finalMessage || rawOutputTail.trim() || (exitCode === 0 ? "Completed." : "Process failed.")),
+          gitStatus: gitStatus.stdout,
+          gitDiffStat: gitDiffStat.stdout,
+          gitDiff: truncate(gitDiff.stdout, 120000),
+          codexThreadId
+        });
+      };
+      const requestStop = () => {
+        if (settled) return;
         this.cancelled = true;
-        this.child?.kill();
-      }, timeoutMs);
-      const progressTimer = setInterval(async () => {
+        void killProcessTree(this.child);
+        forceFinishTimer ??= setTimeout(() => {
+          void finish(null);
+        }, 1500);
+      };
+      this.stopCurrent = requestStop;
+      const timer = setTimeout(requestStop, timeoutMs);
+      progressTimer = setInterval(async () => {
         if (progressBusy) return;
         progressBusy = true;
         try {
@@ -178,48 +240,25 @@ export class Runner {
       this.child.stdout.on("data", (chunk: Buffer) => emit("stdout", chunk));
       this.child.stderr.on("data", (chunk: Buffer) => emit("stderr", chunk));
       this.child.on("error", (error) => {
-        clearTimeout(timer);
-        clearInterval(progressTimer);
-        resolve({
-          type: "job.done",
-          jobId: context.job.id,
-          status: "failed",
-          exitCode: 127,
-          finalMessage: error.message
-        });
+        void finish(127, error.message);
       });
       this.child.on("close", async (exitCode) => {
-        clearTimeout(timer);
-        clearInterval(progressTimer);
-        context.sendProgress(progress(
-          context.job.id,
-          "finalizing",
-          "Collecting git diff and saving the result.",
-          await diffProgress(repo.path)
-        ));
-        const gitStatus = await runCapture("git", ["-C", repo.path, "status", "--short"]);
-        const gitDiffStat = await runCapture("git", ["-C", repo.path, "diff", "--stat"]);
-        const gitDiff = await runCapture("git", ["-C", repo.path, "diff", "--", "."], undefined, 30000);
-        context.sendProgress(progress(
-          context.job.id,
-          this.cancelled ? "cancelled" : exitCode === 0 ? "completed" : "failed",
-          this.cancelled ? "Job cancelled." : exitCode === 0 ? "Codex finished." : "Codex process failed.",
-          await diffProgress(repo.path)
-        ));
-        resolve({
-          type: "job.done",
-          jobId: context.job.id,
-          status: this.cancelled ? "cancelled" : exitCode === 0 ? "completed" : "failed",
-          exitCode,
-          finalMessage: finalMessage || rawOutputTail.trim() || (exitCode === 0 ? "Completed." : "Process failed."),
-          gitStatus: gitStatus.stdout,
-          gitDiffStat: gitDiffStat.stdout,
-          gitDiff: truncate(gitDiff.stdout, 120000),
-          codexThreadId
-        });
+        await finish(exitCode);
       });
     });
   }
+}
+
+async function killProcessTree(child: ChildProcessWithoutNullStreams | null): Promise<void> {
+  if (!child) return;
+  const pid = child.pid;
+  try {
+    child.kill();
+  } catch {
+    // Best-effort cleanup; cancellation still settles the job through the fallback timer.
+  }
+  if (process.platform !== "win32" || !pid) return;
+  await runCapture("taskkill", ["/PID", String(pid), "/T", "/F"], undefined, 10000);
 }
 
 function prepareAttachments(context: RunContext, repo: RepoConfig): Array<{ name: string; mimeType: string; size: number; path: string }> {
