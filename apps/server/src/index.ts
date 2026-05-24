@@ -880,6 +880,76 @@ function pruneSyncedContextMessages(chatId: string): boolean {
   return changed;
 }
 
+function mergeChatMessagesIntoTarget(sourceChatId: string, targetChatId: string): boolean {
+  if (sourceChatId === targetChatId) return false;
+  const sourceMessages = db.prepare("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC, id ASC")
+    .all(sourceChatId) as ChatMessageRow[];
+  let changed = false;
+  for (const message of sourceMessages) {
+    const duplicateByExternalId = message.external_id
+      ? db.prepare("SELECT id FROM chat_messages WHERE chat_id = ? AND source = ? AND external_id = ? LIMIT 1")
+        .get(targetChatId, message.source, message.external_id) as { id: string } | undefined
+      : undefined;
+    const duplicateByContent = db.prepare("SELECT id FROM chat_messages WHERE chat_id = ? AND role = ? AND content = ? LIMIT 1")
+      .get(targetChatId, message.role, message.content) as { id: string } | undefined;
+    if (duplicateByExternalId || duplicateByContent) {
+      db.prepare("DELETE FROM chat_messages WHERE id = ?").run(message.id);
+      changed = true;
+      continue;
+    }
+    db.prepare("UPDATE chat_messages SET chat_id = ? WHERE id = ?").run(targetChatId, message.id);
+    changed = true;
+  }
+  return changed;
+}
+
+function mergeLinkedSyncedChatDuplicates(
+  agentId: string,
+  repoId: string,
+  externalId: string,
+  targetChatId: string
+): number {
+  const duplicates = db.prepare(`
+    SELECT * FROM chats
+    WHERE agent_id = ?
+      AND repo_id = ?
+      AND source = 'codex'
+      AND external_id = ?
+      AND id != ?
+    ORDER BY updated_at DESC
+  `).all(agentId, repoId, externalId, targetChatId) as ChatRow[];
+  let merged = 0;
+  for (const duplicate of duplicates) {
+    mergeChatMessagesIntoTarget(duplicate.id, targetChatId);
+    db.prepare("UPDATE chat_shares SET chat_id = ? WHERE chat_id = ?").run(targetChatId, duplicate.id);
+    db.prepare("DELETE FROM chats WHERE id = ?").run(duplicate.id);
+    merged += 1;
+  }
+  return merged;
+}
+
+function reconcileLinkedSyncedChatDuplicates(): number {
+  const links = db.prepare(`
+    SELECT DISTINCT j.agent_id, j.repo_id, j.chat_id, j.codex_thread_id
+    FROM jobs j
+    JOIN chats c ON c.id = j.chat_id
+    JOIN chats duplicate ON duplicate.agent_id = j.agent_id
+      AND duplicate.repo_id = j.repo_id
+      AND duplicate.source = 'codex'
+      AND duplicate.external_id = j.codex_thread_id
+      AND duplicate.id != j.chat_id
+    WHERE j.chat_id IS NOT NULL
+      AND j.codex_thread_id IS NOT NULL
+      AND j.codex_thread_id != ''
+  `).all() as Array<{ agent_id: string; repo_id: string; chat_id: string | null; codex_thread_id: string }>;
+  let merged = 0;
+  for (const link of links) {
+    if (!link.chat_id) continue;
+    merged += mergeLinkedSyncedChatDuplicates(link.agent_id, link.repo_id, link.codex_thread_id, link.chat_id);
+  }
+  return merged;
+}
+
 function replaceChatMessageAttachments(
   messageId: string,
   attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }> | undefined,
@@ -1784,6 +1854,11 @@ async function createOrLoginOAuthUser(profile: OAuthProfile, linkUserId?: string
 }
 
 async function createApp(): Promise<FastifyInstance> {
+  const reconciledDuplicateChats = reconcileLinkedSyncedChatDuplicates();
+  if (reconciledDuplicateChats) {
+    console.log(`Merged ${reconciledDuplicateChats} duplicate synced Codex chat(s).`);
+  }
+
   const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 20 * 1024 * 1024 });
   await app.register(fastifyCookie);
   await app.register(fastifyWebsocket, {
@@ -2783,6 +2858,13 @@ async function createApp(): Promise<FastifyInstance> {
             }),
             created_at: finishedAt
           });
+        }
+        if (job?.chat_id && parsed.codexThreadId) {
+          const mergedDuplicates = mergeLinkedSyncedChatDuplicates(agent.id, job.repo_id, parsed.codexThreadId, job.chat_id);
+          if (mergedDuplicates) {
+            db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?").run(finishedAt, job.chat_id);
+            broadcast({ type: "chats.updated", agentId: agent.id, repoId: job.repo_id, chatId: job.chat_id });
+          }
         }
         db.prepare("UPDATE agents SET current_job_id = NULL WHERE id = ?").run(agent.id);
         broadcast({ type: "job.updated", jobId: parsed.jobId, status: parsed.status });
