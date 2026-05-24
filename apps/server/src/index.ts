@@ -604,7 +604,12 @@ function idleLocalActivity(summary = "No recent local Codex activity."): LocalCo
 
 function freshLocalActivity(activity: LocalCodexActivity | undefined, _agentId?: string): LocalCodexActivity | undefined {
   if (!activity) return undefined;
-  const timestamp = Date.parse(activity.detectedAt);
+  const timestampSource = activity.status === "busy"
+    && activity.source !== "codex.rodion.pro"
+    && activity.updatedAt
+    ? activity.updatedAt
+    : activity.detectedAt;
+  const timestamp = Date.parse(timestampSource);
   if (!Number.isFinite(timestamp) || Date.now() - timestamp > 90000) {
     return idleLocalActivity();
   }

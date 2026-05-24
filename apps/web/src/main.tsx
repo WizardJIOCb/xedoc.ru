@@ -1639,8 +1639,11 @@ function App() {
       || (selectedAgent?.current_job_id && runningJobs.some((job) => job.id === selectedAgent.current_job_id))
     )
   );
-  const localActivityDetectedAt = Date.parse(localActivity?.detectedAt || "");
-  const localActivityFresh = Number.isFinite(localActivityDetectedAt) && nowTick - localActivityDetectedAt <= 90000;
+  const localActivityFreshAt = localActivity?.source !== "codex.rodion.pro" && localActivity?.updatedAt
+    ? localActivity.updatedAt
+    : localActivity?.detectedAt;
+  const localActivityFreshTime = Date.parse(localActivityFreshAt || "");
+  const localActivityFresh = Number.isFinite(localActivityFreshTime) && nowTick - localActivityFreshTime <= 90000;
   const externalLocalActivityBusy = Boolean(
     localActivity?.source !== "codex.rodion.pro"
     && localActivity?.status === "busy"
