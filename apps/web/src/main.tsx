@@ -1671,6 +1671,7 @@ function App() {
   const [localChatSyncing, setLocalChatSyncing] = useState(false);
   const [projectPanel, setProjectPanel] = useState<"new" | "settings" | null>(null);
   const [projectName, setProjectName] = useState("");
+  const [projectAgentId, setProjectAgentId] = useState("");
   const [projectPath, setProjectPath] = useState("");
   const [projectGithubUrl, setProjectGithubUrl] = useState("");
   const [projectServerPath, setProjectServerPath] = useState("");
@@ -1769,6 +1770,7 @@ function App() {
   const selectedRepoAgent = selectedRepo ? agents.find((agent) => agent.id === selectedRepo.agentId) : undefined;
   const onlineAgent = agents.find((agent) => agent.status === "online");
   const selectedAgent = selectedRepoAgent ?? onlineAgent ?? agents[0];
+  const projectFormAgent = agents.find((agent) => agent.id === projectAgentId) ?? selectedAgent;
   const online = Boolean(selectedAgent && selectedAgent.status === "online");
   const selectedRepoAgentHost = selectedRepoAgent?.hostname?.trim().toLowerCase();
   const onlineAgentOnSameHost = selectedRepoAgent && selectedRepoAgent.status !== "online"
@@ -2593,22 +2595,34 @@ function App() {
   }
 
   function applyProjectDefaultsToForm(options: { includePath: boolean }) {
-    const defaults = defaultProjectValues(projectName, selectedAgent);
+    const defaults = defaultProjectValues(projectName, projectPanel === "new" ? projectFormAgent : selectedAgent);
     if (options.includePath) setProjectPath(defaults.path);
     setProjectDomain(defaults.domain);
     setProjectServerPath(defaults.serverPath);
     setProjectGithubUrl(defaults.githubUrl);
-    const defaultMode = isLinuxAgent(selectedAgent) ? "local" : "ssh";
+    const defaultMode = isLinuxAgent(projectPanel === "new" ? projectFormAgent : selectedAgent) ? "local" : "ssh";
     setProjectDeployMode(defaultMode);
     if (!projectDeploySshTarget.trim()) setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
     if (!projectDeploySourceDir.trim()) setProjectDeploySourceDir("dist");
-    if (!projectDeployBuildCommand.trim()) setProjectDeployBuildCommand(defaultBuildCommandForAgent(selectedAgent));
+    if (!projectDeployBuildCommand.trim()) setProjectDeployBuildCommand(defaultBuildCommandForAgent(projectPanel === "new" ? projectFormAgent : selectedAgent));
+  }
+
+  function handleProjectAgentChange(agentId: string) {
+    const agent = agents.find((item) => item.id === agentId) ?? selectedAgent;
+    setProjectAgentId(agentId);
+    if (projectPanel !== "new") return;
+    const defaults = defaultProjectValues(projectName, agent);
+    setProjectPath(defaults.path);
+    const defaultMode = isLinuxAgent(agent) ? "local" : "ssh";
+    setProjectDeployMode(defaultMode);
+    setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
+    setProjectDeployBuildCommand(defaultBuildCommandForAgent(agent));
   }
 
   function handleProjectNameChange(value: string) {
     setProjectName(value);
     if (projectPanel !== "new") return;
-    const defaults = defaultProjectValues(value, selectedAgent);
+    const defaults = defaultProjectValues(value, projectFormAgent);
     setProjectPath(defaults.path);
     setProjectDomain(defaults.domain);
     setProjectServerPath(defaults.serverPath);
@@ -2633,6 +2647,7 @@ function App() {
   function openNewProject() {
     const defaults = defaultProjectValues("New Project", selectedAgent);
     setProjectName("New Project");
+    setProjectAgentId(selectedAgent?.id ?? agents[0]?.id ?? "");
     setProjectPath(defaults.path);
     setProjectGithubUrl(defaults.githubUrl);
     setProjectServerPath(defaults.serverPath);
@@ -2651,6 +2666,7 @@ function App() {
 
   function openProjectSettings(repo: Repo) {
     setProjectName(repo.name);
+    setProjectAgentId(repo.agentId);
     setProjectPath(repo.pathMasked);
     setProjectGithubUrl(repo.githubUrl ?? "");
     setProjectServerPath(repo.serverPath ?? "");
@@ -3083,14 +3099,15 @@ function App() {
 
   async function saveProject(event: React.FormEvent) {
     event.preventDefault();
-    if (!csrf || !selectedAgent || !projectName.trim() || !projectPath.trim()) return;
+    const isNew = projectPanel === "new";
+    const targetAgent = isNew ? projectFormAgent : selectedRepoAgent ?? selectedAgent;
+    if (!csrf || !targetAgent || !projectName.trim() || !projectPath.trim()) return;
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const shouldRunPrompt = submitter?.value === "run-prompt" && Boolean(projectStartPrompt.trim());
     setBusy(true);
-    const isNew = projectPanel === "new";
     const normalizedDomain = normalizeProjectDomain(projectDomain);
     const body: Record<string, unknown> = {
-      agentId: selectedAgent.id,
+      agentId: targetAgent.id,
       name: projectName.trim(),
       githubUrl: projectGithubUrl.trim(),
       serverPath: projectServerPath.trim(),
@@ -3114,10 +3131,10 @@ function App() {
     }
     const data = await response.json();
     const savedRepoId = isNew ? data.repoId as string | undefined : selectedRepo?.id;
-    const savedAgentId = isNew ? selectedAgent.id : selectedRepo?.agentId ?? selectedAgent.id;
+    const savedAgentId = isNew ? targetAgent.id : selectedRepo?.agentId ?? targetAgent.id;
     await refresh();
     if (isNew && data.repoId) {
-      setRepoKey(`${selectedAgent.id}:${data.repoId}`);
+      setRepoKey(`${targetAgent.id}:${data.repoId}`);
       setSandbox("danger-full-access");
     }
     if (shouldRunPrompt && savedRepoId) {
@@ -5174,6 +5191,18 @@ function App() {
             Name
             <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
           </label>
+          {projectPanel === "new" && (
+            <label>
+              Agent
+              <select value={projectAgentId || projectFormAgent?.id || ""} onChange={(event) => handleProjectAgentChange(event.target.value)}>
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name} · {agent.status}{isLinuxAgent(agent) ? " · Linux" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label>
             Folder on selected agent
             <input value={projectPath} onChange={(event) => setProjectPath(event.target.value)} />
@@ -5222,7 +5251,7 @@ function App() {
           </label>
           <label>
             Build command
-            <input placeholder={defaultBuildCommandForAgent(selectedAgent)} value={projectDeployBuildCommand} onChange={(event) => setProjectDeployBuildCommand(event.target.value)} />
+            <input placeholder={defaultBuildCommandForAgent(projectPanel === "new" ? projectFormAgent : selectedAgent)} value={projectDeployBuildCommand} onChange={(event) => setProjectDeployBuildCommand(event.target.value)} />
           </label>
           <label className="checkbox-row">
             <input checked={projectDeployCleanRemote} type="checkbox" onChange={(event) => setProjectDeployCleanRemote(event.target.checked)} />
@@ -5243,8 +5272,8 @@ function App() {
           </div>
           {projectNotice && <div className="notice danger">{projectNotice}</div>}
           <div className="project-form-actions">
-            <button disabled={busy || !online} type="submit" value="save"><Save size={16} /> Save project</button>
-            <button className="secondary" disabled={busy || !online || !projectStartPrompt.trim()} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
+            <button disabled={busy || !(projectPanel === "new" ? projectFormAgent?.status === "online" : online)} type="submit" value="save"><Save size={16} /> Save project</button>
+            <button className="secondary" disabled={busy || !(projectPanel === "new" ? projectFormAgent?.status === "online" : online) || !projectStartPrompt.trim()} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
           </div>
           {projectPanel === "settings" && (
             <button className="danger-button" disabled={busy || !selectedRepo} type="button" onClick={deleteProject}>Remove project from service</button>
