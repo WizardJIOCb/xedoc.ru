@@ -381,9 +381,17 @@ async function deployProject(repoId: string): Promise<string> {
   const remoteSubdir = normalizeRemoteSubdir(repo.deploy.remoteSubdir);
   const deployPath = remoteSubdir ? `${remotePath}/${remoteSubdir}` : remotePath;
   const quotedDeployPath = shellQuote(deployPath);
-  const cleanCommand = repo.deploy.cleanRemote
-    ? `mkdir -p ${quotedDeployPath} && find ${quotedDeployPath} -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`
-    : `mkdir -p ${quotedDeployPath}`;
+  const protectControllerRoot = [
+    `if [ -e ${quotedDeployPath}/data/cmc.db ] || [ -e ${quotedDeployPath}/apps/server/dist/index.js ]; then`,
+    `echo ${shellQuote(`Refusing to deploy into protected controller directory: ${deployPath}`)};`,
+    "exit 12;",
+    "fi"
+  ].join(" ");
+  const cleanCommand = [
+    `mkdir -p ${quotedDeployPath}`,
+    protectControllerRoot,
+    repo.deploy.cleanRemote ? `find ${quotedDeployPath} -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +` : ""
+  ].filter(Boolean).join(" && ");
 
   await runStep(`ssh ${repo.deploy.sshTarget} prepare ${deployPath}`, "ssh", [repo.deploy.sshTarget, cleanCommand], repo.path, 60000);
   await runStep(`scp ${sourceForScp} ${repo.deploy.sshTarget}:${deployPath}/`, "scp", ["-r", sourceForScp, `${repo.deploy.sshTarget}:${deployPath}/`], repo.path, 180000);
