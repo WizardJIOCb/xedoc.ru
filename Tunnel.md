@@ -489,25 +489,39 @@ public repos, but `git push` fails with:
 fatal: could not read Username for 'https://github.com': No such device or address
 ```
 
-For Server Ubuntu projects, configure a writable SSH key instead:
+For Server Ubuntu projects, prefer an account-level SSH key. A GitHub deploy key
+belongs to one repository only; if the same global server key is added as a
+deploy key to `Tyrian`, GitHub will deny pushes to `chat.rodion.pro` with:
+
+```text
+ERROR: Permission to WizardJIOCb/chat.rodion.pro.git denied to deploy key
+```
+
+Configure the account SSH key:
 
 ```bash
-ssh-keygen -t ed25519 -f /root/.ssh/codex_agent_github -C "codex-agent-linux@cyka.lol" -N ""
+ssh-keygen -t ed25519 -f /root/.ssh/codex_agent_github_account -C "codex-agent-linux-account@cyka.lol" -N ""
 cat >> /root/.ssh/config <<'SSH'
 
 Host github-codex
   HostName github.com
   User git
-  IdentityFile ~/.ssh/codex_agent_github
+  IdentityFile ~/.ssh/codex_agent_github_account
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
 SSH
-chmod 600 /root/.ssh/config /root/.ssh/codex_agent_github
-cat /root/.ssh/codex_agent_github.pub
+chmod 600 /root/.ssh/config /root/.ssh/codex_agent_github_account
+cat /root/.ssh/codex_agent_github_account.pub
 ```
 
-Add that public key to GitHub as an account SSH key, or as a repository deploy
-key with **Allow write access** enabled.
+Add that public key to GitHub as an account SSH key:
+
+```text
+GitHub -> Settings -> SSH and GPG keys -> New SSH key
+```
+
+Use a deploy key only for a single-repository server agent, and enable
+**Allow write access** for that exact repository.
 
 Then set this in `/root/codex-agent/agent.env` and restart the Linux agent:
 
