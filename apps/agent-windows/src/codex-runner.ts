@@ -152,6 +152,7 @@ export class Runner {
       let finalMessage = "";
       let rawOutputTail = "";
       let codexThreadId: string | undefined;
+      let codexNetworkFailureMessage = "";
       let progressBusy = false;
       let settled = false;
       let forceFinishTimer: NodeJS.Timeout | undefined;
@@ -238,6 +239,16 @@ export class Runner {
             }
           }
           if (stream === "stderr" && isIgnorableCodexWarning(line)) continue;
+          const normalizedFailure = normalizeCodexNetworkFailure(line, codexNetworkFailureMessage);
+          if (normalizedFailure) {
+            rawOutputTail = normalizedFailure;
+            if (!codexNetworkFailureMessage) {
+              codexNetworkFailureMessage = normalizedFailure;
+              context.sendLog(log(context.job.id, "stderr", normalizedFailure));
+              context.sendProgress(progress(context.job.id, "message", normalizedFailure));
+            }
+            continue;
+          }
           rawOutputTail = `${rawOutputTail}\n${line}`.slice(-4000);
           context.sendLog(log(context.job.id, stream, line));
           if (stream === "stderr") context.sendProgress(progress(context.job.id, "message", line.slice(0, 500)));
@@ -335,6 +346,41 @@ function environmentPrompt(config: AgentConfig, repo: RepoConfig): string {
 
 function isIgnorableCodexWarning(line: string): boolean {
   return /ERROR\s+codex_core::session:\s+failed to record rollout items:\s+thread .* not found/i.test(line);
+}
+
+function normalizeCodexNetworkFailure(line: string, activeFailure: string): string | null {
+  const text = line.trim();
+  const chatGptBlocked = [
+    /wss:\/\/chatgpt\.com\/backend-api\/codex\/responses/i,
+    /HTTP error:\s*403 Forbidden/i,
+    /Unable to load site/i,
+    /If you are using a VPN, try turning it off/i,
+    /cdn-cgi\/challenge-platform/i,
+    /window\._cf_chl_opt/i,
+    /codexapi::endpoint::responses_websocket/i
+  ].some((pattern) => pattern.test(text));
+
+  if (chatGptBlocked) {
+    return [
+      "Codex could not connect to ChatGPT Codex websocket.",
+      "chatgpt.com returned HTTP 403, usually because the current VPN/proxy route is blocked by ChatGPT/Cloudflare.",
+      "Use another supported-region proxy/VPN route or switch this server agent to OpenAI API-key auth."
+    ].join(" ");
+  }
+
+  if (!activeFailure) return null;
+
+  const isHtmlContinuation = [
+    /^<\/?[a-z][\s>]/i,
+    /^\\?["')]?<\/?[a-z][\s>]/i,
+    /<\/html>|<\/body>|<\/script>|<\/svg>/i,
+    /stroke-linejoin|viewBox|fill-rule|clip-rule/i,
+    /Ray ID|Just a moment|challenge-platform|Cloudflare/i,
+    /document\.createElement|addEventListener|DOMContentLoaded/i,
+    /^["')]?\s*$/
+  ].some((pattern) => pattern.test(text));
+
+  return isHtmlContinuation ? activeFailure : null;
 }
 
 function log(jobId: string, stream: "stdout" | "stderr" | "system", message: string): AgentJobLog {
