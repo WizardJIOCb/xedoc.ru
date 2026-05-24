@@ -1234,7 +1234,7 @@ function orderChatMessagesForDisplay(messages: ChatMessage[], jobs: Job[]) {
       if (job && isJobPromptMessage(message, job.id)) {
         turnMs = messageTimeMs(job.createdAt, createdMs);
       } else if (job && isJobFinalMessage(message, job.id)) {
-        turnMs = messageTimeMs(job.createdAt, createdMs) + 1;
+        turnMs = messageTimeMs(job.finishedAt, createdMs);
       } else if ((message.role === "assistant" || message.role === "tool") && typeof message.metadata?.startedAt === "string") {
         turnMs = messageTimeMs(message.metadata.startedAt, createdMs) + 1;
       }
