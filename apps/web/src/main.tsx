@@ -1457,11 +1457,14 @@ function messageUpdateSignature(message: ChatMessage) {
   ].join(":");
 }
 
-function renderLogs(logs: Log[]) {
-  const visibleLogs = logs
+function visibleDisplayLogs(logs: Log[]) {
+  return logs
     .map((line) => ({ ...line, display: displayLogMessage(line) }))
     .filter((line): line is Log & { display: string } => Boolean(line.display));
+}
 
+function renderLogs(logs: Log[]) {
+  const visibleLogs = visibleDisplayLogs(logs);
   if (!visibleLogs.length) return <div className="empty small-empty">Waiting for logs...</div>;
   return (
     <div className="logs-rich">
@@ -4209,16 +4212,16 @@ function App() {
         </button>
         {expanded && (
           <div className="message-action-details command-details">
-            {actions.map((action, index) => renderCommandCard(message, action, index))}
+            {actions.map((action, index) => renderCommandCard(message.id, action, index))}
           </div>
         )}
       </div>
     );
   }
 
-  function renderCommandCard(message: ChatMessage, action: CodexAction, index: number) {
+  function renderCommandCard(ownerKey: string, action: CodexAction, index: number) {
     const parsed = parseCommandOutput(action.output);
-    const commandKey = `command:${message.id}:${action.id || index}`;
+    const commandKey = `command:${ownerKey}:${action.id || index}`;
     const commandOpen = expandedActions[commandKey] !== false;
     const status = commandStatusLabel(action, parsed.exitCode);
     const body = parsed.body || (action.status.toLowerCase().includes("running") ? "Command is still running..." : "");
@@ -4249,6 +4252,54 @@ function App() {
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+  function renderActiveRunActions() {
+    if (!activeJob) return null;
+    const actions = codexActionEntries(logs);
+    if (!actions.length) return null;
+    const actionKey = `active-actions:${activeJob.id}`;
+    const expanded = Boolean(expandedActions[actionKey]);
+    const running = actions.some((action) => action.status.toLowerCase().includes("running"));
+    return (
+      <div className="message-actions run-actions active-run-actions">
+        <button
+          type="button"
+          onClick={() => setExpandedActions((current) => ({ ...current, [actionKey]: !current[actionKey] }))}
+        >
+          <Terminal size={15} />
+          <span>{running ? "Running" : "Ran"} {actions.length} command{actions.length === 1 ? "" : "s"}</span>
+          <ChevronDown className={expanded ? "open" : ""} size={15} />
+        </button>
+        {expanded && (
+          <div className="message-action-details command-details">
+            {actions.map((action, index) => renderCommandCard(`active:${activeJob.id}`, action, index))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderLiveLogs() {
+    if (!activeJob) return renderLogs(logs);
+    const visibleLogCount = visibleDisplayLogs(logs).length;
+    if (!visibleLogCount) return null;
+    if (!codexActionEntries(logs).length) return renderLogs(logs);
+    const actionKey = `live-logs:${activeJob.id}`;
+    const expanded = Boolean(expandedActions[actionKey]);
+    return (
+      <div className="message-actions run-actions live-log-actions">
+        <button
+          type="button"
+          onClick={() => setExpandedActions((current) => ({ ...current, [actionKey]: !current[actionKey] }))}
+        >
+          <Terminal size={15} />
+          <span>Live log · {visibleLogCount}</span>
+          <ChevronDown className={expanded ? "open" : ""} size={15} />
+        </button>
+        {expanded && renderLogs(logs)}
       </div>
     );
   }
@@ -4347,7 +4398,8 @@ function App() {
             )}
           </div>
         ) : null}
-        {renderLogs(logs)}
+        {renderActiveRunActions()}
+        {renderLiveLogs()}
       </>
     );
   }
