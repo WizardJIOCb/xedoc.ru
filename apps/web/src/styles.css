@@ -650,7 +650,8 @@ textarea:focus {
   gap: 10px;
   height: calc(100dvh - 20px);
   padding-top: 2px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   scrollbar-gutter: stable;
 }
 
@@ -814,6 +815,10 @@ textarea:focus {
   gap: 10px;
   padding: 12px;
   min-width: 0;
+}
+
+.chat-work {
+  overflow: hidden;
 }
 
 .project-grid {
@@ -1907,7 +1912,17 @@ h2 > strong {
 .job-head {
   display: grid;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding: 10px;
+}
+
+.job-head strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-thread {
@@ -1919,6 +1934,11 @@ h2 > strong {
   min-width: 0;
   padding: 12px 18px;
   overflow: hidden;
+}
+
+.chat-thread > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .message {
@@ -2209,6 +2229,8 @@ h2 > strong {
 
 .message-actions > button {
   width: fit-content;
+  max-width: 100%;
+  min-width: 0;
   min-height: 28px;
   display: inline-flex;
   align-items: center;
@@ -2221,6 +2243,12 @@ h2 > strong {
   font-size: 12px;
   font-weight: 650;
   line-height: 1.2;
+}
+
+.message-actions > button span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-action-details {
@@ -2375,7 +2403,10 @@ h2 > strong {
 }
 
 .command-console pre {
+  width: 100%;
+  min-width: 0;
   max-height: 260px;
+  max-width: 100%;
   overflow: auto;
   margin: 0;
   padding: 0;
@@ -2394,6 +2425,8 @@ h2 > strong {
 .command-prompt {
   color: #f2f2ed;
   font-weight: 800;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .command-console-status {
@@ -2440,7 +2473,11 @@ h2 > strong {
 .rich-text ol,
 .rich-text blockquote,
 .rich-text pre {
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .rich-text p {
@@ -2506,6 +2543,7 @@ h2 > strong {
 }
 
 .rich-code {
+  min-width: 0;
   max-width: 100%;
   overflow: auto;
   padding: 10px;
@@ -2518,6 +2556,8 @@ h2 > strong {
   padding: 0;
   border: 0;
   background: transparent;
+  overflow-wrap: normal;
+  word-break: normal;
   white-space: pre;
 }
 
@@ -2768,7 +2808,8 @@ h2 > strong {
 .progress-panel {
   min-width: 0;
   max-width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -2785,10 +2826,13 @@ h2 > strong {
 }
 
 .progress-panel strong {
+  display: block;
   min-width: 0;
+  max-width: 100%;
   font-size: 13px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .progress-label,
@@ -2990,6 +3034,15 @@ pre {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #ffffff;
+  overflow: hidden;
+}
+
+.log-entry .rich-text,
+.log-entry .rich-text p {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .log-entry.stderr {
