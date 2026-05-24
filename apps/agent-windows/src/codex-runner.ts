@@ -102,7 +102,9 @@ export class Runner {
         "Use these file paths as the attached user-provided context."
       ].join("\n")
       : context.job.prompt;
-    const prompt = [environmentPrompt(repo), userPrompt].join("\n\n");
+    const prompt = context.job.codexThreadId
+      ? userPrompt
+      : [environmentPrompt(repo), userPrompt].join("\n\n");
     const modelArgs = context.job.model ? ["-m", context.job.model] : [];
     const reasoningArgs = context.job.reasoningEffort ? ["-c", `model_reasoning_effort="${context.job.reasoningEffort}"`] : [];
     const args = context.job.codexThreadId
