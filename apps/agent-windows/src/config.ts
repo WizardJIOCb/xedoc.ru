@@ -14,7 +14,7 @@ const DeployConfigSchema = z.object({
   sshTarget: z.string().min(1),
   sourceDir: z.string().min(1).default("dist"),
   remoteSubdir: z.string().max(120).optional(),
-  cleanRemote: z.boolean().default(true),
+  cleanRemote: z.boolean().default(false),
   buildCommand: z.object({
     command: z.string().min(1),
     args: z.array(z.string()).default([]),

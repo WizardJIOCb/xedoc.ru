@@ -1517,7 +1517,7 @@ function App() {
   const [projectDeploySourceDir, setProjectDeploySourceDir] = useState("dist");
   const [projectDeployRemoteSubdir, setProjectDeployRemoteSubdir] = useState("");
   const [projectDeployBuildCommand, setProjectDeployBuildCommand] = useState("npm.cmd run build");
-  const [projectDeployCleanRemote, setProjectDeployCleanRemote] = useState(true);
+  const [projectDeployCleanRemote, setProjectDeployCleanRemote] = useState(false);
   const [projectStartPrompt, setProjectStartPrompt] = useState("");
   const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
@@ -2452,7 +2452,7 @@ function App() {
     setProjectDeploySourceDir("dist");
     setProjectDeployRemoteSubdir("");
     setProjectDeployBuildCommand("npm.cmd run build");
-    setProjectDeployCleanRemote(true);
+    setProjectDeployCleanRemote(false);
     setProjectStartPrompt("");
     setOriginalProjectPath("");
     setProjectPanel("new");
@@ -2468,7 +2468,7 @@ function App() {
     setProjectDeploySourceDir(repo.deploy?.sourceDir ?? "dist");
     setProjectDeployRemoteSubdir(repo.deploy?.remoteSubdir ?? "");
     setProjectDeployBuildCommand(formatBuildCommand(repo.deploy));
-    setProjectDeployCleanRemote(repo.deploy?.cleanRemote ?? true);
+    setProjectDeployCleanRemote(repo.deploy?.cleanRemote ?? false);
     setProjectStartPrompt("");
     setOriginalProjectPath(repo.pathMasked);
     setSandbox(repo.defaultSandbox);
@@ -4834,7 +4834,7 @@ function App() {
           </label>
           <label className="checkbox-row">
             <input checked={projectDeployCleanRemote} type="checkbox" onChange={(event) => setProjectDeployCleanRemote(event.target.checked)} />
-            Clean server folder before upload
+            Clean server folder before upload (deletes existing files)
           </label>
           <label>
             Start prompt

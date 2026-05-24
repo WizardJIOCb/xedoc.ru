@@ -387,9 +387,29 @@ async function deployProject(repoId: string): Promise<string> {
     "exit 12;",
     "fi"
   ].join(" ");
+  const protectedCleanMarkers = [
+    ".git",
+    ".env",
+    "data",
+    "apps/server",
+    "package.json",
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock"
+  ];
+  const protectedCleanChecks = protectedCleanMarkers
+    .map((marker) => `[ -e ${shellQuote(`${deployPath}/${marker}`)} ]`)
+    .join(" || ");
+  const protectCleanRemote = repo.deploy.cleanRemote ? [
+    `if ${protectedCleanChecks}; then`,
+    `echo ${shellQuote(`Refusing to clean protected deploy directory: ${deployPath}. Disable cleanRemote or deploy into a dedicated build output subfolder.`)};`,
+    "exit 13;",
+    "fi"
+  ].join(" ") : "";
   const cleanCommand = [
     `mkdir -p ${quotedDeployPath}`,
     protectControllerRoot,
+    protectCleanRemote,
     repo.deploy.cleanRemote ? `find ${quotedDeployPath} -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +` : ""
   ].filter(Boolean).join(" && ");
 
