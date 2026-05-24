@@ -4286,7 +4286,6 @@ function App() {
     if (!activeJob) return renderLogs(logs);
     const visibleLogCount = visibleDisplayLogs(logs).length;
     if (!visibleLogCount) return null;
-    if (!codexActionEntries(logs).length) return renderLogs(logs);
     const actionKey = `live-logs:${activeJob.id}`;
     const expanded = Boolean(expandedActions[actionKey]);
     return (
