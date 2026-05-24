@@ -3034,7 +3034,7 @@ pre {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #ffffff;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .log-entry .rich-text,
@@ -3066,12 +3066,12 @@ pre {
 .system-log-body {
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   color: #374151;
   font-size: 12px;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .log-meta {
