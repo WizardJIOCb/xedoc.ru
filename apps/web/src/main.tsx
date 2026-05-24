@@ -1872,6 +1872,7 @@ function App() {
   const localChatSyncRefreshRef = useRef(0);
   const syncAutoPingRef = useRef("");
   const vscodeRequestSeqRef = useRef(0);
+  const projectActionBusyRef = useRef<Record<string, boolean>>({});
   const pendingVscodeThreadRefreshRef = useRef<Set<string>>(new Set());
   const chatLoadingStartedRef = useRef(0);
   const shellRef = useRef<HTMLElement | null>(null);
@@ -3409,33 +3410,41 @@ function App() {
   }
 
   async function runGitSync() {
-    if (!selectedRepo || !csrf || !gitMessage.trim() || launchBusy) return;
+    if (!selectedRepo || !csrf || !gitMessage.trim() || launchBusy || projectActionBusyRef.current.gitSync) return;
+    projectActionBusyRef.current.gitSync = true;
     const targetChatId = activeChatId || activeChat?.id || "";
     const operationDetails = [`Сообщение коммита: \`${safeMarkdownInlineCode(gitMessage.trim())}\`.`];
     const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("git-sync", "Commit & push", operationDetails) : "";
     setGitBusy(true);
     setActionMenuOpen(false);
     setGitNotice(targetChatId ? "" : "Git sync started...");
-    const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`, {
-      method: "POST",
-      headers: { "x-csrf-token": csrf },
-      body: JSON.stringify({
-        message: gitMessage.trim(),
-        remoteUrl: gitRemoteUrl.trim() || selectedRepo.githubUrl || undefined,
-        chatId: targetChatId || undefined
-      })
-    });
-    const data = await response.json().catch(() => ({}));
-    setGitBusy(false);
-    removeLocalProjectOperationMessage(pendingMessageId);
-    if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
-    if (!response.ok) {
-      if (!targetChatId) setGitNotice(data.output || data.error || "Git sync failed.");
-      return;
+    try {
+      const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({
+          message: gitMessage.trim(),
+          remoteUrl: gitRemoteUrl.trim() || selectedRepo.githubUrl || undefined,
+          chatId: targetChatId || undefined
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      removeLocalProjectOperationMessage(pendingMessageId);
+      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      if (!response.ok) {
+        if (!targetChatId) setGitNotice(data.output || data.error || "Git sync failed.");
+        return;
+      }
+      setGitRemoteUrl("");
+      if (!targetChatId) setGitNotice(data.output || data.status || "Git sync completed.");
+      await refresh();
+    } catch (error) {
+      removeLocalProjectOperationMessage(pendingMessageId);
+      if (!targetChatId) setGitNotice(error instanceof Error ? error.message : "Git sync failed.");
+    } finally {
+      projectActionBusyRef.current.gitSync = false;
+      setGitBusy(false);
     }
-    setGitRemoteUrl("");
-    if (!targetChatId) setGitNotice(data.output || data.status || "Git sync completed.");
-    await refresh();
   }
 
   async function runVscodeCommand(
@@ -3475,27 +3484,35 @@ function App() {
   }
 
   async function deployProject() {
-    if (!selectedRepo || !csrf) return;
+    if (!selectedRepo || !csrf || projectActionBusyRef.current.deploy) return;
+    projectActionBusyRef.current.deploy = true;
     const targetChatId = activeChatId || activeChat?.id || "";
     const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("deploy", "Deploy") : "";
     setDeployBusy(true);
     setActionMenuOpen(false);
     setDeployNotice(targetChatId ? "" : "Deploy started...");
-    const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`, {
-      method: "POST",
-      headers: { "x-csrf-token": csrf },
-      body: JSON.stringify({ chatId: targetChatId || undefined })
-    });
-    const data = await response.json().catch(() => ({}));
-    setDeployBusy(false);
-    removeLocalProjectOperationMessage(pendingMessageId);
-    if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
-    if (!response.ok) {
-      if (!targetChatId) setDeployNotice(data.output || data.error || "Deploy failed.");
-      return;
+    try {
+      const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({ chatId: targetChatId || undefined })
+      });
+      const data = await response.json().catch(() => ({}));
+      removeLocalProjectOperationMessage(pendingMessageId);
+      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      if (!response.ok) {
+        if (!targetChatId) setDeployNotice(data.output || data.error || "Deploy failed.");
+        return;
+      }
+      if (!targetChatId) setDeployNotice(data.output || "Deploy completed.");
+      await refresh();
+    } catch (error) {
+      removeLocalProjectOperationMessage(pendingMessageId);
+      if (!targetChatId) setDeployNotice(error instanceof Error ? error.message : "Deploy failed.");
+    } finally {
+      projectActionBusyRef.current.deploy = false;
+      setDeployBusy(false);
     }
-    if (!targetChatId) setDeployNotice(data.output || "Deploy completed.");
-    await refresh();
   }
 
   async function configureNginx() {

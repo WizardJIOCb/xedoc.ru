@@ -102,26 +102,36 @@ const projectRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "project.result" }>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  agentId: string;
+  connectionId: string;
 }>();
 const gitRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "git.result" }>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  agentId: string;
+  connectionId: string;
 }>();
 const deployRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "deploy.result" }>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  agentId: string;
+  connectionId: string;
 }>();
 const nginxRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "nginx.result" }>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  agentId: string;
+  connectionId: string;
 }>();
 const sslRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "ssl.result" }>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  agentId: string;
+  connectionId: string;
 }>();
 const vscodeRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "vscode.result" }>) => void;
@@ -367,8 +377,14 @@ function requestAgentProject(
       projectRequests.delete(message.requestId);
       reject(new Error("agent_timeout"));
     }, 30000);
-    projectRequests.set(message.requestId, { resolve, reject, timer });
-    agent.send(message);
+    projectRequests.set(message.requestId, { resolve, reject, timer, agentId, connectionId: agent.connectionId });
+    try {
+      agent.send(message);
+    } catch (error) {
+      clearTimeout(timer);
+      projectRequests.delete(message.requestId);
+      reject(error instanceof Error ? error : new Error("agent_send_failed"));
+    }
   });
 }
 
@@ -383,8 +399,14 @@ function requestAgentGit(
       gitRequests.delete(message.requestId);
       reject(new Error("agent_timeout"));
     }, 120000);
-    gitRequests.set(message.requestId, { resolve, reject, timer });
-    agent.send(message);
+    gitRequests.set(message.requestId, { resolve, reject, timer, agentId, connectionId: agent.connectionId });
+    try {
+      agent.send(message);
+    } catch (error) {
+      clearTimeout(timer);
+      gitRequests.delete(message.requestId);
+      reject(error instanceof Error ? error : new Error("agent_send_failed"));
+    }
   });
 }
 
@@ -399,8 +421,14 @@ function requestAgentDeploy(
       deployRequests.delete(message.requestId);
       reject(new Error("agent_timeout"));
     }, 300000);
-    deployRequests.set(message.requestId, { resolve, reject, timer });
-    agent.send(message);
+    deployRequests.set(message.requestId, { resolve, reject, timer, agentId, connectionId: agent.connectionId });
+    try {
+      agent.send(message);
+    } catch (error) {
+      clearTimeout(timer);
+      deployRequests.delete(message.requestId);
+      reject(error instanceof Error ? error : new Error("agent_send_failed"));
+    }
   });
 }
 
@@ -415,8 +443,14 @@ function requestAgentNginx(
       nginxRequests.delete(message.requestId);
       reject(new Error("agent_timeout"));
     }, 120000);
-    nginxRequests.set(message.requestId, { resolve, reject, timer });
-    agent.send(message);
+    nginxRequests.set(message.requestId, { resolve, reject, timer, agentId, connectionId: agent.connectionId });
+    try {
+      agent.send(message);
+    } catch (error) {
+      clearTimeout(timer);
+      nginxRequests.delete(message.requestId);
+      reject(error instanceof Error ? error : new Error("agent_send_failed"));
+    }
   });
 }
 
@@ -431,8 +465,14 @@ function requestAgentSsl(
       sslRequests.delete(message.requestId);
       reject(new Error("agent_timeout"));
     }, 300000);
-    sslRequests.set(message.requestId, { resolve, reject, timer });
-    agent.send(message);
+    sslRequests.set(message.requestId, { resolve, reject, timer, agentId, connectionId: agent.connectionId });
+    try {
+      agent.send(message);
+    } catch (error) {
+      clearTimeout(timer);
+      sslRequests.delete(message.requestId);
+      reject(error instanceof Error ? error : new Error("agent_send_failed"));
+    }
   });
 }
 
@@ -452,7 +492,26 @@ function requestAgentVscode(
   });
 }
 
-function rejectVscodeRequestsForConnection(agentId: string, connectionId: string, reason: string): void {
+function rejectAgentRequestMap(
+  requests: Map<string, { reject: (error: Error) => void; timer: NodeJS.Timeout; agentId: string; connectionId: string }>,
+  agentId: string,
+  connectionId: string,
+  reason: string
+): void {
+  for (const [requestId, pending] of requests) {
+    if (pending.agentId !== agentId || pending.connectionId !== connectionId) continue;
+    clearTimeout(pending.timer);
+    requests.delete(requestId);
+    pending.reject(new Error(reason));
+  }
+}
+
+function rejectAgentRequestsForConnection(agentId: string, connectionId: string, reason: string): void {
+  rejectAgentRequestMap(projectRequests, agentId, connectionId, reason);
+  rejectAgentRequestMap(gitRequests, agentId, connectionId, reason);
+  rejectAgentRequestMap(deployRequests, agentId, connectionId, reason);
+  rejectAgentRequestMap(nginxRequests, agentId, connectionId, reason);
+  rejectAgentRequestMap(sslRequests, agentId, connectionId, reason);
   for (const [requestId, pending] of vscodeRequests) {
     if (pending.agentId !== agentId || pending.connectionId !== connectionId) continue;
     clearTimeout(pending.timer);
@@ -3033,7 +3092,7 @@ async function createApp(): Promise<FastifyInstance> {
     const connectionId = id("agent_ws");
     const previous = agents.get(agent.id);
     if (previous) {
-      rejectVscodeRequestsForConnection(agent.id, previous.connectionId, "agent_replaced");
+      rejectAgentRequestsForConnection(agent.id, previous.connectionId, "agent_replaced");
       previous.close();
     }
     const connection: AgentConnection = {
@@ -3246,7 +3305,7 @@ async function createApp(): Promise<FastifyInstance> {
     });
 
     socket.on("close", () => {
-      rejectVscodeRequestsForConnection(agent.id, connectionId, "agent_disconnected");
+      rejectAgentRequestsForConnection(agent.id, connectionId, "agent_disconnected");
       if (agents.get(agent.id)?.connectionId !== connectionId) return;
       agents.delete(agent.id);
       setTimeout(() => {
