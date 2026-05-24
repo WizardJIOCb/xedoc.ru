@@ -821,6 +821,7 @@ function stripLeadingCodexContextBlocks(content: string): string {
   for (;;) {
     const before = value;
     value = value
+      .replace(/^\s*Codex web agent environment:\s*(?:\n[ \t]*-[^\n]*)+\s*/i, "")
       .replace(/^\s*#?\s*AGENTS\.md instructions for[^\n]*\n+\s*<INSTRUCTIONS>\s*[\s\S]*?<\/INSTRUCTIONS>\s*/i, "")
       .replace(/^\s*<INSTRUCTIONS>\s*[\s\S]*?<\/INSTRUCTIONS>\s*/i, "")
       .trimStart();
@@ -835,6 +836,7 @@ function stripLeadingCodexContextBlocks(content: string): string {
 
   if (/^\s*#?\s*AGENTS\.md instructions for\b/i.test(value) && /<INSTRUCTIONS>/i.test(value)) return "";
   if (/^\s*AGENTS\.md\s+Project rules\b/i.test(value)) return "";
+  if (/^\s*Codex web agent environment:\s*$/i.test(value)) return "";
   return value.trim();
 }
 
@@ -1102,6 +1104,13 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
         .get(chat.id, message.source, message.externalId) as ChatMessageRow | undefined
       : undefined;
     if (existing) {
+      const duplicate = db.prepare("SELECT id FROM chat_messages WHERE chat_id = ? AND role = ? AND content = ? AND id != ? LIMIT 1")
+        .get(chat.id, message.role, content, existing.id) as { id: string } | undefined;
+      if (duplicate) {
+        db.prepare("DELETE FROM chat_messages WHERE id = ?").run(existing.id);
+        changed = true;
+        continue;
+      }
       const messageChanged = existing.role !== message.role
         || existing.content !== content
         || existing.metadata_json !== metadataJson
