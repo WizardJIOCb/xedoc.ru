@@ -1749,6 +1749,7 @@ function App() {
 
   const selectedRepo = useMemo(() => repos.find((repo) => `${repo.agentId}:${repo.id}` === repoKey), [repoKey, repos]);
   const selectedProjectUrl = useMemo(() => projectUrl(selectedRepo?.domain), [selectedRepo?.domain]);
+  const agentNameById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents]);
   const syncRepo = useMemo(() => (
     repos.find((repo) => `${repo.agentId}:${repo.id}` === syncRepoKey)
     ?? selectedRepo
@@ -1772,6 +1773,8 @@ function App() {
   const selectedAgent = selectedRepoAgent ?? onlineAgent ?? agents[0];
   const projectFormAgent = agents.find((agent) => agent.id === projectAgentId) ?? selectedAgent;
   const online = Boolean(selectedAgent && selectedAgent.status === "online");
+  const selectedAgentStatusLabel = selectedAgent ? `${selectedAgent.name} ${online ? "online" : "offline"}` : (online ? "Agent online" : "Agent offline");
+  const repoAgentLabel = (repo: Repo) => agentNameById.get(repo.agentId) ?? repo.agentId;
   const selectedRepoAgentHost = selectedRepoAgent?.hostname?.trim().toLowerCase();
   const onlineAgentOnSameHost = selectedRepoAgent && selectedRepoAgent.status !== "online"
     ? agents.find((agent) => (
@@ -5008,7 +5011,7 @@ function App() {
                         )}
                         <span>{repo.name}</span>
                       </span>
-                      <small>{repo.currentBranch || "no branch"} · {repo.dirty ? "dirty" : "clean"}</small>
+                      <small>{repoAgentLabel(repo)} · {repo.currentBranch || "no branch"} · {repo.dirty ? "dirty" : "clean"}</small>
                     </button>
                     {selected && (
                       <div className="nav-project-chats">
@@ -5126,7 +5129,7 @@ function App() {
             </button>
           </div>
           <div className="top-title">
-            <span className={`status ${online ? "ok" : "bad"}`}>{online ? <Wifi size={16} /> : <WifiOff size={16} />} {online ? "Home PC online" : "Home PC offline"}</span>
+            <span className={`status ${online ? "ok" : "bad"}`}>{online ? <Wifi size={16} /> : <WifiOff size={16} />} {selectedAgentStatusLabel}</span>
             <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
           </div>
           <div className="top-actions">
@@ -5162,6 +5165,7 @@ function App() {
               <article className="project-card" key={`${repo.agentId}:${repo.id}`}>
                 <button className="project-main" onClick={() => selectProject(repo)}>
                   <strong>{repo.name}</strong>
+                  <span><Server size={14} /> {repoAgentLabel(repo)}</span>
                   <span><GitBranch size={14} /> {repo.currentBranch || "no branch"} · {repo.dirty ? "dirty" : "clean"}</span>
                   <small>{repo.pathMasked}</small>
                   {repo.domain && <small>{repo.domain}</small>}
