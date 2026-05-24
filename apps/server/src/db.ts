@@ -10,6 +10,7 @@ export type UserRow = {
   nickname: string | null;
   bio: string | null;
   avatar_data_url: string | null;
+  blocked_at: string | null;
   updated_at: string | null;
   created_at: string;
 };
@@ -183,6 +184,7 @@ export function openDb(path: string): DatabaseSync {
       nickname TEXT,
       bio TEXT,
       avatar_data_url TEXT,
+      blocked_at TEXT,
       updated_at TEXT,
       created_at TEXT NOT NULL
     );
@@ -340,6 +342,12 @@ export function openDb(path: string): DatabaseSync {
       deleted_at TEXT NOT NULL,
       PRIMARY KEY (agent_id, repo_id, source, external_id)
     );
+    CREATE TABLE IF NOT EXISTS user_activity_days (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      day TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, day)
+    );
     CREATE INDEX IF NOT EXISTS idx_jobs_agent_status ON jobs(agent_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_chats_repo_updated ON chats(agent_id, repo_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_logs_job_at ON job_logs(job_id, at);
@@ -350,6 +358,7 @@ export function openDb(path: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS idx_chat_shares_chat ON chat_shares(chat_id);
     CREATE INDEX IF NOT EXISTS idx_chat_shares_agent ON chat_shares(agent_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_user_activity_day ON user_activity_days(day);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_provider_user ON oauth_connections(provider, provider_user_id) WHERE provider_user_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON chat_messages(chat_id, source, external_id) WHERE external_id IS NOT NULL;
   `);
@@ -366,6 +375,9 @@ export function openDb(path: string): DatabaseSync {
   if (!userColumns.some((column) => column.name === "avatar_data_url")) {
     db.exec("ALTER TABLE users ADD COLUMN avatar_data_url TEXT");
   }
+  if (!userColumns.some((column) => column.name === "blocked_at")) {
+    db.exec("ALTER TABLE users ADD COLUMN blocked_at TEXT");
+  }
   if (!userColumns.some((column) => column.name === "updated_at")) {
     db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT");
   }
@@ -379,6 +391,7 @@ export function openDb(path: string): DatabaseSync {
   if (firstUser && !adminUser) {
     db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(firstUser.id);
   }
+  db.prepare("UPDATE users SET role = 'admin' WHERE lower(email) = lower(?)").run("owner@codex.rodion.pro");
   const agentColumns = db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
   if (!agentColumns.some((column) => column.name === "user_id")) {
     db.exec("ALTER TABLE agents ADD COLUMN user_id TEXT");

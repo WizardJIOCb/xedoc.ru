@@ -1362,6 +1362,353 @@ textarea:focus {
   font-weight: 800;
 }
 
+.admin-page {
+  height: 100%;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, #fbfbf8 0%, var(--bg) 300px),
+    var(--bg);
+}
+
+.admin-header,
+.admin-card {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+}
+
+.admin-header h1,
+.admin-header p,
+.admin-user-title h2,
+.admin-user-title p {
+  margin: 0;
+}
+
+.admin-header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #0f8f6b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-header p,
+.admin-user-title p {
+  color: var(--muted);
+}
+
+.admin-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+a.secondary {
+  text-decoration: none;
+}
+
+.admin-tabs,
+.admin-users-layout {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+}
+
+.admin-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-tabs button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: #ffffff;
+  font-weight: 900;
+}
+
+.admin-tabs button.active {
+  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.admin-users-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.admin-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.admin-user-list {
+  max-height: calc(100vh - 190px);
+  overflow: auto;
+}
+
+.admin-user-row,
+.admin-chat-list button {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  text-align: left;
+  color: var(--text);
+  background: #ffffff;
+}
+
+.admin-user-row.active,
+.admin-chat-list button.active {
+  border-color: rgba(16, 163, 127, 0.38);
+  background: rgba(16, 163, 127, 0.06);
+}
+
+.admin-user-row.blocked {
+  background: rgba(217, 45, 32, 0.04);
+}
+
+.admin-user-row span,
+.admin-chat-list button span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-user-row small,
+.admin-chat-list small,
+.admin-chat-list em,
+.admin-stat-grid span {
+  color: var(--muted);
+}
+
+.admin-user-row strong,
+.admin-user-row small,
+.admin-chat-list strong,
+.admin-chat-list small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-user-row em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-user-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-status {
+  display: inline-flex;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #0f8f6b;
+  background: rgba(16, 163, 127, 0.1);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-status.blocked {
+  color: #8a1f15;
+  background: rgba(217, 45, 32, 0.1);
+}
+
+.admin-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-stat-grid.compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-stat-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+}
+
+.admin-stat-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-action-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(150px, auto) minmax(210px, auto);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.admin-action-grid form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.admin-action-grid button,
+.admin-action-grid .danger-button {
+  min-height: 38px;
+}
+
+.admin-chats,
+.admin-chat-list,
+.admin-chat-view {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-chat-list {
+  max-height: 280px;
+  overflow: auto;
+}
+
+.admin-chat-list em {
+  font-style: normal;
+  font-size: 12px;
+  text-align: right;
+}
+
+.admin-chat-view {
+  max-height: 520px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbfa;
+}
+
+.admin-chat-message {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.admin-chat-message.user {
+  margin-left: min(80px, 12%);
+}
+
+.admin-chat-message.assistant,
+.admin-chat-message.tool {
+  margin-right: min(80px, 12%);
+}
+
+.admin-stats-panel {
+  width: min(1180px, 100%);
+}
+
+.admin-chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-chart-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-chart-controls label::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--metric-color, var(--accent-2));
+}
+
+.admin-chart-controls input {
+  width: auto;
+}
+
+.admin-chart-wrap {
+  position: relative;
+  min-height: 260px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.admin-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.admin-chart line {
+  stroke: #e5e7eb;
+  stroke-width: 1;
+}
+
+.admin-chart text {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.admin-chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-weight: 800;
+  pointer-events: none;
+}
+
 .code-textarea {
   min-height: 220px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -3737,6 +4084,11 @@ button:disabled {
   .workspace,
   .project-workspace,
   .profile-grid,
+  .admin-users-layout,
+  .admin-stat-grid,
+  .admin-stat-grid.compact,
+  .admin-action-grid,
+  .admin-action-grid form,
   .sync-setup-card,
   .sync-steps,
   .sync-grid,
@@ -3762,6 +4114,39 @@ button:disabled {
   }
 
   .agent-connection-title strong {
+    text-align: left;
+  }
+
+  .admin-page {
+    padding: 8px;
+  }
+
+  .admin-header,
+  .admin-user-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-header-actions {
+    justify-content: stretch;
+  }
+
+  .admin-header-actions .secondary,
+  .admin-action-grid button {
+    width: 100%;
+  }
+
+  .admin-user-list,
+  .admin-chat-list,
+  .admin-chat-view {
+    max-height: none;
+  }
+
+  .admin-chat-list button {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-chat-list em {
     text-align: left;
   }
 

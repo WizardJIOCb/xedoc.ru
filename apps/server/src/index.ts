@@ -70,6 +70,7 @@ const AGENT_OFFLINE_GRACE_MS = 8000;
 const WEBSOCKET_MAX_PAYLOAD_BYTES = 10 * 1024 * 1024;
 const REGISTRATION_GATE_COOKIE = "cmc_registration_gate";
 const REGISTRATION_GATE_VALUE = "sure";
+const OWNER_ADMIN_EMAIL = "owner@codex.rodion.pro";
 
 type AgentConnection = {
   id: string;
@@ -99,6 +100,12 @@ type OAuthProfile = {
   providerUserId: string;
   email: string;
   displayName?: string;
+};
+type AdminChatRow = ChatRow & {
+  agent_name: string;
+  repo_name: string | null;
+  message_count: number;
+  job_count: number;
 };
 const projectRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "project.result" }>) => void;
@@ -286,9 +293,20 @@ function serializeUser(user: UserRow) {
     nickname: user.nickname,
     bio: user.bio,
     avatarDataUrl: user.avatar_data_url,
+    blockedAt: user.blocked_at,
     createdAt: user.created_at,
     updatedAt: user.updated_at
   };
+}
+
+function markUserActivity(userId: string): void {
+  const stamp = nowIso();
+  const day = stamp.slice(0, 10);
+  db.prepare(`
+    INSERT INTO user_activity_days (user_id,day,last_seen_at)
+    VALUES (?,?,?)
+    ON CONFLICT(user_id, day) DO UPDATE SET last_seen_at=excluded.last_seen_at
+  `).run(userId, day, stamp);
 }
 
 function profileStats(user: AuthUser) {
@@ -328,6 +346,67 @@ function profileStats(user: AuthUser) {
     projects: repoStats.projects,
     generationSeconds: jobStats.seconds ?? 0
   };
+}
+
+function adminUserStats(userId: string) {
+  return profileStats({ id: userId, role: "user" });
+}
+
+function serializeAdminUser(user: UserRow) {
+  const stats = adminUserStats(user.id);
+  const agentStats = db.prepare("SELECT COUNT(*) AS agents FROM agents WHERE user_id = ?").get(user.id) as { agents: number };
+  const lastActive = db.prepare("SELECT MAX(last_seen_at) AS lastActiveAt FROM user_activity_days WHERE user_id = ?")
+    .get(user.id) as { lastActiveAt: string | null };
+  return {
+    ...serializeUser(user),
+    agents: agentStats.agents,
+    stats,
+    lastActiveAt: lastActive.lastActiveAt
+  };
+}
+
+function adminStatsSeries(days = 30) {
+  const safeDays = Math.max(7, Math.min(120, Math.floor(days)));
+  const today = new Date(nowIso().slice(0, 10));
+  const dayKeys = Array.from({ length: safeDays }, (_, index) => {
+    const date = new Date(today);
+    date.setUTCDate(today.getUTCDate() - (safeDays - index - 1));
+    return date.toISOString().slice(0, 10);
+  });
+  const activityStart = new Date(dayKeys[0] ?? today.toISOString().slice(0, 10));
+  activityStart.setUTCDate(activityStart.getUTCDate() - 30);
+  const activityRows = db.prepare("SELECT user_id, day FROM user_activity_days WHERE day >= ?")
+    .all(activityStart.toISOString().slice(0, 10)) as Array<{ user_id: string; day: string }>;
+  const registrations = db.prepare(`
+    SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count
+    FROM users
+    WHERE created_at >= ?
+    GROUP BY day
+  `).all(dayKeys[0] ?? "1970-01-01") as Array<{ day: string; count: number }>;
+  const registrationsByDay = new Map(registrations.map((row) => [row.day, row.count]));
+  const activeByDay = new Map<string, Set<string>>();
+  for (const row of activityRows) {
+    const set = activeByDay.get(row.day) ?? new Set<string>();
+    set.add(row.user_id);
+    activeByDay.set(row.day, set);
+  }
+  const activeUsersInRange = (endDay: string, length: number) => {
+    const end = new Date(endDay);
+    const start = new Date(end);
+    start.setUTCDate(end.getUTCDate() - (length - 1));
+    const users = new Set<string>();
+    for (const row of activityRows) {
+      if (row.day >= start.toISOString().slice(0, 10) && row.day <= endDay) users.add(row.user_id);
+    }
+    return users.size;
+  };
+  return dayKeys.map((day) => ({
+    day,
+    dau: activeByDay.get(day)?.size ?? 0,
+    wau: activeUsersInRange(day, 7),
+    mau: activeUsersInRange(day, 30),
+    registrations: registrationsByDay.get(day) ?? 0
+  }));
 }
 
 function visibleAgentIds(user: AuthUser): string[] {
@@ -1542,6 +1621,16 @@ function serializeChat(chat: ChatRow) {
   };
 }
 
+function serializeAdminChat(chat: AdminChatRow) {
+  return {
+    ...serializeChat(chat),
+    agentName: chat.agent_name,
+    repoName: chat.repo_name,
+    messageCount: chat.message_count,
+    jobCount: chat.job_count
+  };
+}
+
 function publicShareUrl(request: { protocol: string; hostname: string }, token: string): string {
   return `${publicOrigin(request)}/share/${encodeURIComponent(token)}`;
 }
@@ -2213,6 +2302,7 @@ function userCount(): number {
 
 async function createUserSession(reply: FastifyReply, userId: string) {
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow;
+  if (user.blocked_at) throw new Error("user_blocked");
   const session = await createSession(db, user.id);
   setSessionCookie(reply, config, session.id);
   return { user: serializeUser(user), csrfToken: session.csrf_token };
@@ -2242,7 +2332,7 @@ async function createOrLoginOAuthUser(profile: OAuthProfile, linkUserId?: string
   if (!user) {
     if (!allowCreate) throw new Error("registration_closed");
     const userId = id("usr");
-    const role = userCount() === 0 ? "admin" : "user";
+    const role = profile.email === OWNER_ADMIN_EMAIL || userCount() === 0 ? "admin" : "user";
     db.prepare("INSERT INTO users (id,email,password_hash,role,nickname,created_at) VALUES (?,?,?,?,?,?)")
       .run(userId, profile.email, await hashSecret(randomToken("oauth_password")), role, null, stamp);
     user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow;
@@ -2278,6 +2368,11 @@ async function createApp(): Promise<FastifyInstance> {
         setRegistrationGateCookie(reply);
       }
     }
+  });
+
+  app.addHook("preHandler", async (request) => {
+    const auth = getSession(db, request);
+    if (auth) markUserActivity(auth.user.id);
   });
 
   app.get("/api/health", async () => ({ ok: true, now: nowIso() }));
@@ -2342,7 +2437,7 @@ async function createApp(): Promise<FastifyInstance> {
       return reply.redirect(safeReturnTo(row.return_to ?? "/"));
     } catch (error) {
       request.log.warn({ provider, error: error instanceof Error ? error.message : String(error) }, "OAuth callback failed");
-      return reply.redirect(`/?oauth_error=${encodeURIComponent(error instanceof Error && error.message === "registration_closed" ? "registration_closed" : "oauth_failed")}`);
+      return reply.redirect(`/?oauth_error=${encodeURIComponent(error instanceof Error && ["registration_closed", "user_blocked"].includes(error.message) ? error.message : "oauth_failed")}`);
     }
   });
 
@@ -2413,6 +2508,7 @@ async function createApp(): Promise<FastifyInstance> {
     const email = body.email?.trim().toLowerCase();
     if (!email || !body.password) return reply.code(400).send({ error: "email_and_password_required" });
     const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as UserRow | undefined;
+    if (user?.blocked_at) return reply.code(403).send({ error: "user_blocked" });
     if (!user || !(await verifySecret(body.password, user.password_hash))) {
       return reply.code(401).send({ error: "invalid_login" });
     }
@@ -2434,8 +2530,9 @@ async function createApp(): Promise<FastifyInstance> {
       if (nicknameOwner) return reply.code(409).send({ error: "nickname_taken" });
     }
     const userId = id("usr");
+    const role = email === OWNER_ADMIN_EMAIL || userCount() === 0 ? "admin" : "user";
     db.prepare("INSERT INTO users (id,email,password_hash,role,nickname,created_at) VALUES (?,?,?,?,?,?)")
-      .run(userId, email, await hashSecret(parsed.data.password), userCount() === 0 ? "admin" : "user", nickname, nowIso());
+      .run(userId, email, await hashSecret(parsed.data.password), role, nickname, nowIso());
     const session = await createUserSession(reply, userId);
     clearRegistrationGateCookie(reply);
     return reply.code(201).send(session);
@@ -2468,6 +2565,86 @@ async function createApp(): Promise<FastifyInstance> {
     db.prepare("INSERT INTO users (id,email,password_hash,role,created_at) VALUES (?,?,?,?,?)")
       .run(userId, email, await hashSecret(parsed.data.password), parsed.data.role, nowIso());
     return reply.code(201).send({ user: { id: userId, email, role: parsed.data.role } });
+  });
+
+  app.get("/api/admin/users", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireAdminUser(auth, reply)) return;
+    const rows = db.prepare("SELECT * FROM users ORDER BY created_at DESC").all() as UserRow[];
+    return { users: rows.map(serializeAdminUser) };
+  });
+
+  app.post("/api/admin/users/:id/password", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply) || !requireAdminUser(auth, reply)) return;
+    const userId = (request.params as { id: string }).id;
+    const body = request.body as { password?: unknown } | undefined;
+    const password = typeof body?.password === "string" ? body.password : "";
+    if (password.length < 8) return reply.code(400).send({ error: "invalid_password" });
+    const target = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow | undefined;
+    if (!target) return reply.code(404).send({ error: "user_not_found" });
+    db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+      .run(await hashSecret(password), nowIso(), userId);
+    return { ok: true, user: serializeAdminUser(db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow) };
+  });
+
+  app.post("/api/admin/users/:id/block", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply) || !requireAdminUser(auth, reply)) return;
+    const userId = (request.params as { id: string }).id;
+    if (userId === auth.user.id) return reply.code(400).send({ error: "cannot_block_self" });
+    const body = request.body as { blocked?: unknown } | undefined;
+    if (typeof body?.blocked !== "boolean") return reply.code(400).send({ error: "invalid_block_state" });
+    const target = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow | undefined;
+    if (!target) return reply.code(404).send({ error: "user_not_found" });
+    const stamp = nowIso();
+    db.prepare("UPDATE users SET blocked_at = ?, updated_at = ? WHERE id = ?")
+      .run(body.blocked ? stamp : null, stamp, userId);
+    if (body.blocked) db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+    return { ok: true, user: serializeAdminUser(db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow) };
+  });
+
+  app.post("/api/admin/users/:id/impersonate", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply) || !requireAdminUser(auth, reply)) return;
+    const userId = (request.params as { id: string }).id;
+    const target = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow | undefined;
+    if (!target) return reply.code(404).send({ error: "user_not_found" });
+    if (target.blocked_at) return reply.code(403).send({ error: "user_blocked" });
+    const session = await createSession(db, target.id);
+    setSessionCookie(reply, config, session.id);
+    return { user: serializeUser(target), csrfToken: session.csrf_token };
+  });
+
+  app.get("/api/admin/users/:id/chats", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireAdminUser(auth, reply)) return;
+    const userId = (request.params as { id: string }).id;
+    const target = db.prepare("SELECT id FROM users WHERE id = ?").get(userId) as { id: string } | undefined;
+    if (!target) return reply.code(404).send({ error: "user_not_found" });
+    const rows = db.prepare(`
+      SELECT
+        c.*,
+        a.name AS agent_name,
+        r.name AS repo_name,
+        (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count,
+        (SELECT COUNT(*) FROM jobs j WHERE j.chat_id = c.id) AS job_count
+      FROM chats c
+      JOIN agents a ON a.id = c.agent_id
+      LEFT JOIN repos r ON r.agent_id = c.agent_id AND r.id = c.repo_id
+      WHERE a.user_id = ?
+      ORDER BY c.updated_at DESC
+      LIMIT 300
+    `).all(userId) as AdminChatRow[];
+    return { chats: rows.map(serializeAdminChat) };
+  });
+
+  app.get("/api/admin/stats", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireAdminUser(auth, reply)) return;
+    const query = request.query as { days?: string };
+    const days = Number(query.days ?? 30);
+    return { series: adminStatsSeries(Number.isFinite(days) ? days : 30) };
   });
 
   app.get("/api/agent/package.zip", async (_request, reply) => {

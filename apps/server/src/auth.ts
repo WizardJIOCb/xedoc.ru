@@ -54,6 +54,10 @@ export function getSession(db: DatabaseSync, request: FastifyRequest): { session
   if (!session || Date.parse(session.expires_at) < Date.now()) return null;
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(session.user_id) as UserRow | undefined;
   if (!user) return null;
+  if (user.blocked_at) {
+    db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id);
+    return null;
+  }
   return { session, user };
 }
 

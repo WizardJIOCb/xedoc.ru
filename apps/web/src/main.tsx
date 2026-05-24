@@ -128,6 +128,7 @@ type User = {
   nickname?: string | null;
   bio?: string | null;
   avatarDataUrl?: string | null;
+  blockedAt?: string | null;
   createdAt?: string;
   updatedAt?: string | null;
 };
@@ -140,6 +141,29 @@ type ProfileStats = {
   projects: number;
   generationSeconds: number;
 };
+
+type AdminUser = User & {
+  agents: number;
+  stats: ProfileStats;
+  lastActiveAt?: string | null;
+};
+
+type AdminChat = Chat & {
+  agentName: string;
+  repoName?: string | null;
+  messageCount: number;
+  jobCount: number;
+};
+
+type AdminStatsPoint = {
+  day: string;
+  dau: number;
+  wau: number;
+  mau: number;
+  registrations: number;
+};
+
+type AdminStatsMetric = "dau" | "wau" | "mau" | "registrations";
 
 type OAuthProvider = {
   provider: "google" | "github" | "vk" | "mailru";
@@ -1067,6 +1091,57 @@ function renderMessageAttachments(attachments: MessageAttachment[] | undefined, 
   );
 }
 
+const ADMIN_METRIC_META: Record<AdminStatsMetric, { label: string; color: string }> = {
+  dau: { label: "DAU", color: "#0f8f6b" },
+  wau: { label: "WAU", color: "#2563eb" },
+  mau: { label: "MAU", color: "#7c3aed" },
+  registrations: { label: "Регистрации", color: "#c2410c" }
+};
+
+function formatAdminDay(day: string) {
+  const date = new Date(`${day}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return day;
+  return date.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+}
+
+function AdminStatsChart({ points, visible }: { points: AdminStatsPoint[]; visible: Record<AdminStatsMetric, boolean> }) {
+  const metrics = (Object.keys(ADMIN_METRIC_META) as AdminStatsMetric[]).filter((metric) => visible[metric]);
+  const chartWidth = 760;
+  const chartHeight = 260;
+  const padding = { left: 44, right: 18, top: 18, bottom: 34 };
+  const plotWidth = chartWidth - padding.left - padding.right;
+  const plotHeight = chartHeight - padding.top - padding.bottom;
+  const maxValue = Math.max(1, ...points.flatMap((point) => metrics.map((metric) => point[metric])));
+  const xFor = (index: number) => padding.left + (points.length <= 1 ? plotWidth / 2 : (plotWidth * index) / (points.length - 1));
+  const yFor = (value: number) => padding.top + plotHeight - (plotHeight * value) / maxValue;
+  const ticks = [0, Math.ceil(maxValue / 2), maxValue];
+
+  return (
+    <div className="admin-chart-wrap">
+      <svg className="admin-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="График статистики">
+        {ticks.map((tick) => (
+          <g key={tick}>
+            <line x1={padding.left} x2={chartWidth - padding.right} y1={yFor(tick)} y2={yFor(tick)} />
+            <text x={padding.left - 10} y={yFor(tick) + 4} textAnchor="end">{tick}</text>
+          </g>
+        ))}
+        {points.length > 0 && (
+          <>
+            <text x={padding.left} y={chartHeight - 10}>{formatAdminDay(points[0]?.day ?? "")}</text>
+            <text x={chartWidth - padding.right} y={chartHeight - 10} textAnchor="end">{formatAdminDay(points[points.length - 1]?.day ?? "")}</text>
+          </>
+        )}
+        {metrics.map((metric) => {
+          const pointsText = points.map((point, index) => `${xFor(index)},${yFor(point[metric])}`).join(" ");
+          return <polyline fill="none" key={metric} points={pointsText} stroke={ADMIN_METRIC_META[metric].color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />;
+        })}
+      </svg>
+      {!metrics.length && <div className="admin-chart-empty">Включи хотя бы одну линию.</div>}
+      {!points.length && <div className="admin-chart-empty">Статистики пока нет.</div>}
+    </div>
+  );
+}
+
 function shareTokenFromLocation() {
   const match = window.location.pathname.match(/^\/share\/([^/?#]+)/);
   return match ? decodeURIComponent(match[1] ?? "") : "";
@@ -1661,6 +1736,7 @@ function projectOperationPendingContent(label: string, repoName: string, details
 
 function App() {
   const registrationOpen = useMemo(registrationOpenFromLocation, []);
+  const isAdminRoute = useMemo(() => window.location.pathname.replace(/\/+$/g, "") === "/admin", []);
   const [csrf, setCsrf] = useState<string>();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [email, setEmail] = useState("");
@@ -1764,6 +1840,20 @@ function App() {
   const [showChatScrollBottom, setShowChatScrollBottom] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [adminTab, setAdminTab] = useState<"users" | "stats">("users");
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminSelectedUserId, setAdminSelectedUserId] = useState("");
+  const [adminChats, setAdminChats] = useState<AdminChat[]>([]);
+  const [adminOpenedChat, setAdminOpenedChat] = useState<{ chat: Chat; messages: ChatMessage[]; jobs: Job[] } | null>(null);
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminNotice, setAdminNotice] = useState("");
+  const [adminStats, setAdminStats] = useState<AdminStatsPoint[]>([]);
+  const [adminStatsVisible, setAdminStatsVisible] = useState<Record<AdminStatsMetric, boolean>>({
+    dau: true,
+    wau: true,
+    mau: true,
+    registrations: true
+  });
 
   const selectedRepo = useMemo(() => repos.find((repo) => `${repo.agentId}:${repo.id}` === repoKey), [repoKey, repos]);
   const selectedProjectUrl = useMemo(() => projectUrl(selectedRepo?.domain), [selectedRepo?.domain]);
@@ -2211,6 +2301,31 @@ function App() {
     if (currentUser?.role !== "admin") return;
     const response = await api("/api/users");
     if (response.ok) setUsers((await response.json()).users);
+  }
+
+  async function loadAdminUsers(selectUserId?: string) {
+    if (currentUser?.role !== "admin") return;
+    const response = await api("/api/admin/users");
+    if (!response.ok) return;
+    const data = await response.json();
+    const nextUsers = data.users as AdminUser[];
+    setAdminUsers(nextUsers);
+    const nextSelected = selectUserId || adminSelectedUserId || nextUsers[0]?.id || "";
+    setAdminSelectedUserId(nextSelected);
+    if (nextSelected) await loadAdminChats(nextSelected);
+  }
+
+  async function loadAdminStats() {
+    if (currentUser?.role !== "admin") return;
+    const response = await api("/api/admin/stats?days=30");
+    if (response.ok) setAdminStats((await response.json()).series);
+  }
+
+  async function loadAdminChats(userId: string) {
+    const response = await api(`/api/admin/users/${encodeURIComponent(userId)}/chats`);
+    if (!response.ok) return;
+    const data = await response.json();
+    setAdminChats(data.chats);
   }
 
   async function loadProfile() {
@@ -2738,7 +2853,7 @@ function App() {
   useEffect(() => {
     const error = new URLSearchParams(window.location.search).get("oauth_error");
     if (!error) return;
-    setAuthNotice(error === "registration_closed" ? "Регистрация временно закрыта." : "OAuth вход не получился.");
+    setAuthNotice(error === "registration_closed" ? "Регистрация временно закрыта." : error === "user_blocked" ? "Аккаунт заблокирован." : "OAuth вход не получился.");
   }, []);
 
   useEffect(() => {
@@ -2748,6 +2863,12 @@ function App() {
   useEffect(() => {
     if (!csrf) loadAuthOAuthProviders();
   }, [csrf]);
+
+  useEffect(() => {
+    if (!csrf || !isAdminRoute || currentUser?.role !== "admin") return;
+    void loadAdminUsers();
+    void loadAdminStats();
+  }, [csrf, currentUser?.role, isAdminRoute]);
 
   useEffect(() => {
     try {
@@ -3043,12 +3164,12 @@ function App() {
       method: "POST",
       body: JSON.stringify({ email, password })
     });
+    const data = await response.json().catch(() => ({}));
     setBusy(false);
     if (!response.ok) {
-      setAuthNotice("Не получилось войти: проверь email и пароль.");
+      setAuthNotice(data.error === "user_blocked" ? "Аккаунт заблокирован." : "Не получилось войти: проверь email и пароль.");
       return;
     }
-    const data = await response.json();
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
     refresh();
@@ -3741,6 +3862,86 @@ function App() {
     await loadUsers();
   }
 
+  async function selectAdminUser(userId: string) {
+    setAdminSelectedUserId(userId);
+    setAdminOpenedChat(null);
+    setAdminNotice("");
+    await loadAdminChats(userId);
+  }
+
+  async function adminChangePassword(event: React.FormEvent) {
+    event.preventDefault();
+    if (!csrf || !adminSelectedUserId || adminPassword.length < 8) return;
+    setBusy(true);
+    setAdminNotice("");
+    const response = await api(`/api/admin/users/${encodeURIComponent(adminSelectedUserId)}/password`, {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: JSON.stringify({ password: adminPassword })
+    });
+    const data = await response.json().catch(() => ({}));
+    setBusy(false);
+    if (!response.ok) {
+      setAdminNotice(data.error || "Пароль не изменился.");
+      return;
+    }
+    setAdminPassword("");
+    setAdminNotice("Пароль изменён.");
+  }
+
+  async function adminToggleBlock(user: AdminUser) {
+    if (!csrf) return;
+    setBusy(true);
+    setAdminNotice("");
+    const response = await api(`/api/admin/users/${encodeURIComponent(user.id)}/block`, {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: JSON.stringify({ blocked: !user.blockedAt })
+    });
+    const data = await response.json().catch(() => ({}));
+    setBusy(false);
+    if (!response.ok) {
+      setAdminNotice(data.error === "cannot_block_self" ? "Себя заблокировать нельзя." : data.error || "Статус пользователя не изменился.");
+      return;
+    }
+    setAdminNotice(data.user?.blockedAt ? "Пользователь заблокирован." : "Пользователь разблокирован.");
+    await loadAdminUsers(user.id);
+  }
+
+  async function adminImpersonate(user: AdminUser) {
+    if (!csrf || user.blockedAt) return;
+    setBusy(true);
+    setAdminNotice("");
+    const response = await api(`/api/admin/users/${encodeURIComponent(user.id)}/impersonate`, {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: "{}"
+    });
+    const data = await response.json().catch(() => ({}));
+    setBusy(false);
+    if (!response.ok) {
+      setAdminNotice(data.error === "user_blocked" ? "Пользователь заблокирован." : data.error || "Не получилось авторизоваться за пользователя.");
+      return;
+    }
+    setCurrentUser(data.user);
+    setCsrf(data.csrfToken);
+    window.location.href = "/";
+  }
+
+  async function adminOpenChat(chat: AdminChat) {
+    const response = await api(`/api/chats/${encodeURIComponent(chat.id)}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setAdminNotice(data.error || "Чат не открылся.");
+      return;
+    }
+    setAdminOpenedChat({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
+  }
+
+  function toggleAdminMetric(metric: AdminStatsMetric) {
+    setAdminStatsVisible((current) => ({ ...current, [metric]: !current[metric] }));
+  }
+
   async function createAgent(event: React.FormEvent) {
     event.preventDefault();
     if (!csrf || !newAgentName.trim()) return;
@@ -3996,6 +4197,178 @@ function App() {
 
   function oauthLabel(provider: OAuthProvider["provider"]) {
     return provider === "mailru" ? "Mail.ru" : provider === "vk" ? "VK ID" : provider === "github" ? "GitHub" : "Google";
+  }
+
+  function renderAdmin() {
+    const selectedAdminUser = adminUsers.find((user) => user.id === adminSelectedUserId) ?? adminUsers[0];
+    const latestStats = adminStats[adminStats.length - 1] ?? { dau: 0, wau: 0, mau: 0, registrations: 0 };
+    const selectedStats = selectedAdminUser?.stats ?? { chats: 0, jobs: 0, completedJobs: 0, failedJobs: 0, projects: 0, generationSeconds: 0 };
+
+    return (
+      <main className="admin-page">
+        <header className="admin-header">
+          <div>
+            <span><ShieldCheck size={18} /> Admin</span>
+            <h1>codex.rodion.pro</h1>
+            <p>{currentUser?.email}</p>
+          </div>
+          <div className="admin-header-actions">
+            <a className="secondary" href="/"><ArrowLeft size={16} /> В приложение</a>
+            <button className="secondary" type="button" onClick={() => {
+              void loadAdminUsers();
+              void loadAdminStats();
+            }}><RefreshCw size={16} /> Обновить</button>
+            <button className="secondary" type="button" onClick={logout}><LogOut size={16} /> Выйти</button>
+          </div>
+        </header>
+
+        <div className="admin-tabs">
+          <button className={adminTab === "users" ? "active" : ""} type="button" onClick={() => setAdminTab("users")}><UserCircle size={16} /> Пользователи</button>
+          <button className={adminTab === "stats" ? "active" : ""} type="button" onClick={() => setAdminTab("stats")}><Activity size={16} /> Статистика</button>
+        </div>
+
+        {adminNotice && <div className="notice">{adminNotice}</div>}
+
+        {adminTab === "users" ? (
+          <section className="admin-users-layout">
+            <section className="admin-card admin-user-list">
+              <div className="section-head">
+                <h2><UserCircle size={18} /> Пользователи</h2>
+                <strong>{adminUsers.length}</strong>
+              </div>
+              {adminUsers.map((user) => (
+                <button
+                  className={`admin-user-row ${selectedAdminUser?.id === user.id ? "active" : ""} ${user.blockedAt ? "blocked" : ""}`}
+                  key={user.id}
+                  type="button"
+                  onClick={() => void selectAdminUser(user.id)}
+                >
+                  <span>
+                    <strong>{user.nickname || user.email}</strong>
+                    <small>{user.email}</small>
+                  </span>
+                  <em>{user.blockedAt ? "blocked" : user.role}</em>
+                </button>
+              ))}
+              {!adminUsers.length && <div className="empty small-empty">Пользователей пока нет.</div>}
+            </section>
+
+            <section className="admin-card admin-user-detail">
+              {selectedAdminUser ? (
+                <>
+                  <div className="admin-user-title">
+                    <div>
+                      <h2>{selectedAdminUser.nickname || selectedAdminUser.email}</h2>
+                      <p>{selectedAdminUser.email}</p>
+                    </div>
+                    <span className={selectedAdminUser.blockedAt ? "admin-status blocked" : "admin-status"}>{selectedAdminUser.blockedAt ? "Blocked" : selectedAdminUser.role}</span>
+                  </div>
+                  <div className="admin-stat-grid">
+                    <div><span>Чаты</span><strong>{selectedStats.chats}</strong></div>
+                    <div><span>Запуски</span><strong>{selectedStats.jobs}</strong></div>
+                    <div><span>Проекты</span><strong>{selectedStats.projects}</strong></div>
+                    <div><span>Агенты</span><strong>{selectedAdminUser.agents}</strong></div>
+                    <div><span>Создан</span><strong>{formatDateTime(selectedAdminUser.createdAt) || "n/a"}</strong></div>
+                    <div><span>Активность</span><strong>{formatDateTime(selectedAdminUser.lastActiveAt) || "нет"}</strong></div>
+                  </div>
+
+                  <div className="admin-action-grid">
+                    <form onSubmit={adminChangePassword}>
+                      <input autoComplete="new-password" placeholder="Новый пароль" type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} />
+                      <button disabled={busy || adminPassword.length < 8} type="submit"><KeyRound size={16} /> Поменять пароль</button>
+                    </form>
+                    <button className={selectedAdminUser.blockedAt ? "secondary" : "danger-button"} disabled={busy || selectedAdminUser.id === currentUser?.id} type="button" onClick={() => void adminToggleBlock(selectedAdminUser)}>
+                      <ShieldCheck size={16} /> {selectedAdminUser.blockedAt ? "Разблокировать" : "Заблокировать"}
+                    </button>
+                    <button className="secondary" disabled={busy || Boolean(selectedAdminUser.blockedAt)} type="button" onClick={() => void adminImpersonate(selectedAdminUser)}>
+                      <LogOut size={16} /> Авторизоваться за пользователя
+                    </button>
+                  </div>
+
+                  <div className="admin-chats">
+                    <div className="section-head">
+                      <h2><MessageSquare size={18} /> Чаты пользователя</h2>
+                      <button className="secondary compact" type="button" onClick={() => void loadAdminChats(selectedAdminUser.id)}><RefreshCw size={14} /> Refresh</button>
+                    </div>
+                    <div className="admin-chat-list">
+                      {adminChats.map((chat) => (
+                        <button className={adminOpenedChat?.chat.id === chat.id ? "active" : ""} key={chat.id} type="button" onClick={() => void adminOpenChat(chat)}>
+                          <span>
+                            <strong>{chat.title}</strong>
+                            <small>{chat.agentName} · {chat.repoName || chat.repoId}</small>
+                          </span>
+                          <em>{chat.messageCount} msg · {formatDateTime(chat.updatedAt)}</em>
+                        </button>
+                      ))}
+                      {!adminChats.length && <div className="empty small-empty">У пользователя пока нет чатов.</div>}
+                    </div>
+                    {adminOpenedChat && (
+                      <section className="admin-chat-view">
+                        <div className="section-head">
+                          <h2>{adminOpenedChat.chat.title}</h2>
+                          <span>{adminOpenedChat.jobs.length} runs</span>
+                        </div>
+                        {adminOpenedChat.messages.map((message) => (
+                          <article className={`admin-chat-message ${message.role}`} key={message.id}>
+                            <div className="message-meta">
+                              <span>{message.role === "user" ? (selectedAdminUser.nickname || selectedAdminUser.email) : message.role === "system" ? "System" : "Codex"}</span>
+                              <small>{formatDateTime(message.createdAt)}</small>
+                            </div>
+                            {message.role === "system"
+                              ? <div className="system-message-body">{normalizeDisplayText(message.content).trim()}</div>
+                              : renderRichText(message.content, "rich-text message-body")}
+                            {renderMessageAttachments(message.attachments, setImagePreview)}
+                          </article>
+                        ))}
+                      </section>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="empty">Выбери пользователя.</div>
+              )}
+            </section>
+          </section>
+        ) : (
+          <section className="admin-card admin-stats-panel">
+            <div className="section-head">
+              <h2><Activity size={18} /> Активность</h2>
+              <button className="secondary compact" type="button" onClick={() => void loadAdminStats()}><RefreshCw size={14} /> Refresh</button>
+            </div>
+            <div className="admin-stat-grid compact">
+              <div><span>DAU</span><strong>{latestStats.dau}</strong></div>
+              <div><span>WAU</span><strong>{latestStats.wau}</strong></div>
+              <div><span>MAU</span><strong>{latestStats.mau}</strong></div>
+              <div><span>Регистрации сегодня</span><strong>{latestStats.registrations}</strong></div>
+            </div>
+            <div className="admin-chart-controls">
+              {(Object.keys(ADMIN_METRIC_META) as AdminStatsMetric[]).map((metric) => (
+                <label key={metric} style={{ "--metric-color": ADMIN_METRIC_META[metric].color } as React.CSSProperties}>
+                  <input checked={adminStatsVisible[metric]} type="checkbox" onChange={() => toggleAdminMetric(metric)} />
+                  <span>{ADMIN_METRIC_META[metric].label}</span>
+                </label>
+              ))}
+            </div>
+            <AdminStatsChart points={adminStats} visible={adminStatsVisible} />
+          </section>
+        )}
+
+        {imagePreview && (
+          <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={imagePreview.name} onClick={() => setImagePreview(null)}>
+            <figure onClick={(event) => event.stopPropagation()}>
+              <button aria-label="Close image preview" type="button" onClick={() => setImagePreview(null)}>
+                <X size={20} />
+              </button>
+              <img alt={imagePreview.name} src={imagePreview.src} />
+              <figcaption>
+                <strong>{imagePreview.name}</strong>
+                <span>{imagePreview.mimeType} · {formatBytes(imagePreview.size)}</span>
+              </figcaption>
+            </figure>
+          </div>
+        )}
+      </main>
+    );
   }
 
   function renderProfile() {
@@ -5033,6 +5406,22 @@ function App() {
     );
   }
 
+  if (isAdminRoute) {
+    if (currentUser?.role !== "admin") {
+      return (
+        <main className="login">
+          <section className="login-panel">
+            <img className="brand-logo large" src="/favicon.svg" alt="" />
+            <h1>Admin</h1>
+            <p>Нужны права администратора.</p>
+            <a className="secondary" href="/"><ArrowLeft size={16} /> Вернуться</a>
+          </section>
+        </main>
+      );
+    }
+    return renderAdmin();
+  }
+
   return (
     <>
     <main className={`app-frame ${sidebarCollapsed ? "nav-collapsed" : ""}`}>
@@ -5156,6 +5545,9 @@ function App() {
           <button className={view === "settings" ? "nav-item active" : "nav-item"} onClick={openSettingsView}><Settings size={17} /> Settings</button>
           <button className={view === "sync" ? "nav-item active" : "nav-item"} onClick={openSyncView}><PlugZap size={17} /> Sync</button>
           <button className={view === "profile" ? "nav-item active" : "nav-item"} onClick={openProfileView}><UserCircle size={17} /> Profile</button>
+          {currentUser?.role === "admin" && (
+            <button className="nav-item" onClick={() => { window.location.href = "/admin"; }}><ShieldCheck size={17} /> Admin</button>
+          )}
         </nav>
         <div className={`nav-agent ${online ? "online" : "offline"}`}>
           <span>{online ? "Online" : "Offline"}</span>
