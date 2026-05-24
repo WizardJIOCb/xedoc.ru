@@ -794,19 +794,36 @@ function connect() {
     if (message.type === "project.update") {
       try {
         logProgress(`project: Updating ${message.repoId}.`);
-        const repo = config.repos.find((item) => item.id === message.repoId);
-        if (!repo) throw new Error("Project not found in agent config.");
-        if (message.patch.path) {
+        let repo = config.repos.find((item) => item.id === message.repoId);
+        if (!repo) {
+          if (!message.patch.name || !message.patch.path) throw new Error("Project not found in agent config.");
           await ensureGitRepo(message.patch.path);
-          repo.path = message.patch.path;
+          repo = {
+            id: message.repoId,
+            name: message.patch.name,
+            path: message.patch.path,
+            githubUrl: optionalText(message.patch.githubUrl),
+            serverPath: optionalText(message.patch.serverPath),
+            domain: optionalText(message.patch.domain),
+            deploy: message.patch.deploy ?? undefined,
+            defaultSandbox: message.patch.defaultSandbox ?? "danger-full-access",
+            allowedSandboxes: message.patch.allowedSandboxes ?? ["read-only", "workspace-write", "danger-full-access"],
+            testCommands: []
+          };
+          config.repos.push(repo);
+        } else {
+          if (message.patch.path) {
+            await ensureGitRepo(message.patch.path);
+            repo.path = message.patch.path;
+          }
+          if (message.patch.name) repo.name = message.patch.name;
+          if ("githubUrl" in message.patch) repo.githubUrl = optionalText(message.patch.githubUrl);
+          if ("serverPath" in message.patch) repo.serverPath = optionalText(message.patch.serverPath);
+          if ("domain" in message.patch) repo.domain = optionalText(message.patch.domain);
+          if ("deploy" in message.patch) repo.deploy = message.patch.deploy ?? undefined;
+          if (message.patch.defaultSandbox) repo.defaultSandbox = message.patch.defaultSandbox;
+          if (message.patch.allowedSandboxes) repo.allowedSandboxes = message.patch.allowedSandboxes;
         }
-        if (message.patch.name) repo.name = message.patch.name;
-        if ("githubUrl" in message.patch) repo.githubUrl = optionalText(message.patch.githubUrl);
-        if ("serverPath" in message.patch) repo.serverPath = optionalText(message.patch.serverPath);
-        if ("domain" in message.patch) repo.domain = optionalText(message.patch.domain);
-        if ("deploy" in message.patch) repo.deploy = message.patch.deploy ?? undefined;
-        if (message.patch.defaultSandbox) repo.defaultSandbox = message.patch.defaultSandbox;
-        if (message.patch.allowedSandboxes) repo.allowedSandboxes = message.patch.allowedSandboxes;
         if (!repo.allowedSandboxes.includes(repo.defaultSandbox)) repo.defaultSandbox = repo.allowedSandboxes[0] ?? "read-only";
         saveAgentConfig(config);
         await sendProjectResult(send, message.requestId, true);

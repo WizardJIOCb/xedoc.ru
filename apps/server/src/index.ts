@@ -478,6 +478,31 @@ function repoInfosForAgent(agentId: string): RepoInfo[] {
   return rows.map(mapRepo);
 }
 
+function fullProjectPatchFromRepo(row: RepoRow): Extract<ServerToAgent, { type: "project.update" }>["patch"] {
+  const repo = mapRepo(row);
+  return {
+    name: repo.name,
+    path: repo.pathMasked,
+    githubUrl: repo.githubUrl,
+    serverPath: repo.serverPath,
+    domain: repo.domain,
+    deploy: repo.deploy ?? null,
+    defaultSandbox: repo.defaultSandbox,
+    allowedSandboxes: repo.allowedSandboxes
+  };
+}
+
+async function syncAgentProjectConfig(agentId: string, row: RepoRow): Promise<void> {
+  const result = await requestAgentProject(agentId, {
+    type: "project.update",
+    requestId: id("req"),
+    repoId: row.id,
+    patch: fullProjectPatchFromRepo(row)
+  });
+  if (!result.ok) throw new Error(result.error ?? "project_update_failed");
+  if (result.repos) upsertRepos(agentId, result.repos);
+}
+
 function upsertRepos(agentId: string, repos: RepoInfo[]): void {
   const stamp = nowIso();
   const upsert = db.prepare(`
@@ -2266,6 +2291,7 @@ async function createApp(): Promise<FastifyInstance> {
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
     try {
+      await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentGit(params.agentId, {
         type: "git.sync",
         requestId: id("req"),
@@ -2294,6 +2320,7 @@ async function createApp(): Promise<FastifyInstance> {
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
     try {
+      await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentDeploy(params.agentId, {
         type: "project.deploy",
         requestId: id("req"),
@@ -2318,6 +2345,7 @@ async function createApp(): Promise<FastifyInstance> {
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
     try {
+      await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentNginx(params.agentId, {
         type: "project.nginx",
         requestId: id("req"),
@@ -2342,6 +2370,7 @@ async function createApp(): Promise<FastifyInstance> {
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
     try {
+      await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentSsl(params.agentId, {
         type: "project.ssl",
         requestId: id("req"),
