@@ -347,6 +347,14 @@ type CodexAction = {
   at: string;
 };
 
+type LiveActivityEntry = {
+  id: string;
+  kind: "message" | "command" | "error";
+  at: string;
+  text?: string;
+  action?: CodexAction;
+};
+
 type CollapsedRunSummary = {
   job?: Job;
   messages: ChatMessage[];
@@ -1174,7 +1182,7 @@ function jobProgressLabel(progress: JobProgress | null | undefined, fallback = "
     case "working":
       return "Codex работает";
     case "message":
-      return "Получен ответ";
+      return "Ответ";
     case "finalizing":
       return "Сохраняю результат";
     case "completed":
@@ -1295,8 +1303,31 @@ function displayLogMessage(log: Log) {
 
 function codexActionEntries(logs: Log[]): CodexAction[] {
   const byId = new Map<string, CodexAction>();
+  const activeSystemCommands: string[] = [];
   logs.forEach((log, index) => {
     const rawText = log.message.trim();
+    if (!rawText) return;
+    const completed = rawText.match(/^(.+):\s*(completed|failed|cancelled)\.$/i);
+    if (completed?.[1]) {
+      const command = completed[1].trim();
+      const status = completed[2]?.toLowerCase() ?? "completed";
+      const activeId = [...activeSystemCommands].reverse().find((id) => byId.get(id)?.command === command && byId.get(id)?.status === "running");
+      const id = activeId ?? `system:${log.at}:${index}`;
+      const current = byId.get(id);
+      byId.set(id, { id, command, status, output: current?.output ?? "", at: log.at });
+      return;
+    }
+    if (log.stream === "system") {
+      const running = rawText.match(/^Running:\s*(.+)$/i);
+      if (running?.[1]) {
+        const command = running[1].trim();
+        const id = `system:${log.at}:${index}`;
+        activeSystemCommands.push(id);
+        byId.set(id, { id, command, status: "running", output: "", at: log.at });
+        return;
+      }
+      return;
+    }
     if (!rawText.startsWith("{")) return;
     try {
       const event = JSON.parse(rawText) as Record<string, unknown>;
@@ -1318,6 +1349,105 @@ function codexActionEntries(logs: Log[]): CodexAction[] {
     }
   });
   return [...byId.values()];
+}
+
+function liveActivityEntries(logs: Log[]): LiveActivityEntry[] {
+  const entries: LiveActivityEntry[] = [];
+  const commandEntries = new Map<string, LiveActivityEntry>();
+  const commandIds: string[] = [];
+  const seenMessages = new Set<string>();
+  let outputTargetId = "";
+  let outputTargetUntil = 0;
+
+  const appendCommandOutput = (text: string, atMs: number) => {
+    const target = outputTargetId ? commandEntries.get(outputTargetId)?.action : undefined;
+    if (!target) return false;
+    target.output = [target.output, text].filter(Boolean).join("\n\n").slice(-6000);
+    if (Number.isFinite(atMs)) outputTargetUntil = Math.max(outputTargetUntil, atMs + 1800);
+    return true;
+  };
+
+  logs.forEach((log, index) => {
+    const rawText = log.message.trim();
+    if (!rawText) return;
+    const atMs = Date.parse(log.at);
+
+    const completed = rawText.match(/^(.+):\s*(completed|failed|cancelled)\.$/i);
+    if (completed?.[1]) {
+      const command = completed[1].trim();
+      const status = completed[2]?.toLowerCase() ?? "completed";
+      const id = [...commandIds].reverse().find((commandId) => commandEntries.get(commandId)?.action?.command === command && commandEntries.get(commandId)?.action?.status === "running");
+      let entry = id ? commandEntries.get(id) : undefined;
+      if (!entry) {
+        const completedId = `live-command:${log.at}:${index}`;
+        entry = {
+          id: completedId,
+          kind: "command",
+          at: log.at,
+          action: { id: completedId, command, status, output: "", at: log.at }
+        };
+        entries.push(entry);
+        commandEntries.set(completedId, entry);
+        commandIds.push(completedId);
+      }
+      if (entry?.action) {
+        entry.action.status = status;
+        entry.action.at = log.at;
+        entry.at = log.at;
+        outputTargetId = entry.id;
+        outputTargetUntil = Number.isFinite(atMs) ? atMs + 3500 : Date.now() + 3500;
+      }
+      return;
+    }
+
+    if (log.stream === "system") {
+      const running = rawText.match(/^Running:\s*(.+)$/i);
+      if (running?.[1]) {
+        const command = running[1].trim();
+        const id = `live-command:${log.at}:${index}`;
+        const entry: LiveActivityEntry = {
+          id,
+          kind: "command",
+          at: log.at,
+          action: { id, command, status: "running", output: "", at: log.at }
+        };
+        entries.push(entry);
+        commandEntries.set(id, entry);
+        commandIds.push(id);
+        outputTargetId = "";
+        outputTargetUntil = 0;
+        return;
+      }
+      return;
+    }
+
+    const display = displayLogMessage(log);
+    if (!display) return;
+    if (outputTargetId && Number.isFinite(atMs) && atMs <= outputTargetUntil && appendCommandOutput(display, atMs)) return;
+
+    if (log.stream === "stderr") {
+      entries.push({
+        id: log.id ?? `live-error:${log.at}:${index}`,
+        kind: "error",
+        at: log.at,
+        text: display
+      });
+      return;
+    }
+
+    const normalized = normalizeDisplayText(display).trim();
+    const messageKey = normalized.replace(/\s+/g, " ").slice(0, 700);
+    if (!messageKey || seenMessages.has(messageKey)) return;
+    seenMessages.add(messageKey);
+    entries.push({
+      id: log.id ?? `live-message:${log.at}:${index}`,
+      kind: "message",
+      at: log.at,
+      text: normalized
+    });
+  });
+
+  return entries.slice(-14);
 }
 
 function metadataCodexActions(message: ChatMessage): CodexAction[] {
@@ -1465,32 +1595,6 @@ function messageUpdateSignature(message: ChatMessage) {
     changeStat,
     changeDiff
   ].join(":");
-}
-
-function visibleDisplayLogs(logs: Log[]) {
-  return logs
-    .map((line) => ({ ...line, display: displayLogMessage(line) }))
-    .filter((line): line is Log & { display: string } => Boolean(line.display));
-}
-
-function renderLogs(logs: Log[]) {
-  const visibleLogs = visibleDisplayLogs(logs);
-  if (!visibleLogs.length) return <div className="empty small-empty">Waiting for logs...</div>;
-  return (
-    <div className="logs-rich">
-      {visibleLogs.map((line, index) => (
-        <article className={`log-entry ${line.stream}`} key={line.id ?? `${line.at}:${index}`}>
-          <div className="log-meta">
-            <span>{line.stream}</span>
-            <small>{new Date(line.at).toLocaleTimeString()}</small>
-          </div>
-          {line.stream === "system" ? (
-            <div className="system-log-body" title={line.display}>{line.display}</div>
-          ) : renderRichText(line.display, "rich-text compact")}
-        </article>
-      ))}
-    </div>
-  );
 }
 
 function App() {
@@ -4270,50 +4374,86 @@ function App() {
     );
   }
 
-  function renderActiveRunActions() {
+  function renderLiveActivity() {
     if (!activeJob) return null;
-    const actions = codexActionEntries(logs);
-    if (!actions.length) return null;
-    const actionKey = `active-actions:${activeJob.id}`;
-    const expanded = Boolean(expandedActions[actionKey]);
-    const running = actions.some((action) => action.status.toLowerCase().includes("running"));
+    const entries = liveActivityEntries(logs);
+    if (!entries.length && !activeProgress) return null;
+    const actionKey = `live-activity:${activeJob.id}`;
+    const expanded = expandedActions[actionKey] !== false;
+    const commandCount = entries.filter((entry) => entry.kind === "command").length;
+    const updateCount = entries.filter((entry) => entry.kind !== "command").length;
     return (
-      <div className="message-actions run-actions active-run-actions">
+      <section className="live-activity-card" aria-live="polite">
         <button
+          className="live-activity-toggle"
           type="button"
-          onClick={() => setExpandedActions((current) => ({ ...current, [actionKey]: !current[actionKey] }))}
+          onClick={() => setExpandedActions((current) => ({ ...current, [actionKey]: current[actionKey] === false }))}
         >
-          <Terminal size={15} />
-          <span>{running ? "Running" : "Ran"} {actions.length} command{actions.length === 1 ? "" : "s"}</span>
+          <Activity size={16} />
+          <span>
+            <strong>Ход работы</strong>
+            <small>{activeProgress ? jobProgressMessage(activeProgress) : "Жду события от локального Codex"}</small>
+          </span>
+          <em>{[updateCount ? `ответов: ${updateCount}` : "", commandCount ? `команд: ${commandCount}` : ""].filter(Boolean).join(" · ") || "ожидание"}</em>
           <ChevronDown className={expanded ? "open" : ""} size={15} />
         </button>
         {expanded && (
-          <div className="message-action-details command-details">
-            {actions.map((action, index) => renderCommandCard(`active:${activeJob.id}`, action, index))}
+          <div className="live-activity-timeline">
+            {entries.length ? entries.map(renderLiveActivityEntry) : (
+              <div className="live-activity-empty">Жду события от Codex...</div>
+            )}
           </div>
         )}
-      </div>
+      </section>
     );
   }
 
-  function renderLiveLogs() {
-    if (!activeJob) return renderLogs(logs);
-    const visibleLogCount = visibleDisplayLogs(logs).length;
-    if (!visibleLogCount) return null;
-    const actionKey = `live-logs:${activeJob.id}`;
-    const expanded = Boolean(expandedActions[actionKey]);
+  function renderLiveActivityEntry(entry: LiveActivityEntry, index: number) {
+    if (entry.kind === "command" && entry.action) return renderLiveCommandEntry(entry, index);
+    const isError = entry.kind === "error";
     return (
-      <div className="message-actions run-actions live-log-actions">
-        <button
-          type="button"
-          onClick={() => setExpandedActions((current) => ({ ...current, [actionKey]: !current[actionKey] }))}
-        >
-          <Terminal size={15} />
-          <span>Live log · {visibleLogCount}</span>
-          <ChevronDown className={expanded ? "open" : ""} size={15} />
-        </button>
-        {expanded && renderLogs(logs)}
-      </div>
+      <article className={`live-activity-entry ${entry.kind}`} key={entry.id || index}>
+        <span className="live-activity-marker">{isError ? <X size={13} /> : <Bot size={13} />}</span>
+        <div className="live-activity-content">
+          <div className="live-activity-meta">
+            <strong>{isError ? "Ошибка" : "Codex"}</strong>
+            <small>{new Date(entry.at).toLocaleTimeString()}</small>
+          </div>
+          {renderRichText(entry.text ?? "", "rich-text compact live-activity-text")}
+        </div>
+      </article>
+    );
+  }
+
+  function renderLiveCommandEntry(entry: LiveActivityEntry, index: number) {
+    const action = entry.action!;
+    const parsed = parseCommandOutput(action.output);
+    const status = commandStatusLabel(action, parsed.exitCode);
+    const commandKey = `live-command:${activeJob?.id}:${action.id || index}`;
+    const hasDetails = Boolean(parsed.body || action.output || status === "Running");
+    const commandOpen = status === "Failed" || Boolean(expandedActions[commandKey]);
+    return (
+      <article className={`live-activity-entry command ${status.toLowerCase()}`} key={entry.id || index}>
+        <span className="live-activity-marker"><Terminal size={13} /></span>
+        <div className="live-activity-content">
+          <button
+            className="live-command-row"
+            disabled={!hasDetails}
+            type="button"
+            onClick={() => setExpandedActions((current) => ({ ...current, [commandKey]: !current[commandKey] }))}
+          >
+            <span className={`live-status ${status.toLowerCase()}`}>{status}</span>
+            <code>{action.command}</code>
+            <small>{new Date(entry.at).toLocaleTimeString()}</small>
+            {hasDetails && <ChevronDown className={commandOpen ? "open" : ""} size={14} />}
+          </button>
+          {hasDetails && commandOpen && (
+            <pre className="live-command-output">
+              <code>{parsed.body || "Команда ещё выполняется..."}</code>
+            </pre>
+          )}
+        </div>
+      </article>
     );
   }
 
@@ -4415,8 +4555,7 @@ function App() {
             )}
           </div>
         ) : null}
-        {renderActiveRunActions()}
-        {renderLiveLogs()}
+        {renderLiveActivity()}
       </>
     );
   }
