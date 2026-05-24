@@ -1,0 +1,18 @@
+[Unit]
+Description=HTTP CONNECT proxy for Codex through reverse SSH SOCKS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/codex-agent
+ExecStart=/usr/bin/node /root/codex-agent/socks-http-proxy.mjs
+Restart=always
+RestartSec=2
+Environment=LISTEN_HOST=127.0.0.1
+Environment=LISTEN_PORT=10809
+Environment=SOCKS_HOST=127.0.0.1
+Environment=SOCKS_PORT=10808
+
+[Install]
+WantedBy=multi-user.target
