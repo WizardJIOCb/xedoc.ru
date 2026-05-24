@@ -3635,26 +3635,25 @@ function App() {
     try {
       const remoteUrl = gitRemoteUrl.trim() || selectedRepo.githubUrl || "";
       if (remoteUrl) {
-        const data = await callProjectAction(
-          "GitHub + push",
-          `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`,
-          {
-            message: gitMessage.trim() || `Launch ${selectedRepo.name}`,
-            remoteUrl,
-            createRemote: true,
-            remoteVisibility: "private"
-          }
-        );
-        setGitNotice(data.output || "GitHub sync completed.");
+        try {
+          const data = await callProjectAction(
+            "GitHub + push",
+            `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`,
+            {
+              message: gitMessage.trim() || `Launch ${selectedRepo.name}`,
+              remoteUrl,
+              createRemote: true,
+              remoteVisibility: "private"
+            }
+          );
+          setGitNotice(data.output || "GitHub sync completed.");
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          append("GitHub + push", `Failed, continuing local launch.\n${message}`);
+          setGitNotice(message);
+        }
       } else {
         append("GitHub + push", "Skipped: GitHub repository is not configured.");
-      }
-
-      if (selectedRepo.domain) {
-        const data = await callProjectAction("Nginx", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`);
-        setNginxNotice(data.output || "Nginx configured.");
-      } else {
-        append("Nginx", "Skipped: domain is not configured.");
       }
 
       if (hasDeployConfig(selectedRepo)) {
@@ -3662,6 +3661,13 @@ function App() {
         setDeployNotice(data.output || "Deploy completed.");
       } else {
         append("Deploy", "Skipped: server folder or deploy mode is not configured.");
+      }
+
+      if (selectedRepo.domain) {
+        const data = await callProjectAction("Nginx", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`);
+        setNginxNotice(data.output || "Nginx configured.");
+      } else {
+        append("Nginx", "Skipped: domain is not configured.");
       }
 
       if (selectedRepo.domain) {
