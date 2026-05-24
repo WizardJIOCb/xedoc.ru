@@ -3283,6 +3283,7 @@ function App() {
   async function deployProject() {
     if (!selectedRepo || !csrf) return;
     setDeployBusy(true);
+    setActionMenuOpen(false);
     setDeployNotice("Deploy started...");
     const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`, {
       method: "POST",
@@ -4438,10 +4439,19 @@ function App() {
             </button>
             {actionMenuOpen && (
               <div className="action-menu" role="menu">
-                <button disabled={gitBusy || !gitMessage.trim()} role="menuitem" type="button" onClick={runGitSync}>
+                <button className="project-menu-action" disabled={launchBusy || gitBusy || !gitMessage.trim()} role="menuitem" type="button" onClick={runGitSync}>
                   <UploadCloud size={16} />
                   <span>Commit & push</span>
                 </button>
+                <button className="project-menu-action" disabled={launchBusy || deployBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} role="menuitem" type="button" onClick={deployProject}>
+                  <UploadCloud size={16} />
+                  <span>Deploy</span>
+                </button>
+                <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} role="menuitem" type="button" onClick={launchProject}>
+                  <Rocket size={16} />
+                  <span>Launch</span>
+                </button>
+                <div className="menu-divider" />
                 <button disabled={vscodeBusy} role="menuitem" type="button" onClick={() => runVscodeCommand("openSidebar")}>
                   <PanelLeftOpen size={16} />
                   <span>Open VS Code Codex</span>

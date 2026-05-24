@@ -1649,7 +1649,8 @@ textarea:focus {
   line-height: 1.2;
 }
 
-.sticky-submit .action-menu > button:first-child {
+.sticky-submit .action-menu > button:first-child,
+.sticky-submit .action-menu .project-menu-action {
   justify-content: flex-start;
   min-height: 32px;
   font-weight: 700;
