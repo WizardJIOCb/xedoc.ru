@@ -77,6 +77,7 @@ type AgentConnection = {
 };
 
 const agents = new Map<string, AgentConnection>();
+const dispatchingAgents = new Set<string>();
 type AuthUser = Pick<UserRow, "id" | "role">;
 type SyncedChat = Extract<AgentToServer, { type: "chat.sync" }>;
 type SyncedChatMessage = SyncedChat["messages"][number];
@@ -1188,44 +1189,98 @@ function latestCodexThreadIdForChat(chatId: string | null, currentJobId: string)
   return row?.codex_thread_id;
 }
 
-function dispatchQueue(agentId: string): void {
-  const agent = agents.get(agentId);
-  if (!agent) return;
-  if (isAgentLocallyBusy(agentId)) return;
-  const running = db.prepare("SELECT * FROM jobs WHERE agent_id = ? AND status IN ('assigned','running') LIMIT 1")
-    .get(agentId) as JobRow | undefined;
-  if (running) return;
-  const job = db.prepare("SELECT * FROM jobs WHERE agent_id = ? AND status = 'queued' ORDER BY created_at ASC LIMIT 1")
-    .get(agentId) as JobRow | undefined;
-  if (!job) return;
-  const stamp = nowIso();
-  db.prepare("UPDATE jobs SET status = 'assigned', started_at = ? WHERE id = ?").run(stamp, job.id);
-  db.prepare("UPDATE agents SET current_job_id = ? WHERE id = ?").run(job.id, agentId);
-  broadcast({ type: "job.updated", jobId: job.id, status: "assigned" });
-  agent.send({
-    type: "job.run",
-    job: {
-      id: job.id,
-      repoId: job.repo_id,
-      chatId: job.chat_id ?? undefined,
-      codexThreadId: latestCodexThreadIdForChat(job.chat_id, job.id),
-      prompt: job.prompt,
-      sandbox: job.sandbox,
-      branchMode: job.branch_mode,
-      kind: job.kind,
-      testCommandId: job.test_command_id ?? undefined,
-      model: job.model ?? undefined,
-      reasoningEffort: job.reasoning_effort ?? undefined,
-      speed: job.speed ?? undefined,
-      attachments: (db.prepare("SELECT * FROM job_attachments WHERE job_id = ? ORDER BY created_at ASC").all(job.id) as AttachmentRow[])
-        .map((attachment) => ({
-          name: attachment.name,
-          mimeType: attachment.mime_type,
-          size: attachment.size,
-          dataBase64: attachment.data_base64
-        }))
+function failJobBeforeRun(job: JobRow, finalMessage: string): void {
+  const finishedAt = nowIso();
+  db.prepare("UPDATE jobs SET status='failed', exit_code=1, final_message=?, finished_at=? WHERE id=?")
+    .run(finalMessage, finishedAt, job.id);
+  if (job.chat_id) {
+    appendChatMessage({
+      chat_id: job.chat_id,
+      role: "assistant",
+      content: finalMessage,
+      source: "codex",
+      external_id: `job:${job.id}:final`,
+      metadata_json: JSON.stringify({ jobId: job.id, status: "failed" }),
+      created_at: finishedAt
+    });
+  }
+  broadcast({ type: "job.updated", jobId: job.id, status: "failed" });
+}
+
+async function dispatchQueue(agentId: string): Promise<void> {
+  if (dispatchingAgents.has(agentId)) return;
+  dispatchingAgents.add(agentId);
+  try {
+    while (true) {
+      const agent = agents.get(agentId);
+      if (!agent) return;
+      if (isAgentLocallyBusy(agentId)) return;
+      const running = db.prepare("SELECT * FROM jobs WHERE agent_id = ? AND status IN ('assigned','running') LIMIT 1")
+        .get(agentId) as JobRow | undefined;
+      if (running) return;
+      const job = db.prepare("SELECT * FROM jobs WHERE agent_id = ? AND status = 'queued' ORDER BY created_at ASC LIMIT 1")
+        .get(agentId) as JobRow | undefined;
+      if (!job) return;
+
+      const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
+        .get(agentId, job.repo_id) as RepoRow | undefined;
+      if (!repo) {
+        failJobBeforeRun(job, `Project config not found for ${job.repo_id}.`);
+        continue;
+      }
+
+      try {
+        await syncAgentProjectConfig(agentId, repo);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === "agent_offline" || !agents.has(agentId)) return;
+        failJobBeforeRun(job, `Project config sync failed before job start: ${message}`);
+        continue;
+      }
+
+      const readyAgent = agents.get(agentId);
+      if (!readyAgent || isAgentLocallyBusy(agentId)) return;
+      const stamp = nowIso();
+      db.prepare("UPDATE jobs SET status = 'assigned', started_at = ? WHERE id = ?").run(stamp, job.id);
+      db.prepare("UPDATE agents SET current_job_id = ? WHERE id = ?").run(job.id, agentId);
+      broadcast({ type: "job.updated", jobId: job.id, status: "assigned" });
+      try {
+        readyAgent.send({
+          type: "job.run",
+          job: {
+            id: job.id,
+            repoId: job.repo_id,
+            chatId: job.chat_id ?? undefined,
+            codexThreadId: latestCodexThreadIdForChat(job.chat_id, job.id),
+            prompt: job.prompt,
+            sandbox: job.sandbox,
+            branchMode: job.branch_mode,
+            kind: job.kind,
+            testCommandId: job.test_command_id ?? undefined,
+            model: job.model ?? undefined,
+            reasoningEffort: job.reasoning_effort ?? undefined,
+            speed: job.speed ?? undefined,
+            attachments: (db.prepare("SELECT * FROM job_attachments WHERE job_id = ? ORDER BY created_at ASC").all(job.id) as AttachmentRow[])
+              .map((attachment) => ({
+                name: attachment.name,
+                mimeType: attachment.mime_type,
+                size: attachment.size,
+                dataBase64: attachment.data_base64
+              }))
+          }
+        });
+      } catch (error) {
+        if (agents.get(agentId)?.connectionId === readyAgent.connectionId) agents.delete(agentId);
+        db.prepare("UPDATE jobs SET status='queued', started_at=NULL WHERE id=?").run(job.id);
+        db.prepare("UPDATE agents SET current_job_id = NULL, status = 'offline' WHERE id = ?").run(agentId);
+        broadcast({ type: "agent.status", agentId, status: "offline" });
+        broadcast({ type: "job.updated", jobId: job.id, status: "queued" });
+      }
+      return;
     }
-  });
+  } finally {
+    dispatchingAgents.delete(agentId);
+  }
 }
 
 async function authenticateAgent(token: string | undefined): Promise<AgentRow | null> {
@@ -2711,7 +2766,7 @@ async function createApp(): Promise<FastifyInstance> {
     broadcast({ type: "chats.updated", agentId: parsed.data.agentId, repoId: parsed.data.repoId });
     broadcast({ type: "job.created", jobId });
     broadcast({ type: "job.updated", jobId, status: "queued" });
-    dispatchQueue(parsed.data.agentId);
+    void dispatchQueue(parsed.data.agentId);
     return reply.code(201).send({ jobId });
   });
 
@@ -2776,7 +2831,7 @@ async function createApp(): Promise<FastifyInstance> {
     };
     agents.set(agent.id, connection);
     markAgentStatus(agent.id, "online");
-    dispatchQueue(agent.id);
+    void dispatchQueue(agent.id);
 
     socket.on("message", (raw) => {
       let parsed: AgentToServer;
@@ -2811,7 +2866,7 @@ async function createApp(): Promise<FastifyInstance> {
         );
         if (parsed.localActivity) broadcastAgentActivity(agent.id, parsed.localActivity);
         upsertRepos(agent.id, parsed.repos);
-        dispatchQueue(agent.id);
+        void dispatchQueue(agent.id);
       }
       if (parsed.type === "agent.heartbeat") {
         const localActivityJson = parsed.localActivity ? JSON.stringify(parsed.localActivity) : null;
@@ -2824,7 +2879,7 @@ async function createApp(): Promise<FastifyInstance> {
         if (parsed.localActivity) broadcastAgentActivity(agent.id, parsed.localActivity);
         if (parsed.repos) upsertRepos(agent.id, parsed.repos);
         clearOrphanedAgentJobs(agent.id, parsed.currentJobId);
-        dispatchQueue(agent.id);
+        void dispatchQueue(agent.id);
       }
       if (parsed.type === "job.log") {
         const previous = db.prepare("SELECT status FROM jobs WHERE id = ?").get(parsed.jobId) as { status: string } | undefined;
@@ -2909,7 +2964,7 @@ async function createApp(): Promise<FastifyInstance> {
         }
         db.prepare("UPDATE agents SET current_job_id = NULL WHERE id = ?").run(agent.id);
         broadcast({ type: "job.updated", jobId: parsed.jobId, status: parsed.status });
-        dispatchQueue(agent.id);
+        void dispatchQueue(agent.id);
       }
       if (parsed.type === "chat.sync") {
         upsertSyncedChat(agent.id, parsed);

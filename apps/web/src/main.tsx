@@ -703,6 +703,15 @@ function diffSummary(stat: string | null, fallback?: { filesChanged?: number; ad
   return fromRows;
 }
 
+function hasProgressChanges(progress: JobProgress | null | undefined) {
+  return Boolean(
+    (progress?.files?.length ?? 0) > 0
+    || (progress?.filesChanged ?? 0) > 0
+    || (progress?.added ?? 0) > 0
+    || (progress?.deleted ?? 0) > 0
+  );
+}
+
 function jobDurationSeconds(job: Job) {
   const start = Date.parse(job.startedAt || job.createdAt);
   const finish = Date.parse(job.finishedAt || new Date().toISOString());
@@ -4123,11 +4132,12 @@ function App() {
   function renderCodexChangeCard(message: ChatMessage, job?: Job, progress?: JobProgress | null) {
     const stat = job?.gitDiffStat || (typeof message.metadata?.gitDiffStat === "string" ? message.metadata.gitDiffStat : "");
     const diff = job?.gitDiff || (typeof message.metadata?.gitDiff === "string" ? message.metadata.gitDiff : "");
-    if (message.role !== "assistant" || (!stat && !progress?.files?.length)) return null;
+    if (message.role !== "assistant" || (!stat && !hasProgressChanges(progress))) return null;
     const fileDiffs = parseUnifiedDiff(diff);
     const exactRows = diffRowsFromFileDiffs(fileDiffs);
     const rows = exactRows.length ? exactRows : diffRows(stat || null, progress?.files);
     const summary = exactRows.length ? diffSummaryFromRows(exactRows) : diffSummary(stat || null, progress);
+    if (summary.files <= 0 && !rows.length) return null;
     const actionKey = `changes:${message.id}`;
     const fileListVisible = expandedActions[actionKey] !== false;
     const durationSeconds = job?.finishedAt ? jobDurationSeconds(job) : messageDurationSeconds(message);
@@ -4346,6 +4356,7 @@ function App() {
   function renderActiveRun() {
     if (!activeJob || !activeRunBusy) return null;
     const promptAlreadyVisible = messages.some((message) => isJobPromptMessage(message, activeJob.id));
+    const showActiveDiff = hasProgressChanges(activeProgress);
     return (
       <>
         {!promptAlreadyVisible && (
@@ -4354,7 +4365,7 @@ function App() {
             <strong>{activeJob.prompt}</strong>
           </div>
         )}
-        {activeProgress && (
+        {activeProgress && showActiveDiff && (
           <div className="progress-wrap">
             <div className="progress-panel">
               <div>
