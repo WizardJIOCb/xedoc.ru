@@ -15,7 +15,8 @@ export const JobStatusSchema = z.enum([
 export type JobStatus = z.infer<typeof JobStatusSchema>;
 
 export const DeployConfigSchema = z.object({
-  sshTarget: z.string().min(1).max(120),
+  mode: z.enum(["ssh", "local"]).default("ssh"),
+  sshTarget: z.string().max(120).optional(),
   sourceDir: z.string().min(1).max(260).default("dist"),
   remoteSubdir: z.string().max(120).optional(),
   cleanRemote: z.boolean().default(false),
@@ -24,6 +25,14 @@ export const DeployConfigSchema = z.object({
     args: z.array(z.string().max(200)).default([]),
     timeoutMs: z.number().int().positive().max(3600000).default(900000)
   }).optional()
+}).superRefine((value, context) => {
+  if ((value.mode ?? "ssh") === "ssh" && !value.sshTarget?.trim()) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sshTarget"],
+      message: "sshTarget is required for ssh deploy mode"
+    });
+  }
 });
 export type DeployConfig = z.infer<typeof DeployConfigSchema>;
 
@@ -490,7 +499,8 @@ export type PasswordUpdate = z.infer<typeof PasswordUpdateSchema>;
 export const CreateAgentSchema = z.object({
   id: z.string().min(3).max(80).regex(/^[a-z0-9_-]+$/i).optional(),
   name: z.string().min(1).max(120),
-  userId: z.string().min(1).optional()
+  userId: z.string().min(1).optional(),
+  setupPlatform: z.enum(["windows", "linux"]).default("windows")
 });
 export type CreateAgent = z.infer<typeof CreateAgentSchema>;
 

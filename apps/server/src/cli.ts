@@ -58,7 +58,7 @@ async function main() {
       console.log(`Created agent ${agentId}`);
     }
     console.log(`Token: ${token}`);
-    console.log("Store it only in CMC_AGENT_TOKEN on the Windows PC.");
+    console.log("Store it only in CMC_AGENT_TOKEN on the agent machine.");
     return;
   }
 

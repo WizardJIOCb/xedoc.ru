@@ -1,5 +1,6 @@
 import os from "node:os";
-import { mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import WebSocket from "ws";
 import { ServerToAgentSchema, type AgentToServer, type CodexUsage, type LocalCodexActivity, type ServerToAgent } from "@cmc/protocol";
 import { loadAgentConfig, saveAgentConfig } from "./config.js";
@@ -382,10 +383,15 @@ async function deployProject(repoId: string): Promise<string> {
   if (build) await runStep([build.command, ...build.args].join(" "), build.command, build.args, repo.path, build.timeoutMs);
 
   const sourceDir = resolveProjectPath(repo.path, repo.deploy.sourceDir);
-  const sourceForScp = `${sourceDir.replace(/\\/g, "/")}/.`;
   const remotePath = repo.serverPath.replace(/\/+$/g, "");
   const remoteSubdir = normalizeRemoteSubdir(repo.deploy.remoteSubdir);
   const deployPath = remoteSubdir ? `${remotePath}/${remoteSubdir}` : remotePath;
+  if ((repo.deploy.mode ?? "ssh") === "local") {
+    await deployProjectLocal(sourceDir, deployPath, repo.deploy.cleanRemote, output);
+    return [...output, `Deploy completed: ${repo.domain ? `https://${repo.domain}` : deployPath}`].join("\n");
+  }
+  if (!repo.deploy.sshTarget) throw new Error("Project deploy SSH target is not configured.");
+  const sourceForScp = `${sourceDir.replace(/\\/g, "/")}/.`;
   const quotedDeployPath = shellQuote(deployPath);
   const protectControllerRoot = [
     `if [ -e ${quotedDeployPath}/data/cmc.db ] || [ -e ${quotedDeployPath}/apps/server/dist/index.js ]; then`,
@@ -425,12 +431,44 @@ async function deployProject(repoId: string): Promise<string> {
   return [...output, `Deploy completed: ${repo.domain ? `https://${repo.domain}` : deployPath}`].join("\n");
 }
 
+async function deployProjectLocal(sourceDir: string, deployPath: string, cleanRemote: boolean, output: string[]): Promise<void> {
+  output.push(`$ local prepare ${deployPath}`);
+  ensureLocalDeployPathIsSafe(deployPath);
+  if (!existsSync(sourceDir) || !statSync(sourceDir).isDirectory()) {
+    throw new Error([...output, `Build output folder does not exist: ${sourceDir}`].join("\n"));
+  }
+  mkdirSync(deployPath, { recursive: true });
+  if (isProtectedDeployDirectory(deployPath)) {
+    throw new Error([...output, `Refusing to deploy into protected controller directory: ${deployPath}`].join("\n"));
+  }
+  output.push(`$ local copy ${sourceDir} -> ${deployPath}`);
+  if (cleanRemote) {
+    if (isProtectedCleanDirectory(deployPath)) {
+      throw new Error([...output, `Refusing to clean protected deploy directory: ${deployPath}. Disable cleanRemote or deploy into a dedicated build output folder.`].join("\n"));
+    }
+    for (const name of readdirSync(deployPath)) {
+      rmSync(join(deployPath, name), { recursive: true, force: true });
+    }
+  }
+  for (const name of readdirSync(sourceDir)) {
+    cpSync(join(sourceDir, name), join(deployPath, name), { recursive: true, force: true });
+  }
+  if (process.platform !== "win32") {
+    output.push(`$ chown -R www-data:www-data ${deployPath}`);
+    const chown = await runCapture("chown", ["-R", "www-data:www-data", deployPath], undefined, 60000);
+    const text = [chown.stdout.trim(), chown.stderr.trim()].filter(Boolean).join("\n");
+    if (text) output.push(text);
+    if (chown.exitCode !== 0) output.push(`chown skipped with exit code ${chown.exitCode}.`);
+  }
+}
+
 async function configureNginx(repoId: string): Promise<string> {
   const repo = config.repos.find((item) => item.id === repoId);
   if (!repo) throw new Error("Project not found in agent config.");
   if (!repo.serverPath) throw new Error("Project server folder is not configured.");
   if (!repo.domain) throw new Error("Project domain is not configured.");
-  if (!repo.deploy?.sshTarget) throw new Error("Project deploy SSH target is not configured.");
+  if (!repo.deploy) throw new Error("Project deploy settings are not configured.");
+  if ((repo.deploy.mode ?? "ssh") === "ssh" && !repo.deploy.sshTarget) throw new Error("Project deploy SSH target is not configured.");
   if (!isSafeDomain(repo.domain)) throw new Error("Project domain is not safe for nginx config.");
   if (!repo.serverPath.replace(/\\/g, "/").startsWith("/var/www/")) {
     throw new Error("Refusing to configure nginx outside /var/www.");
@@ -511,8 +549,11 @@ async function configureNginx(repoId: string): Promise<string> {
     "sudo nginx -t",
     "sudo systemctl reload nginx"
   ].join(" && ");
-  const result = await runCapture("ssh", [repo.deploy.sshTarget, remoteCommand], repo.path, 120000);
-  const output = [`$ ssh ${repo.deploy.sshTarget} configure nginx ${repo.domain}`];
+  const localMode = (repo.deploy.mode ?? "ssh") === "local";
+  const result = localMode
+    ? await runCapture("bash", ["-lc", remoteCommand], repo.path, 120000)
+    : await runCapture("ssh", [repo.deploy.sshTarget!, remoteCommand], repo.path, 120000);
+  const output = [localMode ? `$ local configure nginx ${repo.domain}` : `$ ssh ${repo.deploy.sshTarget} configure nginx ${repo.domain}`];
   const text = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
   if (text) output.push(text);
   if (result.exitCode !== 0) throw new Error([...output, `Nginx configure failed with exit code ${result.exitCode}`].join("\n"));
@@ -523,7 +564,8 @@ async function configureSsl(repoId: string): Promise<string> {
   const repo = config.repos.find((item) => item.id === repoId);
   if (!repo) throw new Error("Project not found in agent config.");
   if (!repo.domain) throw new Error("Project domain is not configured.");
-  if (!repo.deploy?.sshTarget) throw new Error("Project deploy SSH target is not configured.");
+  if (!repo.deploy) throw new Error("Project deploy settings are not configured.");
+  if ((repo.deploy.mode ?? "ssh") === "ssh" && !repo.deploy.sshTarget) throw new Error("Project deploy SSH target is not configured.");
   if (!isSafeDomain(repo.domain)) throw new Error("Project domain is not safe for certbot config.");
 
   const output: string[] = [];
@@ -539,8 +581,11 @@ async function configureSsl(repoId: string): Promise<string> {
     "&& sudo nginx -t",
     "&& sudo systemctl reload nginx"
   ].join(" ");
-  const result = await runCapture("ssh", [repo.deploy.sshTarget, certbotCommand], repo.path, 300000);
-  output.push(`$ ssh ${repo.deploy.sshTarget} certbot ${repo.domain}`);
+  const localMode = (repo.deploy.mode ?? "ssh") === "local";
+  const result = localMode
+    ? await runCapture("bash", ["-lc", certbotCommand], repo.path, 300000)
+    : await runCapture("ssh", [repo.deploy.sshTarget!, certbotCommand], repo.path, 300000);
+  output.push(localMode ? `$ local certbot ${repo.domain}` : `$ ssh ${repo.deploy.sshTarget} certbot ${repo.domain}`);
   const text = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
   if (text) output.push(text);
   if (result.exitCode !== 0) throw new Error([...output, `SSL configure failed with exit code ${result.exitCode}`].join("\n"));
@@ -552,8 +597,23 @@ function isSafeDomain(value: string): boolean {
 }
 
 function resolveProjectPath(projectPath: string, childPath: string): string {
-  if (/^[a-z]:[\\/]/i.test(childPath) || childPath.startsWith("\\\\")) return childPath;
-  return `${projectPath.replace(/[\\/]+$/g, "")}\\${childPath.replace(/^[\\/]+/g, "")}`;
+  if (/^[a-z]:[\\/]/i.test(childPath) || childPath.startsWith("\\\\") || isAbsolute(childPath)) return childPath;
+  return resolve(projectPath, childPath);
+}
+
+function ensureLocalDeployPathIsSafe(path: string): void {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/g, "");
+  if (!normalized.startsWith("/var/www/")) throw new Error("Refusing to deploy outside /var/www.");
+  if (normalized.split("/").some((part) => part === "..")) throw new Error("Deploy path is not safe.");
+}
+
+function isProtectedDeployDirectory(path: string): boolean {
+  return existsSync(join(path, "data", "cmc.db")) || existsSync(join(path, "apps", "server", "dist", "index.js"));
+}
+
+function isProtectedCleanDirectory(path: string): boolean {
+  return [".git", ".env", "data", "apps/server", "package.json", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"]
+    .some((marker) => existsSync(join(path, ...marker.split("/"))));
 }
 
 function normalizeRemoteSubdir(value?: string): string | undefined {

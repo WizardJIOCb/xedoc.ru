@@ -11,7 +11,8 @@ const TestCommandSchema = z.object({
 });
 
 const DeployConfigSchema = z.object({
-  sshTarget: z.string().min(1),
+  mode: z.enum(["ssh", "local"]).default("ssh"),
+  sshTarget: z.string().optional(),
   sourceDir: z.string().min(1).default("dist"),
   remoteSubdir: z.string().max(120).optional(),
   cleanRemote: z.boolean().default(false),
@@ -20,6 +21,14 @@ const DeployConfigSchema = z.object({
     args: z.array(z.string()).default([]),
     timeoutMs: z.number().int().positive().default(900000)
   }).optional()
+}).superRefine((value, context) => {
+  if ((value.mode ?? "ssh") === "ssh" && !value.sshTarget?.trim()) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sshTarget"],
+      message: "sshTarget is required for ssh deploy mode"
+    });
+  }
 });
 
 const RepoConfigSchema = z.object({
@@ -37,6 +46,7 @@ const RepoConfigSchema = z.object({
 
 const AgentConfigSchema = z.object({
   agentId: z.string().min(1),
+  platform: z.enum(["windows", "linux"]).optional(),
   serverUrl: z.string().url(),
   tokenEnv: z.string().min(1).default("CMC_AGENT_TOKEN"),
   heartbeatIntervalMs: z.number().int().positive().default(20000),

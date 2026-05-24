@@ -33,6 +33,7 @@ import {
   RefreshCw,
   Rocket,
   Save,
+  Server,
   Settings,
   ShieldCheck,
   Square,
@@ -90,6 +91,7 @@ type Agent = {
   user_id?: string | null;
   name: string;
   hostname?: string;
+  os?: string;
   status: "online" | "offline";
   current_job_id?: string | null;
   codex_version?: string;
@@ -149,17 +151,20 @@ type OAuthProvider = {
 
 type AgentSetup = {
   agentId: string;
+  platform?: "windows" | "linux";
   serverUrl: string;
   token: string;
   configJson: string;
   setupPowerShell: string;
+  setupShell?: string;
   setupBatch?: string;
   setupFileName?: string;
   packageUrl?: string;
 };
 
 type DeployConfig = {
-  sshTarget: string;
+  mode?: "ssh" | "local";
+  sshTarget?: string;
   sourceDir: string;
   remoteSubdir?: string;
   cleanRemote: boolean;
@@ -401,14 +406,15 @@ function chatLoadingPhaseLabel(phase: ChatLoadingProgress["phase"]) {
   return "Подтягиваю детали запуска";
 }
 
-function defaultProjectPath(name: string) {
+function defaultProjectPath(name: string, agent?: Agent | null) {
   const slug = name
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9а-яё.]+/gi, "-")
     .replace(/\.{2,}/g, ".")
     .replace(/^-+|-+$/g, "");
-  return `C:\\Projects\\${slug || "new-project"}`;
+  const safeSlug = slug || "new-project";
+  return isLinuxAgent(agent) ? `/srv/codex-agent/repos/${safeSlug}` : `C:\\Projects\\${safeSlug}`;
 }
 
 function projectSlug(name: string) {
@@ -445,10 +451,10 @@ function defaultGithubUrlForDomain(domain: string) {
   return domain ? `https://github.com/${DEFAULT_GITHUB_OWNER}/${domain}` : "";
 }
 
-function defaultProjectValues(name: string) {
+function defaultProjectValues(name: string, agent?: Agent | null) {
   const domain = defaultProjectDomain(name);
   return {
-    path: defaultProjectPath(name),
+    path: defaultProjectPath(name, agent),
     domain,
     serverPath: defaultServerPathForDomain(domain),
     githubUrl: defaultGithubUrlForDomain(domain)
@@ -469,12 +475,27 @@ function formatBuildCommand(deploy?: DeployConfig) {
   return [deploy.buildCommand.command, ...deploy.buildCommand.args].join(" ");
 }
 
-function buildDeployConfig(sshTarget: string, sourceDir: string, remoteSubdir: string, cleanRemote: boolean, buildCommand: string): DeployConfig | undefined {
+function isLinuxAgent(agent?: Agent | null) {
+  const text = `${agent?.id ?? ""} ${agent?.name ?? ""} ${agent?.hostname ?? ""} ${agent?.os ?? ""}`.toLowerCase();
+  return /linux|ubuntu|debian|server/.test(text);
+}
+
+function defaultBuildCommandForAgent(agent?: Agent | null) {
+  return isLinuxAgent(agent) ? "npm run build" : "npm.cmd run build";
+}
+
+function hasDeployConfig(repo?: Repo | null) {
+  if (!repo?.serverPath || !repo.deploy) return false;
+  return (repo.deploy.mode ?? "ssh") === "local" || Boolean(repo.deploy.sshTarget);
+}
+
+function buildDeployConfig(mode: "ssh" | "local", sshTarget: string, sourceDir: string, remoteSubdir: string, cleanRemote: boolean, buildCommand: string): DeployConfig | undefined {
   const target = sshTarget.trim();
-  if (!target) return undefined;
+  if (mode === "ssh" && !target) return undefined;
   const parts = splitCommandLine(buildCommand.trim());
   return {
-    sshTarget: target,
+    mode,
+    sshTarget: mode === "ssh" ? target : undefined,
     sourceDir: sourceDir.trim() || "dist",
     remoteSubdir: remoteSubdir.trim() || undefined,
     cleanRemote,
@@ -1654,10 +1675,11 @@ function App() {
   const [projectGithubUrl, setProjectGithubUrl] = useState("");
   const [projectServerPath, setProjectServerPath] = useState("");
   const [projectDomain, setProjectDomain] = useState("");
+  const [projectDeployMode, setProjectDeployMode] = useState<"ssh" | "local">("ssh");
   const [projectDeploySshTarget, setProjectDeploySshTarget] = useState("");
   const [projectDeploySourceDir, setProjectDeploySourceDir] = useState("dist");
   const [projectDeployRemoteSubdir, setProjectDeployRemoteSubdir] = useState("");
-  const [projectDeployBuildCommand, setProjectDeployBuildCommand] = useState("npm.cmd run build");
+  const [projectDeployBuildCommand, setProjectDeployBuildCommand] = useState(defaultBuildCommandForAgent(null));
   const [projectDeployCleanRemote, setProjectDeployCleanRemote] = useState(false);
   const [projectStartPrompt, setProjectStartPrompt] = useState("");
   const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false);
@@ -2571,20 +2593,22 @@ function App() {
   }
 
   function applyProjectDefaultsToForm(options: { includePath: boolean }) {
-    const defaults = defaultProjectValues(projectName);
+    const defaults = defaultProjectValues(projectName, selectedAgent);
     if (options.includePath) setProjectPath(defaults.path);
     setProjectDomain(defaults.domain);
     setProjectServerPath(defaults.serverPath);
     setProjectGithubUrl(defaults.githubUrl);
+    const defaultMode = isLinuxAgent(selectedAgent) ? "local" : "ssh";
+    setProjectDeployMode(defaultMode);
     if (!projectDeploySshTarget.trim()) setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
     if (!projectDeploySourceDir.trim()) setProjectDeploySourceDir("dist");
-    if (!projectDeployBuildCommand.trim()) setProjectDeployBuildCommand("npm.cmd run build");
+    if (!projectDeployBuildCommand.trim()) setProjectDeployBuildCommand(defaultBuildCommandForAgent(selectedAgent));
   }
 
   function handleProjectNameChange(value: string) {
     setProjectName(value);
     if (projectPanel !== "new") return;
-    const defaults = defaultProjectValues(value);
+    const defaults = defaultProjectValues(value, selectedAgent);
     setProjectPath(defaults.path);
     setProjectDomain(defaults.domain);
     setProjectServerPath(defaults.serverPath);
@@ -2607,16 +2631,18 @@ function App() {
   }
 
   function openNewProject() {
-    const defaults = defaultProjectValues("New Project");
+    const defaults = defaultProjectValues("New Project", selectedAgent);
     setProjectName("New Project");
     setProjectPath(defaults.path);
     setProjectGithubUrl(defaults.githubUrl);
     setProjectServerPath(defaults.serverPath);
     setProjectDomain(defaults.domain);
-    setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
+    const defaultMode = isLinuxAgent(selectedAgent) ? "local" : "ssh";
+    setProjectDeployMode(defaultMode);
+    setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
     setProjectDeploySourceDir("dist");
     setProjectDeployRemoteSubdir("");
-    setProjectDeployBuildCommand("npm.cmd run build");
+    setProjectDeployBuildCommand(defaultBuildCommandForAgent(selectedAgent));
     setProjectDeployCleanRemote(false);
     setProjectStartPrompt("");
     setOriginalProjectPath("");
@@ -2629,10 +2655,11 @@ function App() {
     setProjectGithubUrl(repo.githubUrl ?? "");
     setProjectServerPath(repo.serverPath ?? "");
     setProjectDomain(repo.domain ?? "");
+    setProjectDeployMode(repo.deploy?.mode ?? "ssh");
     setProjectDeploySshTarget(repo.deploy?.sshTarget ?? "");
     setProjectDeploySourceDir(repo.deploy?.sourceDir ?? "dist");
     setProjectDeployRemoteSubdir(repo.deploy?.remoteSubdir ?? "");
-    setProjectDeployBuildCommand(formatBuildCommand(repo.deploy));
+    setProjectDeployBuildCommand(formatBuildCommand(repo.deploy) || defaultBuildCommandForAgent(agents.find((agent) => agent.id === repo.agentId)));
     setProjectDeployCleanRemote(repo.deploy?.cleanRemote ?? false);
     setProjectStartPrompt("");
     setOriginalProjectPath(repo.pathMasked);
@@ -3068,7 +3095,7 @@ function App() {
       githubUrl: projectGithubUrl.trim(),
       serverPath: projectServerPath.trim(),
       domain: normalizedDomain,
-      deploy: buildDeployConfig(projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null,
+      deploy: buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null,
       defaultSandbox: sandbox,
       allowedSandboxes: SANDBOXES
     };
@@ -3610,11 +3637,11 @@ function App() {
         append("Nginx", "Skipped: domain is not configured.");
       }
 
-      if (selectedRepo.serverPath && selectedRepo.deploy?.sshTarget) {
+      if (hasDeployConfig(selectedRepo)) {
         const data = await callProjectAction("Deploy", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`);
         setDeployNotice(data.output || "Deploy completed.");
       } else {
-        append("Deploy", "Skipped: server folder or SSH target is not configured.");
+        append("Deploy", "Skipped: server folder or deploy mode is not configured.");
       }
 
       if (selectedRepo.domain) {
@@ -3661,7 +3688,7 @@ function App() {
     await createAgentSetup(newAgentName.trim(), newAgentId.trim() || undefined, currentUser?.role === "admin" ? newAgentUserId || undefined : undefined);
   }
 
-  async function createAgentSetup(name: string, agentId?: string, userId?: string) {
+  async function createAgentSetup(name: string, agentId?: string, userId?: string, setupPlatform: "windows" | "linux" = "windows") {
     if (!csrf || !name.trim()) return;
     setBusy(true);
     setSettingsNotice("");
@@ -3671,7 +3698,8 @@ function App() {
       body: JSON.stringify({
         name: name.trim(),
         id: agentId?.trim() || undefined,
-        userId
+        userId,
+        setupPlatform
       })
     });
     setBusy(false);
@@ -3698,7 +3726,7 @@ function App() {
     await createAgentSetup(`Windows Agent ${suffix}`, `windows-${suffix}`, currentUser?.role === "admin" ? newAgentUserId || undefined : undefined);
   }
 
-  async function downloadAgentSetup(agentOverride?: Agent) {
+  async function downloadAgentSetup(agentOverride?: Agent, setupPlatform: "windows" | "linux" = "windows") {
     if (!csrf || busy) return;
     setBusy(true);
     setSyncNotice("");
@@ -3709,35 +3737,45 @@ function App() {
       ? await api(`/api/agents/${encodeURIComponent(existingOfflineAgent.id)}/setup`, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
-        body: "{}"
+        body: JSON.stringify({ setupPlatform })
       })
       : await api("/api/agents", {
         method: "POST",
         headers: { "x-csrf-token": csrf },
         body: JSON.stringify({
-          name: "Home Windows Agent",
-          id: "home-windows"
+          name: setupPlatform === "linux" ? "Server Ubuntu" : "Home Windows Agent",
+          id: setupPlatform === "linux" ? "agent-linux" : "home-windows",
+          setupPlatform
         })
       });
     setBusy(false);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       setSyncNotice(data.error === "agent_online"
-        ? "Агент уже online: новый setup-agent.bat не нужен."
-        : data.error || "Не получилось подготовить setup-agent.bat.");
+        ? "Агент уже online: новый setup-файл не нужен."
+        : data.error || "Не получилось подготовить setup-файл.");
       return;
     }
     const setup = data.setup as AgentSetup | undefined;
-    if (!setup?.setupBatch && !setup?.setupPowerShell) {
+    if (!setup?.setupBatch && !setup?.setupPowerShell && !setup?.setupShell) {
       setSyncNotice("Сервер не вернул setup-файл.");
       return;
     }
     setAgentSetup(setup);
-    downloadTextFile(setup.setupFileName || "setup-agent.bat", setup.setupBatch || setup.setupPowerShell, "application/x-bat;charset=utf-8");
-    const notice = "Скачал setup-agent.bat. Он скачает компактный agent-package.zip и запустит агента без клонирования репозитория.";
+    const setupText = setupPlatform === "linux" ? setup.setupShell : setup.setupBatch || setup.setupPowerShell;
+    downloadTextFile(setup.setupFileName || (setupPlatform === "linux" ? "setup-agent-linux.sh" : "setup-agent.bat"), setupText ?? "", setupPlatform === "linux" ? "text/x-shellscript;charset=utf-8" : "application/x-bat;charset=utf-8");
+    const notice = setupPlatform === "linux"
+      ? "Скачал setup-agent-linux.sh. На сервере запусти: bash setup-agent-linux.sh; затем выполни codex login, если CLI ещё не авторизован."
+      : "Скачал setup-agent.bat. Он скачает компактный agent-package.zip и запустит агента без клонирования репозитория.";
     setSyncNotice(notice);
     setSettingsNotice(notice);
     await refresh();
+  }
+
+  async function downloadLinuxAgentSetup() {
+    const linuxAgent = agents.find((agent) => agent.id === "agent-linux")
+      ?? agents.find((agent) => isLinuxAgent(agent) && agent.status !== "online");
+    await downloadAgentSetup(linuxAgent, "linux");
   }
 
   async function deleteAgent(agent: Agent) {
@@ -3772,7 +3810,17 @@ function App() {
   }
 
   function showAgentStopGuide(agent: Agent) {
-    const lines = [
+    const lines = isLinuxAgent(agent) ? [
+      `${agent.name} останавливается на сервере ${agent.hostname || agent.id}.`,
+      "",
+      "Если установлен systemd runtime-agent:",
+      "systemctl stop codex-agent-linux.service",
+      "",
+      "Если сервис запущен не от root:",
+      "systemctl --user stop codex-agent-linux.service",
+      "",
+      "Файлы агента обычно лежат в ~/codex-agent."
+    ] : [
       `${agent.name} останавливается только на компьютере ${agent.hostname || agent.id}.`,
       "",
       "Если установлен runtime-агент:",
@@ -3993,14 +4041,22 @@ function App() {
           </form>
           {agentSetup && (
             <div className="settings-card">
-              <h2>Windows setup</h2>
-              <p>На ПК пользователя: установи Node.js LTS и Codex CLI, выполни <code>codex login</code>, затем запусти скачанный <code>setup-agent.bat</code>. Он скачает только runtime-пакет агента.</p>
+              <h2>{agentSetup.platform === "linux" ? "Linux setup" : "Windows setup"}</h2>
+              <p>
+                {agentSetup.platform === "linux"
+                  ? <>На Ubuntu-сервере: установи Node.js LTS и Codex CLI, выполни <code>codex login</code>, затем запусти <code>setup-agent-linux.sh</code>.</>
+                  : <>На ПК пользователя: установи Node.js LTS и Codex CLI, выполни <code>codex login</code>, затем запусти скачанный <code>setup-agent.bat</code>. Он скачает только runtime-пакет агента.</>}
+              </p>
               <button className="secondary" type="button" onClick={() => (
-                downloadTextFile(agentSetup.setupFileName || "setup-agent.bat", agentSetup.setupBatch || agentSetup.setupPowerShell, "application/x-bat;charset=utf-8")
+                downloadTextFile(
+                  agentSetup.setupFileName || (agentSetup.platform === "linux" ? "setup-agent-linux.sh" : "setup-agent.bat"),
+                  agentSetup.platform === "linux" ? agentSetup.setupShell || agentSetup.setupPowerShell : agentSetup.setupBatch || agentSetup.setupPowerShell,
+                  agentSetup.platform === "linux" ? "text/x-shellscript;charset=utf-8" : "application/x-bat;charset=utf-8"
+                )
               )}>
-                <Download size={16} /> Download setup-agent.bat
+                <Download size={16} /> Download {agentSetup.setupFileName || (agentSetup.platform === "linux" ? "setup-agent-linux.sh" : "setup-agent.bat")}
               </button>
-              <textarea className="code-textarea" readOnly value={agentSetup.setupPowerShell} />
+              <textarea className="code-textarea" readOnly value={agentSetup.platform === "linux" ? agentSetup.setupShell || "" : agentSetup.setupPowerShell} />
               <label>
                 Agent config
                 <textarea className="code-textarea small" readOnly value={agentSetup.configJson} />
@@ -4077,6 +4133,8 @@ function App() {
     const repoKeyValue = syncRepo ? `${syncRepo.agentId}:${syncRepo.id}` : "";
     const syncRepoAgent = syncRepo ? agents.find((agent) => agent.id === syncRepo.agentId) : undefined;
     const controlAgent = syncRepoAgent ?? selectedAgent;
+    const controlIsLinux = isLinuxAgent(controlAgent);
+    const linuxAgent = agents.find((agent) => agent.id === "agent-linux") ?? agents.find((agent) => isLinuxAgent(agent));
     const agentSeenAt = formatDateTime(controlAgent?.last_seen_at);
     const agentReady = Boolean(controlAgent && controlAgent.status === "online");
     const repoReady = Boolean(syncRepo);
@@ -4086,6 +4144,9 @@ function App() {
     const setupButtonLabel = controlAgent
       ? controlAgent.status === "online" ? "Агент уже online" : "Скачать установщик агента"
       : "Создать агента и скачать установщик";
+    const linuxSetupButtonLabel = linuxAgent
+      ? linuxAgent.status === "online" ? "Linux-агент online" : "Скачать setup Linux-агента"
+      : "Добавить server agent-linux";
     const statusRows = [
       {
         label: "Web service",
@@ -4093,7 +4154,7 @@ function App() {
         value: "codex.rodion.pro отвечает"
       },
       {
-        label: "Windows agent",
+        label: controlIsLinux ? "Linux server agent" : "Windows agent",
         ok: agentReady,
         value: controlAgent ? `${controlAgent.name} · ${controlAgent.status}${agentSeenAt ? ` · ${agentSeenAt}` : ""}` : "Агент не найден"
       },
@@ -4113,9 +4174,9 @@ function App() {
         value: syncRepo ? `${syncRepo.name} · ${syncRepo.pathMasked}` : "Нет доступных проектов"
       },
       {
-        label: "VS Code bridge",
-        ok: Boolean(bridgeReady),
-        value: vscodeNotice || "Нажми Ping VS Code"
+        label: controlIsLinux ? "Server bridge" : "VS Code bridge",
+        ok: controlIsLinux ? agentReady : Boolean(bridgeReady),
+        value: controlIsLinux ? "Linux agent works through direct WebSocket; VS Code bridge is not required." : vscodeNotice || "Нажми Ping VS Code"
       }
     ];
 
@@ -4141,26 +4202,43 @@ function App() {
             </button>
           </div>
 
+          <div className="settings-card sync-setup-card server-setup-card">
+            <div>
+              <h2><Server size={18} /> Linux server agent</h2>
+              <p>
+                Добавляет постоянное подключение <code>agent-linux</code> на Ubuntu-сервере. Агент работает как systemd service, хранит проекты на сервере и может деплоить локально в <code>/var/www</code> без домашнего Windows ПК.
+              </p>
+            </div>
+            <button className="sync-setup-button" disabled={busy || Boolean(linuxAgent && linuxAgent.status === "online")} type="button" onClick={() => void downloadLinuxAgentSetup()}>
+              <Server size={16} /> {linuxSetupButtonLabel}
+            </button>
+          </div>
+
           <div className="settings-card sync-guide-card">
             <h2><ShieldCheck size={18} /> Что означает online</h2>
             <p>
-              Online значит, что сервер видит WebSocket от агента. Окно может быть закрыто или спрятано в фоне: агент всё равно работает как node-процесс или через Codex Agent.
-              Останавливать его нужно на том компьютере: кнопкой <strong>Stop</strong> в Codex Agent или файлом <code>%USERPROFILE%\codex-agent\stop-agent.bat</code>.
+              Online значит, что сервер видит WebSocket от агента. Windows-агент может работать как node-процесс на домашнем ПК, Linux-агент - как systemd service на сервере.
+              Останавливать нужно там, где он установлен: <code>stop-agent.bat</code> на Windows или <code>systemctl stop codex-agent-linux</code> на сервере.
             </p>
             <div className="sync-steps">
               <article><strong>1</strong><span>Скачать setup для нужного агента</span></article>
-              <article><strong>2</strong><span>На этом ПК установить Node.js LTS, Codex CLI и выполнить <code>codex login</code></span></article>
-              <article><strong>3</strong><span>Запустить <code>setup-agent.bat</code>; он сохранит token и allowlist проектов</span></article>
-              <article><strong>4</strong><span>Для второго ПК создать отдельного агента, чтобы статусы не перехватывались</span></article>
+              <article><strong>2</strong><span>Установить Node.js LTS, Codex CLI и выполнить <code>codex login</code></span></article>
+              <article><strong>3</strong><span>Запустить setup; он сохранит token и allowlist проектов</span></article>
+              <article><strong>4</strong><span>Для каждого ПК или сервера использовать отдельный agentId</span></article>
             </div>
           </div>
 
           <div className="settings-card">
             <div className="section-head">
               <h2><Bot size={18} /> Доступные подключения</h2>
-              <button className="secondary" disabled={busy} type="button" onClick={() => void createAnotherComputerSetup()}>
-                <Plus size={16} /> Новый компьютер
-              </button>
+              <div className="section-actions">
+                <button className="secondary" disabled={busy || Boolean(linuxAgent && linuxAgent.status === "online")} type="button" onClick={() => void downloadLinuxAgentSetup()}>
+                  <Server size={16} /> Новый сервер
+                </button>
+                <button className="secondary" disabled={busy} type="button" onClick={() => void createAnotherComputerSetup()}>
+                  <Plus size={16} /> Новый компьютер
+                </button>
+              </div>
             </div>
             <div className="agent-connection-list">
               {agents.map((agent) => {
@@ -4178,6 +4256,7 @@ function App() {
                     <div className="agent-connection-meta">
                       <span>ID: <code>{agent.id}</code></span>
                       <span>Host: {agent.hostname || "ещё не подключался"}</span>
+                      {agent.os && <span>OS: {agent.os}</span>}
                       <span>Projects: {agentRepos.length}</span>
                       {lastSeen && <span>Last seen: {lastSeen}</span>}
                     </div>
@@ -4244,13 +4323,13 @@ function App() {
               </select>
             </label>
             <div className="sync-actions">
-              <button disabled={!agentReady || vscodeBusy} type="button" onClick={() => runVscodeCommand("ping", controlAgent?.id)}>
+              <button disabled={!agentReady || controlIsLinux || vscodeBusy} type="button" onClick={() => runVscodeCommand("ping", controlAgent?.id)}>
                 <Terminal size={16} /> Ping VS Code
               </button>
-              <button disabled={!agentReady || vscodeBusy} type="button" onClick={() => runVscodeCommand("newCodexPanel", controlAgent?.id)}>
+              <button disabled={!agentReady || controlIsLinux || vscodeBusy} type="button" onClick={() => runVscodeCommand("newCodexPanel", controlAgent?.id)}>
                 <Bot size={16} /> Open Codex panel
               </button>
-              <button disabled={!agentReady || vscodeBusy || !activeCodexThreadId} type="button" onClick={() => runVscodeCommand("reopenThread", controlAgent?.id, { threadId: activeCodexThreadId })}>
+              <button disabled={!agentReady || controlIsLinux || vscodeBusy || !activeCodexThreadId} type="button" onClick={() => runVscodeCommand("reopenThread", controlAgent?.id, { threadId: activeCodexThreadId })}>
                 <MessageSquare size={16} /> Reopen active chat
               </button>
               <button disabled={!syncRepo || !agentReady || localChatSyncing} type="button" onClick={() => syncRepo && syncLocalChats(syncRepo)}>
@@ -4735,11 +4814,11 @@ function App() {
                   <UploadCloud size={16} />
                   <span>Commit & push</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || deployBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} role="menuitem" type="button" onClick={deployProject}>
+                <button className="project-menu-action" disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={deployProject}>
                   <UploadCloud size={16} />
                   <span>Deploy</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} role="menuitem" type="button" onClick={launchProject}>
+                <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
                   <Rocket size={16} />
                   <span>Launch</span>
                 </button>
@@ -5096,7 +5175,7 @@ function App() {
             <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
           </label>
           <label>
-            Folder on home PC
+            Folder on selected agent
             <input value={projectPath} onChange={(event) => setProjectPath(event.target.value)} />
           </label>
           <label>
@@ -5123,8 +5202,15 @@ function App() {
             </div>
           )}
           <label>
+            Deploy mode
+            <select value={projectDeployMode} onChange={(event) => setProjectDeployMode(event.target.value as "ssh" | "local")}>
+              <option value="ssh">SSH upload from this agent</option>
+              <option value="local">Local server copy</option>
+            </select>
+          </label>
+          <label>
             Deploy SSH target
-            <input placeholder="myserver" value={projectDeploySshTarget} onChange={(event) => setProjectDeploySshTarget(event.target.value)} />
+            <input disabled={projectDeployMode === "local"} placeholder="myserver" value={projectDeployMode === "local" ? "" : projectDeploySshTarget} onChange={(event) => setProjectDeploySshTarget(event.target.value)} />
           </label>
           <label>
             Deploy source folder
@@ -5136,7 +5222,7 @@ function App() {
           </label>
           <label>
             Build command
-            <input placeholder="npm.cmd run build" value={projectDeployBuildCommand} onChange={(event) => setProjectDeployBuildCommand(event.target.value)} />
+            <input placeholder={defaultBuildCommandForAgent(selectedAgent)} value={projectDeployBuildCommand} onChange={(event) => setProjectDeployBuildCommand(event.target.value)} />
           </label>
           <label className="checkbox-row">
             <input checked={projectDeployCleanRemote} type="checkbox" onChange={(event) => setProjectDeployCleanRemote(event.target.checked)} />
@@ -5260,10 +5346,10 @@ function App() {
               <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
               <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
               <button disabled={launchBusy || gitBusy || !gitMessage.trim()} type="submit"><UploadCloud size={16} /> Commit & push</button>
-              <button disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} type="button" onClick={launchProject}><Rocket size={16} /> Launch</button>
-              <button disabled={launchBusy || deployBusy || !selectedRepo.serverPath || !selectedRepo.deploy?.sshTarget} type="button" onClick={deployProject}><UploadCloud size={16} /> Deploy</button>
-              <button disabled={launchBusy || nginxBusy || !selectedRepo.serverPath || !selectedRepo.domain || !selectedRepo.deploy?.sshTarget} type="button" onClick={configureNginx}><Settings size={16} /> Nginx</button>
-              <button disabled={launchBusy || sslBusy || !selectedRepo.serverPath || !selectedRepo.domain || !selectedRepo.deploy?.sshTarget} type="button" onClick={configureSsl}><Settings size={16} /> SSL</button>
+              <button disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} type="button" onClick={launchProject}><Rocket size={16} /> Launch</button>
+              <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} type="button" onClick={deployProject}><UploadCloud size={16} /> Deploy</button>
+              <button disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} type="button" onClick={configureNginx}><Settings size={16} /> Nginx</button>
+              <button disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} type="button" onClick={configureSsl}><Settings size={16} /> SSL</button>
               {selectedProjectUrl && <a className="launch-link" href={selectedProjectUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /> Open</a>}
               {gitNotice && <pre>{gitNotice}</pre>}
               {launchNotice && <pre>{launchNotice}</pre>}
@@ -5406,7 +5492,7 @@ function App() {
           <div className="agent-rules">
             <span>Filesystem Access <strong>{sandbox === "danger-full-access" ? "Full" : "Scoped"}</strong></span>
             <span>Network Access <strong>{sandbox === "danger-full-access" ? "Enabled" : "Restricted"}</strong></span>
-            <span>Auto Deploy <strong>{selectedRepo?.serverPath && selectedRepo.deploy?.sshTarget ? "Ready" : "Not set"}</strong></span>
+            <span>Auto Deploy <strong>{hasDeployConfig(selectedRepo) ? "Ready" : "Not set"}</strong></span>
           </div>
           <div className={`local-activity ${localCodexBusy ? "busy" : "idle"}`}>
             <div>

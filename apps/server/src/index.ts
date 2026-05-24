@@ -1835,12 +1835,23 @@ function agentPackageZip(): Buffer {
   return createStoredZip(entries.sort((a, b) => a.path.localeCompare(b.path)));
 }
 
-function agentSetupPayload(request: { protocol: string; hostname: string }, agentId: string, token: string) {
+type AgentSetupPlatform = "windows" | "linux";
+
+function setupPlatformFromBody(body: unknown): AgentSetupPlatform {
+  return body && typeof body === "object" && "setupPlatform" in body && body.setupPlatform === "linux" ? "linux" : "windows";
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function agentSetupPayload(request: { protocol: string; hostname: string }, agentId: string, token: string, platform: AgentSetupPlatform = "windows") {
   const origin = publicOrigin(request);
   const serverUrl = `${origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")}/api/agent/ws`;
   const packageUrl = `${origin}/api/agent/package.zip`;
   const configJson = JSON.stringify({
     agentId,
+    platform,
     serverUrl,
     tokenEnv: "CMC_AGENT_TOKEN",
     heartbeatIntervalMs: 20000,
@@ -1906,7 +1917,106 @@ function agentSetupPayload(request: { protocol: string; hostname: string }, agen
     "pause",
     "exit /b %CODEX_AGENT_SETUP_EXIT%"
   ].join("\r\n");
-  return { agentId, serverUrl, token, configJson, setupPowerShell, setupBatch, setupFileName: "setup-agent.bat", packageUrl };
+  const setupShell = [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "ROOT=\"${CODEX_AGENT_ROOT:-$HOME/codex-agent}\"",
+    `PACKAGE_URL=${shellSingleQuote(packageUrl)}`,
+    `CMC_TOKEN=${shellSingleQuote(token)}`,
+    `CONFIG_B64=${shellSingleQuote(encodedConfig)}`,
+    "SERVICE_NAME=\"codex-agent-linux\"",
+    "mkdir -p \"$ROOT/data\"",
+    "if ! command -v node >/dev/null 2>&1; then echo \"Install Node.js 22 LTS first.\" >&2; exit 1; fi",
+    "if ! command -v corepack >/dev/null 2>&1; then echo \"Install Corepack/Node.js 22 LTS first.\" >&2; exit 1; fi",
+    "if ! command -v codex >/dev/null 2>&1; then echo \"Codex CLI is not installed yet. Install it and run: codex login\" >&2; fi",
+    "ZIP=\"$ROOT/agent-package.zip\"",
+    "if command -v curl >/dev/null 2>&1; then curl -fsSL \"$PACKAGE_URL\" -o \"$ZIP\"; elif command -v wget >/dev/null 2>&1; then wget -O \"$ZIP\" \"$PACKAGE_URL\"; else echo \"Install curl or wget first.\" >&2; exit 1; fi",
+    "if command -v unzip >/dev/null 2>&1; then unzip -oq \"$ZIP\" -d \"$ROOT\"; elif command -v python3 >/dev/null 2>&1; then python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \"$ZIP\" \"$ROOT\"; else echo \"Install unzip or python3 first.\" >&2; exit 1; fi",
+    "rm -f \"$ZIP\"",
+    "cd \"$ROOT\"",
+    "corepack enable",
+    "corepack pnpm install --prod --frozen-lockfile",
+    "export CONFIG_B64",
+    "node -e \"const fs=require('fs'); fs.mkdirSync('apps/agent-windows',{recursive:true}); fs.writeFileSync('apps/agent-windows/agent.config.json', Buffer.from(process.env.CONFIG_B64,'base64').toString('utf8'));\"",
+    "umask 077",
+    "cat > agent.env <<ENV",
+    "CMC_AGENT_TOKEN=$CMC_TOKEN",
+    "GH_PROMPT_DISABLED=1",
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin:$HOME/.npm-global/bin",
+    "ENV",
+    "chmod 600 agent.env",
+    "cat > start-agent-linux.sh <<'SH'",
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "ROOT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"",
+    "cd \"$ROOT_DIR\"",
+    "set -a",
+    ". \"$ROOT_DIR/agent.env\"",
+    "set +a",
+    "exec node apps/agent-windows/dist/index.js --config apps/agent-windows/agent.config.json",
+    "SH",
+    "chmod +x start-agent-linux.sh",
+    "cat > stop-agent-linux.sh <<'SH'",
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "systemctl stop codex-agent-linux.service 2>/dev/null || systemctl --user stop codex-agent-linux.service 2>/dev/null || pkill -f 'apps/agent-windows/dist/index.js --config apps/agent-windows/agent.config.json' || true",
+    "SH",
+    "chmod +x stop-agent-linux.sh",
+    "NODE_BIN=\"$(command -v node)\"",
+    "SERVICE_USER=\"$(id -un)\"",
+    "SERVICE_HOME=\"$HOME\"",
+    "SERVICE_FILE=\"$ROOT/$SERVICE_NAME.service\"",
+    "cat > \"$SERVICE_FILE\" <<SERVICE",
+    "[Unit]",
+    "Description=codex.rodion.pro Linux agent",
+    "After=network-online.target",
+    "Wants=network-online.target",
+    "",
+    "[Service]",
+    "Type=simple",
+    "User=$SERVICE_USER",
+    "WorkingDirectory=$ROOT",
+    "Environment=HOME=$SERVICE_HOME",
+    "Environment=USER=$SERVICE_USER",
+    "ExecStart=$ROOT/start-agent-linux.sh",
+    "Restart=always",
+    "RestartSec=3",
+    "",
+    "[Install]",
+    "WantedBy=multi-user.target",
+    "SERVICE",
+    "if [ \"$(id -u)\" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then",
+    "  cp \"$SERVICE_FILE\" \"/etc/systemd/system/$SERVICE_NAME.service\"",
+    "  systemctl daemon-reload",
+    "  systemctl enable --now \"$SERVICE_NAME.service\"",
+    "elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null && command -v systemctl >/dev/null 2>&1; then",
+    "  sudo cp \"$SERVICE_FILE\" \"/etc/systemd/system/$SERVICE_NAME.service\"",
+    "  sudo systemctl daemon-reload",
+    "  sudo systemctl enable --now \"$SERVICE_NAME.service\"",
+    "else",
+    "  USER_SERVICE_DIR=\"$HOME/.config/systemd/user\"",
+    "  mkdir -p \"$USER_SERVICE_DIR\"",
+    "  sed '/^User=/d; s/WantedBy=multi-user.target/WantedBy=default.target/' \"$SERVICE_FILE\" > \"$USER_SERVICE_DIR/$SERVICE_NAME.service\"",
+    "  systemctl --user daemon-reload",
+    "  systemctl --user enable --now \"$SERVICE_NAME.service\"",
+    "  if command -v loginctl >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then sudo loginctl enable-linger \"$SERVICE_USER\" || true; fi",
+    "fi",
+    "if command -v codex >/dev/null 2>&1; then codex login status || echo \"Run codex login for $SERVICE_USER if Codex is signed out.\"; fi",
+    "echo \"Linux agent installed at $ROOT.\"",
+    "echo \"Service: $SERVICE_NAME\""
+  ].join("\n");
+  return {
+    agentId,
+    platform,
+    serverUrl,
+    token,
+    configJson,
+    setupPowerShell,
+    setupBatch,
+    setupShell: platform === "linux" ? setupShell : undefined,
+    setupFileName: platform === "linux" ? "setup-agent-linux.sh" : "setup-agent.bat",
+    packageUrl
+  };
 }
 
 async function tokenRequest(url: string, params: Record<string, string>, headers: Record<string, string> = {}): Promise<Record<string, unknown>> {
@@ -2331,7 +2441,7 @@ async function createApp(): Promise<FastifyInstance> {
     const token = randomToken("cmc_agent");
     db.prepare("INSERT INTO agents (id,user_id,name,token_hash,status,created_at) VALUES (?,?,?,?,?,?)")
       .run(agentId, ownerId, parsed.data.name.trim(), await hashSecret(token), "offline", nowIso());
-    const setup = agentSetupPayload({ protocol: request.protocol, hostname: request.hostname }, agentId, token);
+    const setup = agentSetupPayload({ protocol: request.protocol, hostname: request.hostname }, agentId, token, parsed.data.setupPlatform);
     return reply.code(201).send({ agent: { id: agentId, name: parsed.data.name.trim(), userId: ownerId }, setup });
   });
 
@@ -2346,7 +2456,7 @@ async function createApp(): Promise<FastifyInstance> {
     const token = randomToken("cmc_agent");
     db.prepare("UPDATE agents SET token_hash = ?, status = 'offline', last_seen_at = ? WHERE id = ?")
       .run(await hashSecret(token), nowIso(), agentId);
-    const setup = agentSetupPayload({ protocol: request.protocol, hostname: request.hostname }, agentId, token);
+    const setup = agentSetupPayload({ protocol: request.protocol, hostname: request.hostname }, agentId, token, setupPlatformFromBody(request.body));
     return { setup };
   });
 

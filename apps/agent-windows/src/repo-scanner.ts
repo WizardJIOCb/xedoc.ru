@@ -3,7 +3,10 @@ import type { AgentConfig, RepoConfig } from "./config.js";
 import { runCapture } from "./process-utils.js";
 
 function maskPath(path: string): string {
-  return path.replace(/^([A-Z]:\\Users\\)[^\\]+/i, "$1...");
+  return path
+    .replace(/^([A-Z]:\\Users\\)[^\\]+/i, "$1...")
+    .replace(/^(\/home\/)[^/]+/i, "$1...")
+    .replace(/^(\/root)(\/|$)/i, "$1$2");
 }
 
 export async function scanRepo(repo: RepoConfig): Promise<RepoInfo> {
