@@ -436,11 +436,14 @@ export const GitSyncSchema = z.object({
   message: z.string().min(1).max(200),
   remoteUrl: z.string().max(300).optional(),
   createRemote: z.boolean().default(false),
-  remoteVisibility: z.enum(["private", "public"]).default("private")
+  remoteVisibility: z.enum(["private", "public"]).default("private"),
+  chatId: z.string().min(1).max(120).optional()
 });
 export type GitSync = z.infer<typeof GitSyncSchema>;
 
-export const DeploySchema = z.object({});
+export const DeploySchema = z.object({
+  chatId: z.string().min(1).max(120).optional()
+});
 export type Deploy = z.infer<typeof DeploySchema>;
 
 export const NginxSchema = z.object({});

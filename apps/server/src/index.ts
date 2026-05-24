@@ -551,6 +551,7 @@ function appendLog(log: Omit<LogRow, "id">): void {
 }
 
 function appendChatMessage(message: Omit<ChatMessageRow, "id"> & { id?: string }): void {
+  db.prepare("UPDATE chats SET updated_at=? WHERE id=?").run(message.created_at, message.chat_id);
   db.prepare(`
     INSERT INTO chat_messages (id,chat_id,role,content,source,external_id,metadata_json,created_at)
     VALUES (?,?,?,?,?,?,?,?)
@@ -572,6 +573,85 @@ function appendChatMessage(message: Omit<ChatMessageRow, "id"> & { id?: string }
     message.created_at
   );
   broadcast({ type: "chats.updated", agentId: chatAgentId(message.chat_id), repoId: chatRepoId(message.chat_id), chatId: message.chat_id });
+}
+
+type ProjectOperationKind = "git-sync" | "deploy";
+type ProjectOperationStatus = "running" | "completed" | "failed";
+
+function projectOperationChat(user: AuthUser, agentId: string, repoId: string, chatId: string): ChatRow | undefined {
+  return db.prepare(`
+    SELECT c.* FROM chats c
+    JOIN agents a ON a.id = c.agent_id
+    WHERE c.id = ? AND c.agent_id = ? AND c.repo_id = ? ${isAdmin(user) ? "" : "AND a.user_id = ?"}
+  `).get(chatId, agentId, repoId, ...(isAdmin(user) ? [] : [user.id])) as ChatRow | undefined;
+}
+
+function safeInlineCode(value: string): string {
+  return value.replace(/`/g, "'").trim();
+}
+
+function safeCodeFence(value: string): string {
+  const text = value.trim() || "No output.";
+  const max = 120000;
+  const trimmed = text.length > max
+    ? `${text.slice(0, 4000)}\n\n... output truncated ...\n\n${text.slice(-(max - 4000))}`
+    : text;
+  return trimmed.replace(/```/g, "` ` `");
+}
+
+function projectOperationContent(
+  label: string,
+  status: ProjectOperationStatus,
+  repoName: string,
+  output?: string,
+  details: string[] = []
+): string {
+  const title = status === "running"
+    ? `${label} запущен`
+    : status === "completed"
+      ? `${label} завершён`
+      : `${label} завершился с ошибкой`;
+  const lines = [
+    `**${title}**`,
+    "",
+    `Проект: \`${safeInlineCode(repoName)}\`.`,
+    ...details.map((detail) => detail.trim()).filter(Boolean)
+  ];
+  if (status === "running") lines.push("Статус: выполняется.");
+  if (output?.trim()) {
+    lines.push("", "```text", safeCodeFence(output), "```");
+  }
+  return lines.join("\n");
+}
+
+function appendProjectOperationMessage(options: {
+  chat: ChatRow;
+  messageId: string;
+  requestId: string;
+  operation: ProjectOperationKind;
+  label: string;
+  status: ProjectOperationStatus;
+  repoName: string;
+  output?: string;
+  details?: string[];
+}): void {
+  const stamp = nowIso();
+  appendChatMessage({
+    id: options.messageId,
+    chat_id: options.chat.id,
+    role: "system",
+    content: projectOperationContent(options.label, options.status, options.repoName, options.output, options.details ?? []),
+    source: "web",
+    external_id: `project-operation:${options.operation}:${options.requestId}`,
+    metadata_json: JSON.stringify({
+      kind: "project-operation",
+      operation: options.operation,
+      operationLabel: options.label,
+      status: options.status,
+      requestId: options.requestId
+    }),
+    created_at: stamp
+  });
 }
 
 function clearOrphanedAgentJobs(agentId: string, currentJobId: string | undefined, reason = "Agent heartbeat has no active job; marking stale job as disconnected."): void {
@@ -2372,21 +2452,79 @@ async function createApp(): Promise<FastifyInstance> {
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    const operationChat = parsed.data.chatId ? projectOperationChat(auth.user, params.agentId, params.repoId, parsed.data.chatId) : undefined;
+    if (parsed.data.chatId && !operationChat) return reply.code(404).send({ error: "chat_not_found" });
+    const requestId = id("req");
+    const operationMessageId = operationChat ? id("msg") : "";
+    const operationDetails = [`Сообщение коммита: \`${safeInlineCode(parsed.data.message)}\`.`];
+    if (operationChat) {
+      appendProjectOperationMessage({
+        chat: operationChat,
+        messageId: operationMessageId,
+        requestId,
+        operation: "git-sync",
+        label: "Commit & push",
+        status: "running",
+        repoName: repo.name,
+        details: operationDetails
+      });
+    }
     try {
       await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentGit(params.agentId, {
         type: "git.sync",
-        requestId: id("req"),
+        requestId,
         repoId: params.repoId,
         message: parsed.data.message,
         remoteUrl: parsed.data.remoteUrl?.trim() || undefined,
         createRemote: parsed.data.createRemote,
         remoteVisibility: parsed.data.remoteVisibility
       });
-      if (!result.ok) return reply.code(400).send({ error: result.error ?? "git_sync_failed", output: result.output });
+      if (!result.ok) {
+        if (operationChat) {
+          appendProjectOperationMessage({
+            chat: operationChat,
+            messageId: operationMessageId,
+            requestId,
+            operation: "git-sync",
+            label: "Commit & push",
+            status: "failed",
+            repoName: repo.name,
+            output: result.output || result.error || "Git sync failed.",
+            details: operationDetails
+          });
+        }
+        return reply.code(400).send({ error: result.error ?? "git_sync_failed", output: result.output });
+      }
       if (result.repos) upsertRepos(params.agentId, result.repos);
-      return { ok: true, output: result.output, status: result.status };
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "git-sync",
+          label: "Commit & push",
+          status: "completed",
+          repoName: repo.name,
+          output: result.output || result.status || "Git sync completed.",
+          details: operationDetails
+        });
+      }
+      return { ok: true, output: result.output, status: result.status, chatMessageId: operationMessageId || undefined };
     } catch (error) {
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "git-sync",
+          label: "Commit & push",
+          status: "failed",
+          repoName: repo.name,
+          output: error instanceof Error ? error.message : "agent_error",
+          details: operationDetails
+        });
+      }
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }
   });
@@ -2401,17 +2539,70 @@ async function createApp(): Promise<FastifyInstance> {
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    const operationChat = parsed.data.chatId ? projectOperationChat(auth.user, params.agentId, params.repoId, parsed.data.chatId) : undefined;
+    if (parsed.data.chatId && !operationChat) return reply.code(404).send({ error: "chat_not_found" });
+    const requestId = id("req");
+    const operationMessageId = operationChat ? id("msg") : "";
+    if (operationChat) {
+      appendProjectOperationMessage({
+        chat: operationChat,
+        messageId: operationMessageId,
+        requestId,
+        operation: "deploy",
+        label: "Deploy",
+        status: "running",
+        repoName: repo.name
+      });
+    }
     try {
       await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentDeploy(params.agentId, {
         type: "project.deploy",
-        requestId: id("req"),
+        requestId,
         repoId: params.repoId
       });
-      if (!result.ok) return reply.code(400).send({ error: result.error ?? "deploy_failed", output: result.output });
+      if (!result.ok) {
+        if (operationChat) {
+          appendProjectOperationMessage({
+            chat: operationChat,
+            messageId: operationMessageId,
+            requestId,
+            operation: "deploy",
+            label: "Deploy",
+            status: "failed",
+            repoName: repo.name,
+            output: result.output || result.error || "Deploy failed."
+          });
+        }
+        return reply.code(400).send({ error: result.error ?? "deploy_failed", output: result.output });
+      }
       if (result.repos) upsertRepos(params.agentId, result.repos);
-      return { ok: true, output: result.output };
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "deploy",
+          label: "Deploy",
+          status: "completed",
+          repoName: repo.name,
+          output: result.output || "Deploy completed."
+        });
+      }
+      return { ok: true, output: result.output, chatMessageId: operationMessageId || undefined };
     } catch (error) {
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "deploy",
+          label: "Deploy",
+          status: "failed",
+          repoName: repo.name,
+          output: error instanceof Error ? error.message : "agent_error"
+        });
+      }
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }
   });

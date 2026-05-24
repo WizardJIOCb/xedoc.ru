@@ -1597,6 +1597,30 @@ function messageUpdateSignature(message: ChatMessage) {
   ].join(":");
 }
 
+type ProjectOperationKind = "git-sync" | "deploy";
+
+function isProjectOperationMessage(message: ChatMessage) {
+  return message.role === "system" && message.metadata?.kind === "project-operation";
+}
+
+function projectOperationLabel(message: ChatMessage) {
+  return typeof message.metadata?.operationLabel === "string" ? message.metadata.operationLabel : "Project action";
+}
+
+function safeMarkdownInlineCode(value: string) {
+  return value.replace(/`/g, "'").trim();
+}
+
+function projectOperationPendingContent(label: string, repoName: string, details: string[] = []) {
+  return [
+    `**${label} запущен**`,
+    "",
+    `Проект: \`${safeMarkdownInlineCode(repoName)}\`.`,
+    ...details.map((detail) => detail.trim()).filter(Boolean),
+    "Статус: выполняется."
+  ].join("\n");
+}
+
 function App() {
   const [csrf, setCsrf] = useState<string>();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -3355,27 +3379,62 @@ function App() {
     });
   }
 
+  function addLocalProjectOperationMessage(operation: ProjectOperationKind, label: string, details: string[] = []) {
+    if (!activeChatId || !selectedRepo) return "";
+    const stamp = new Date().toISOString();
+    const id = `local-project-operation:${operation}:${stamp}:${Math.random().toString(36).slice(2)}`;
+    const message: ChatMessage = {
+      id,
+      chatId: activeChatId,
+      role: "system",
+      source: "web",
+      externalId: id,
+      content: projectOperationPendingContent(label, selectedRepo.name, details),
+      metadata: {
+        kind: "project-operation",
+        operation,
+        operationLabel: label,
+        status: "running"
+      },
+      createdAt: stamp,
+      attachments: []
+    };
+    setMessages((current) => [...current.filter((item) => item.id !== id), message]);
+    return id;
+  }
+
+  function removeLocalProjectOperationMessage(messageId: string) {
+    if (!messageId) return;
+    setMessages((current) => current.filter((message) => message.id !== messageId));
+  }
+
   async function runGitSync() {
     if (!selectedRepo || !csrf || !gitMessage.trim() || launchBusy) return;
+    const targetChatId = activeChatId || activeChat?.id || "";
+    const operationDetails = [`Сообщение коммита: \`${safeMarkdownInlineCode(gitMessage.trim())}\`.`];
+    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("git-sync", "Commit & push", operationDetails) : "";
     setGitBusy(true);
     setActionMenuOpen(false);
-    setGitNotice("Git sync started...");
+    setGitNotice(targetChatId ? "" : "Git sync started...");
     const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`, {
       method: "POST",
       headers: { "x-csrf-token": csrf },
       body: JSON.stringify({
         message: gitMessage.trim(),
-        remoteUrl: gitRemoteUrl.trim() || selectedRepo.githubUrl || undefined
+        remoteUrl: gitRemoteUrl.trim() || selectedRepo.githubUrl || undefined,
+        chatId: targetChatId || undefined
       })
     });
     const data = await response.json().catch(() => ({}));
     setGitBusy(false);
+    removeLocalProjectOperationMessage(pendingMessageId);
+    if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
     if (!response.ok) {
-      setGitNotice(data.output || data.error || "Git sync failed.");
+      if (!targetChatId) setGitNotice(data.output || data.error || "Git sync failed.");
       return;
     }
     setGitRemoteUrl("");
-    setGitNotice(data.output || data.status || "Git sync completed.");
+    if (!targetChatId) setGitNotice(data.output || data.status || "Git sync completed.");
     await refresh();
   }
 
@@ -3417,21 +3476,25 @@ function App() {
 
   async function deployProject() {
     if (!selectedRepo || !csrf) return;
+    const targetChatId = activeChatId || activeChat?.id || "";
+    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("deploy", "Deploy") : "";
     setDeployBusy(true);
     setActionMenuOpen(false);
-    setDeployNotice("Deploy started...");
+    setDeployNotice(targetChatId ? "" : "Deploy started...");
     const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`, {
       method: "POST",
       headers: { "x-csrf-token": csrf },
-      body: "{}"
+      body: JSON.stringify({ chatId: targetChatId || undefined })
     });
     const data = await response.json().catch(() => ({}));
     setDeployBusy(false);
+    removeLocalProjectOperationMessage(pendingMessageId);
+    if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
     if (!response.ok) {
-      setDeployNotice(data.output || data.error || "Deploy failed.");
+      if (!targetChatId) setDeployNotice(data.output || data.error || "Deploy failed.");
       return;
     }
-    setDeployNotice(data.output || "Deploy completed.");
+    if (!targetChatId) setDeployNotice(data.output || "Deploy completed.");
     await refresh();
   }
 
@@ -5216,13 +5279,20 @@ function App() {
                             const isNew = highlightedMessageIds.has(message.id);
                             const isFirst = index === 0;
                             const isLast = index === timelineItems.length - 1;
-                            const author = message.role === "user" ? currentUser?.nickname || currentUser?.email || "You" : message.source === "vscode" ? "VS Code" : "Codex";
+                            const isProjectOperation = isProjectOperationMessage(message);
+                            const author = isProjectOperation
+                              ? projectOperationLabel(message)
+                              : message.role === "user"
+                                ? currentUser?.nickname || currentUser?.email || "You"
+                                : message.source === "vscode"
+                                  ? "VS Code"
+                                  : "Codex";
                             const assistantDetails = message.role === "assistant" || message.role === "tool" || message.role === "system"
                               ? messageRunDetails(message, messageJob, collapsedRun)
                               : undefined;
                             return (
                               <article
-                                className={`message ${message.role}${isNew ? " new-message" : ""}`}
+                                className={`message ${message.role}${isProjectOperation ? " service-message" : ""}${isNew ? " new-message" : ""}`}
                                 key={message.id}
                                 ref={isFirst || isLast ? (node) => {
                                   if (isFirst) firstMessageRef.current = node;
@@ -5260,9 +5330,13 @@ function App() {
                                 </div>
                                 {collapsedRun && renderCollapsedRunTrace(message, collapsedRun)}
                                 {message.role === "system" ? (
-                                  <div className="system-message-body" title={normalizeDisplayText(message.content).trim()}>
-                                    {normalizeDisplayText(message.content).trim()}
-                                  </div>
+                                  isProjectOperation
+                                    ? renderRichText(message.content, "rich-text message-body service-log-body")
+                                    : (
+                                      <div className="system-message-body" title={normalizeDisplayText(message.content).trim()}>
+                                        {normalizeDisplayText(message.content).trim()}
+                                      </div>
+                                    )
                                 ) : renderRichText(message.content, "rich-text message-body")}
                                 {renderMessageAttachments(message.attachments, setImagePreview)}
                                 {renderCodexActions(message, messageJob)}
