@@ -1590,8 +1590,10 @@ textarea:focus {
   left: auto;
   right: 0;
   width: min(270px, calc(100vw - 28px));
-  max-height: min(78vh, 620px);
+  max-height: clamp(240px, calc(100dvh - var(--composer-space, 150px) - 220px), 390px);
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .sandbox-menu {
