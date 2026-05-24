@@ -9,6 +9,11 @@ type Send = (message: AgentToServer) => boolean | void;
 type LocalAttachment = NonNullable<ChatMessage["attachments"]>[number];
 type SyncLocalChatsOptions = {
   force?: boolean;
+  only?: {
+    repoId?: string;
+    source?: "codex" | "vscode";
+    externalId?: string;
+  };
   shouldContinue?: () => boolean;
 };
 export type SyncLocalChatsResult = {
@@ -70,7 +75,14 @@ export async function syncLocalChats(
   const chats = [
     ...readCodexChats(config),
     ...readVsCodeChats(config)
-  ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 160);
+  ]
+    .filter((chat) => (
+      (!options.only?.repoId || chat.repoId === options.only.repoId)
+      && (!options.only?.source || chat.source === options.only.source)
+      && (!options.only?.externalId || chat.externalId === options.only.externalId)
+    ))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 160);
   let sent = 0;
   let skipped = 0;
   let deferred = 0;

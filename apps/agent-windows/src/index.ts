@@ -33,6 +33,11 @@ let localChatSyncQueuedReason = "";
 
 type LocalChatSyncOptions = {
   force?: boolean;
+  only?: {
+    repoId?: string;
+    source?: "codex" | "vscode";
+    externalId?: string;
+  };
   minIntervalMs?: number;
   shouldContinue?: () => boolean;
 };
@@ -681,6 +686,7 @@ async function runLocalChatSyncQueue(
       logProgress(`sync: Local chat sync started (${currentReason}).`);
       const result = await syncLocalChats(config, send, {
         force: options.force,
+        only: options.only,
         shouldContinue: options.shouldContinue
       });
       sent += result.sent;
@@ -705,9 +711,12 @@ function scheduleLocalChatSyncAfterActivity(activity: LocalCodexActivity, send: 
   lastLocalActivitySyncKey = key;
   lastLocalActivityStatus = activity.status;
   if (previousStatus !== "busy" || activity.status !== "idle") return;
-  void runLocalChatSync("activity:idle", send, { minIntervalMs: LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS });
+  const only = activity.repoId && activity.chatSource && activity.chatExternalId
+    ? { repoId: activity.repoId, source: activity.chatSource, externalId: activity.chatExternalId }
+    : undefined;
+  void runLocalChatSync("activity:idle", send, { force: Boolean(only), only });
   for (const delay of LOCAL_CHAT_SYNC_SETTLE_DELAYS_MS) {
-    setTimeout(() => void runLocalChatSync(`activity-settle:idle:${delay}`, send, { minIntervalMs: LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS }), delay);
+    setTimeout(() => void runLocalChatSync(`activity-settle:idle:${delay}`, send, { force: Boolean(only), only, minIntervalMs: only ? undefined : LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS }), delay);
   }
 }
 
