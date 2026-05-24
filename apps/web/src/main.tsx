@@ -1575,7 +1575,7 @@ function App() {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
-  const [localBusyHold, setLocalBusyHold] = useState<{ until: number; since?: string }>({ until: 0 });
+  const [localBusyHold, setLocalBusyHold] = useState<{ until: number; since?: string; key?: string }>({ until: 0 });
   const [highlightedMessageIds, setHighlightedMessageIds] = useState<Set<string>>(() => new Set());
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [showChatScrollTop, setShowChatScrollTop] = useState(false);
@@ -1640,9 +1640,22 @@ function App() {
     && !staleCurrentWebJob
     && !staleLocalWebBusy
   );
+  const localBusyActivityKey = rawLocalCodexBusy
+    ? [
+      localActivity?.source ?? "",
+      selectedAgent?.current_job_id ?? "",
+      localActivity?.repoId ?? "",
+      localActivity?.chatSource ?? "",
+      localActivity?.chatExternalId ?? "",
+      localActivity?.busySinceAt || localActivity?.updatedAt || localActivity?.detectedAt || ""
+    ].join("|")
+    : "";
   const localCodexBusy = rawLocalCodexBusy || localBusyHold.until > nowTick;
   const localBusySince = rawLocalCodexBusy
-    ? localBusyHold.since || localActivity?.busySinceAt || localActivity?.updatedAt || localActivity?.detectedAt
+    ? (localBusyHold.key === localBusyActivityKey ? localBusyHold.since : undefined)
+      || localActivity?.busySinceAt
+      || localActivity?.updatedAt
+      || localActivity?.detectedAt
     : localBusyHold.since;
   const thinkingSince = activeRunBusy
     ? activeJob?.startedAt || activeJob?.createdAt
@@ -2691,7 +2704,8 @@ function App() {
       const detectedAt = localActivity?.busySinceAt || localActivity?.updatedAt || localActivity?.detectedAt || new Date(now).toISOString();
       setLocalBusyHold((current) => ({
         until: now + 7000,
-        since: current.since ?? detectedAt
+        since: current.key === localBusyActivityKey ? current.since ?? detectedAt : detectedAt,
+        key: localBusyActivityKey
       }));
       return;
     }
@@ -2707,10 +2721,12 @@ function App() {
     localActivity?.busySinceAt,
     localActivity?.updatedAt,
     localActivity?.detectedAt,
+    localBusyActivityKey,
     selectedAgent?.current_job_id,
     nowTick,
     localBusyHold.until,
-    localBusyHold.since
+    localBusyHold.since,
+    localBusyHold.key
   ]);
 
   useEffect(() => {
