@@ -79,7 +79,7 @@ const SPEED_OPTIONS: Array<{ value: CodexSpeed; label: string; note: string }> =
   { value: "fast", label: "Fast", note: "Saved with run metadata" }
 ];
 const LOCAL_CHAT_SYNC_REFRESH_DELAYS_MS = [0, 800, 2000, 4000, 8000, 15000];
-type VscodeCommand = "ping" | "openSidebar" | "newChat" | "newCodexPanel" | "addToThread" | "addFileToThread" | "openThread" | "reopenThread";
+type VscodeCommand = "ping" | "openSidebar" | "newChat" | "newCodexPanel" | "addToThread" | "addFileToThread" | "openThread" | "reopenThread" | "refreshThreadIfOpen";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -1720,6 +1720,7 @@ function App() {
   const localChatSyncRefreshRef = useRef(0);
   const syncAutoPingRef = useRef("");
   const vscodeRequestSeqRef = useRef(0);
+  const pendingVscodeThreadRefreshRef = useRef<Set<string>>(new Set());
   const chatLoadingStartedRef = useRef(0);
   const shellRef = useRef<HTMLElement | null>(null);
   const chatThreadRef = useRef<HTMLElement | null>(null);
@@ -2316,6 +2317,7 @@ function App() {
     setJobs((current) => current.map(patchJob));
     setActiveJob((current) => current?.id === jobId ? patchJob(current) : current);
     if (finishedAt) {
+      pendingVscodeThreadRefreshRef.current.add(jobId);
       setAgents((current) => current.map((agent) => (
         agent.current_job_id === jobId ? { ...agent, current_job_id: null } : agent
       )));
@@ -2785,6 +2787,13 @@ function App() {
     syncAutoPingRef.current = selectedAgent.id;
     void runVscodeCommand("ping", selectedAgent.id);
   }, [csrf, selectedAgent?.id, selectedAgent?.status, view, vscodeBusy]);
+
+  useEffect(() => {
+    if (!csrf || !activeJob || !isTerminalJobStatus(activeJob.status) || !activeJob.codexThreadId) return;
+    if (!pendingVscodeThreadRefreshRef.current.has(activeJob.id)) return;
+    pendingVscodeThreadRefreshRef.current.delete(activeJob.id);
+    void runVscodeCommand("refreshThreadIfOpen", activeJob.agentId, { threadId: activeJob.codexThreadId }, { auto: true });
+  }, [activeJob?.agentId, activeJob?.codexThreadId, activeJob?.id, activeJob?.status, csrf]);
 
   async function login(event: React.FormEvent) {
     event.preventDefault();

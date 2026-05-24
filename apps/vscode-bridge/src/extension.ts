@@ -7,7 +7,7 @@ import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "nod
 import { basename, join } from "node:path";
 import * as vscode from "vscode";
 
-type BridgeCommand = "ping" | "openSidebar" | "newChat" | "newCodexPanel" | "addToThread" | "addFileToThread" | "openThread" | "reopenThread";
+type BridgeCommand = "ping" | "openSidebar" | "newChat" | "newCodexPanel" | "addToThread" | "addFileToThread" | "openThread" | "reopenThread" | "refreshThreadIfOpen";
 
 type BridgeRequest = {
   command?: unknown;
@@ -30,7 +30,8 @@ const ALLOWED_COMMANDS = new Set<BridgeCommand>([
   "addToThread",
   "addFileToThread",
   "openThread",
-  "reopenThread"
+  "reopenThread",
+  "refreshThreadIfOpen"
 ]);
 
 let server: net.Server | undefined;
@@ -100,10 +101,22 @@ function isCodexThreadTab(tab: vscode.Tab, threadId: string): boolean {
     && input.uri.path === `/local/${threadId}`;
 }
 
+function codexThreadTabs(threadId: string): vscode.Tab[] {
+  return vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => isCodexThreadTab(tab, threadId));
+}
+
 async function closeCodexThreadTabs(threadId: string): Promise<number> {
-  const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => isCodexThreadTab(tab, threadId));
+  const tabs = codexThreadTabs(threadId);
   if (!tabs.length) return 0;
   await vscode.window.tabGroups.close(tabs, true);
+  return tabs.length;
+}
+
+async function refreshCodexThreadIfOpen(threadId: string): Promise<number> {
+  const tabs = codexThreadTabs(threadId);
+  if (!tabs.length) return 0;
+  await vscode.window.tabGroups.close(tabs, true);
+  await openCodexThread(threadId);
   return tabs.length;
 }
 
@@ -556,6 +569,11 @@ async function executeBridgeCommand(request: Required<Pick<BridgeRequest, "comma
       const closed = await closeCodexThreadTabs(threadId);
       await openCodexThread(threadId);
       return { ok: true, output: closed ? "Codex thread reopened in VS Code." : "Codex thread opened in VS Code." };
+    }
+    case "refreshThreadIfOpen": {
+      if (typeof request.threadId !== "string" || !request.threadId.trim()) return { ok: false, error: "thread_id_required" };
+      const refreshed = await refreshCodexThreadIfOpen(request.threadId.trim());
+      return { ok: true, output: refreshed ? "Codex thread refreshed in VS Code." : "Codex thread is not open in VS Code." };
     }
     default:
       return { ok: false, error: "unsupported_command" };

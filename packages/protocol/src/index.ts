@@ -193,7 +193,8 @@ export const VscodeBridgeCommandSchema = z.enum([
   "addToThread",
   "addFileToThread",
   "openThread",
-  "reopenThread"
+  "reopenThread",
+  "refreshThreadIfOpen"
 ]);
 export type VscodeBridgeCommand = z.infer<typeof VscodeBridgeCommandSchema>;
 
