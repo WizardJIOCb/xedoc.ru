@@ -71,6 +71,36 @@ Windows Scheduled Task:
 
 - `Codex Server OpenAI Tunnel`
 
+## One-Click Start
+
+For day-to-day use:
+
+1. Start the VPN on the Windows PC.
+2. Run:
+
+```bat
+start-server-tunnel.bat
+```
+
+The batch file calls `scripts\ensure-server-openai-tunnel.ps1`. It will:
+
+- create or update the hidden tunnel runner under `%USERPROFILE%\codex-agent`;
+- create or update the `Codex Server OpenAI Tunnel` scheduled task;
+- restart stale `ssh.exe` tunnel processes;
+- start `ssh -R 127.0.0.1:10808 myserver`;
+- check that the server sees ports `10808` and `10809`;
+- check `auth.openai.com` and `chatgpt.com/backend-api/codex/responses`;
+- check that Codex is logged in using ChatGPT and that `agent-linux` is active.
+
+For scripts or CI-like usage without `pause`:
+
+```bat
+start-server-tunnel.bat /nopause
+```
+
+When it prints `Tunnel check completed successfully`, Server Ubuntu projects on
+`https://codex.rodion.pro` are ready to use.
+
 ## Server Setup
 
 Run from Windows PowerShell in this repo:
