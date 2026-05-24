@@ -459,10 +459,18 @@ async function configureNginx(repoId: string): Promise<string> {
   ].join("\n");
   const encodedHttpConfig = Buffer.from(httpConfig, "utf8").toString("base64");
   const encodedSslConfig = Buffer.from(sslConfig, "utf8").toString("base64");
+  const preserveExistingProxyConfig = `[ -f ${shellQuote(availablePath)} ] && grep -q 'proxy_pass http://127\\.0\\.0\\.1:' ${shellQuote(availablePath)}`;
+  const installConfigCommand = [
+    `if ${preserveExistingProxyConfig}; then`,
+    `sudo ln -sfn ${shellQuote(availablePath)} ${shellQuote(enabledPath)};`,
+    "else",
+    `sudo mkdir -p ${shellQuote(webRootPath)} &&`,
+    `if [ -f ${shellQuote(certificatePath)} ] && [ -f ${shellQuote(certificateKeyPath)} ]; then printf %s ${shellQuote(encodedSslConfig)} | base64 -d | sudo tee ${shellQuote(availablePath)} >/dev/null; else printf %s ${shellQuote(encodedHttpConfig)} | base64 -d | sudo tee ${shellQuote(availablePath)} >/dev/null; fi &&`,
+    `sudo ln -sfn ${shellQuote(availablePath)} ${shellQuote(enabledPath)};`,
+    "fi"
+  ].join(" ");
   const remoteCommand = [
-    `sudo mkdir -p ${shellQuote(webRootPath)}`,
-    `if [ -f ${shellQuote(certificatePath)} ] && [ -f ${shellQuote(certificateKeyPath)} ]; then printf %s ${shellQuote(encodedSslConfig)} | base64 -d | sudo tee ${shellQuote(availablePath)} >/dev/null; else printf %s ${shellQuote(encodedHttpConfig)} | base64 -d | sudo tee ${shellQuote(availablePath)} >/dev/null; fi`,
-    `sudo ln -sfn ${shellQuote(availablePath)} ${shellQuote(enabledPath)}`,
+    installConfigCommand,
     "sudo nginx -t",
     "sudo systemctl reload nginx"
   ].join(" && ");
