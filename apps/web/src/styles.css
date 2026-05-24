@@ -128,6 +128,37 @@ textarea:focus {
   color: var(--muted);
 }
 
+.share-project-link {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: #ffffff;
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 0 8px 20px rgba(31, 35, 40, 0.06);
+}
+
+.share-project-link:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+}
+
+.share-project-link strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.share-project-link span {
+  color: var(--muted);
+}
+
 .share-card {
   display: grid;
   gap: 10px;

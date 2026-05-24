@@ -1519,6 +1519,11 @@ function publicShareUrl(request: { protocol: string; hostname: string }, token: 
   return `${publicOrigin(request)}/share/${encodeURIComponent(token)}`;
 }
 
+function projectUrlFromDomain(domain: string | null | undefined): string | null {
+  const normalized = domain?.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/g, "");
+  return normalized ? `https://${normalized}` : null;
+}
+
 function stripPrivateAttachmentUrls<T extends { attachments?: object[] }>(messages: T[]): T[] {
   return messages.map((message) => ({
     ...message,
@@ -1544,12 +1549,21 @@ function chatShareSnapshot(chat: ChatRow) {
 }
 
 function serializeShare(row: ChatShareRow, request: { protocol: string; hostname: string }) {
+  const repo = row.agent_id && row.repo_id
+    ? db.prepare("SELECT name, domain FROM repos WHERE agent_id = ? AND id = ?").get(row.agent_id, row.repo_id) as { name: string; domain: string | null } | undefined
+    : undefined;
+  const projectUrl = projectUrlFromDomain(repo?.domain);
   return {
     token: row.token,
     url: publicShareUrl(request, row.token),
     chatId: row.chat_id,
     agentId: row.agent_id,
     repoId: row.repo_id,
+    project: repo ? {
+      name: repo.name,
+      domain: repo.domain,
+      url: projectUrl
+    } : null,
     title: row.title,
     source: row.source,
     externalId: row.external_id,

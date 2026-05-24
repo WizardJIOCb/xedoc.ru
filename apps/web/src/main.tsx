@@ -234,6 +234,11 @@ type ChatPayload = {
 type SharedChat = {
   token: string;
   url: string;
+  project?: {
+    name: string;
+    domain?: string | null;
+    url?: string | null;
+  } | null;
   title: string;
   source: string;
   externalId?: string | null;
@@ -1095,6 +1100,7 @@ function SharedChatPage({ token }: { token: string }) {
 
   const finalAnswer = share?.snapshot.finalAnswer || share?.finalContent || "";
   const messages = share?.snapshot.messages ?? [];
+  const projectLink = share?.project?.url || projectUrl(share?.project?.domain ?? "");
 
   return (
     <main className="share-page">
@@ -1108,6 +1114,13 @@ function SharedChatPage({ token }: { token: string }) {
           <p>
             {share.source} chat · exported {formatDateTime(share.snapshot.exportedAt || share.updatedAt)}
           </p>
+        )}
+        {share?.project?.domain && projectLink && (
+          <a className="share-project-link" href={projectLink} target="_blank" rel="noreferrer">
+            <ExternalLink size={17} />
+            <span>Открыть результат</span>
+            <strong>{share.project.domain}</strong>
+          </a>
         )}
       </header>
 
