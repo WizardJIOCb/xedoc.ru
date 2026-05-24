@@ -27,6 +27,7 @@ let cachedCodexUsage: CodexUsage | undefined;
 let cachedCodexUsageAt = 0;
 let lastLocalActivitySyncKey = "";
 let lastLocalActivityStatus: LocalCodexActivity["status"] = "idle";
+let lastBusyLocalChatSyncOnly: LocalChatSyncOptions["only"];
 let lastLocalChatSyncStartedAt = 0;
 let localChatSyncPromise: Promise<number> | null = null;
 let localChatSyncQueuedReason = "";
@@ -706,18 +707,24 @@ function syncResultSummary(result: SyncLocalChatsResult): string {
 
 function scheduleLocalChatSyncAfterActivity(activity: LocalCodexActivity, send: (message: AgentToServer) => boolean): void {
   const key = localActivitySyncKey(activity);
+  if (activity.status === "busy") lastBusyLocalChatSyncOnly = localChatSyncOnlyFromActivity(activity);
   if (key === lastLocalActivitySyncKey) return;
   const previousStatus = lastLocalActivityStatus;
   lastLocalActivitySyncKey = key;
   lastLocalActivityStatus = activity.status;
   if (previousStatus !== "busy" || activity.status !== "idle") return;
-  const only = activity.repoId && activity.chatSource && activity.chatExternalId
-    ? { repoId: activity.repoId, source: activity.chatSource, externalId: activity.chatExternalId }
-    : undefined;
+  const only = lastBusyLocalChatSyncOnly;
+  lastBusyLocalChatSyncOnly = undefined;
   void runLocalChatSync("activity:idle", send, { force: Boolean(only), only });
   for (const delay of LOCAL_CHAT_SYNC_SETTLE_DELAYS_MS) {
     setTimeout(() => void runLocalChatSync(`activity-settle:idle:${delay}`, send, { force: Boolean(only), only, minIntervalMs: only ? undefined : LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS }), delay);
   }
+}
+
+function localChatSyncOnlyFromActivity(activity: LocalCodexActivity): LocalChatSyncOptions["only"] {
+  return activity.repoId && activity.chatSource && activity.chatExternalId
+    ? { repoId: activity.repoId, source: activity.chatSource, externalId: activity.chatExternalId }
+    : undefined;
 }
 
 function connect() {
