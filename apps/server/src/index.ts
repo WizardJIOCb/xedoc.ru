@@ -1504,8 +1504,10 @@ function agentPackageZip(): Buffer {
   addFile(entries, join(root, "pnpm-workspace.yaml"), "pnpm-workspace.yaml");
   addFile(entries, join(root, "start-agent.bat"), "start-agent.bat");
   addFile(entries, join(root, "stop-agent.bat"), "stop-agent.bat");
+  addFile(entries, join(root, "check-agent.bat"), "check-agent.bat");
   addFile(entries, join(root, "scripts", "run-agent.ps1"), "scripts/run-agent.ps1");
   addFile(entries, join(root, "scripts", "stop-agent.ps1"), "scripts/stop-agent.ps1");
+  addFile(entries, join(root, "scripts", "check-agent.ps1"), "scripts/check-agent.ps1");
   addFile(entries, join(root, "scripts", "prepare-vscode-bridge.ps1"), "scripts/prepare-vscode-bridge.ps1");
   addFile(entries, join(root, "apps", "agent-windows", "package.json"), "apps/agent-windows/package.json");
   addDir(entries, join(root, "apps", "agent-windows", "dist"), "apps/agent-windows/dist");
