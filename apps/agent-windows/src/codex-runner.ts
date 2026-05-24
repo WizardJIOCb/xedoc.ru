@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentJobDone, AgentJobLog, AgentJobProgress } from "./types.js";
 import type { AgentConfig, RepoConfig } from "./config.js";
 import { minimalEnv, needsShell, runCapture } from "./process-utils.js";
@@ -91,7 +92,7 @@ export class Runner {
   private async runCodex(context: RunContext, repo: RepoConfig): Promise<AgentJobDone> {
     const codexCommand = codexExecutable();
     const attachments = prepareAttachments(context, repo);
-    const prompt = attachments.length
+    const userPrompt = attachments.length
       ? [
         context.job.prompt,
         "",
@@ -101,6 +102,7 @@ export class Runner {
         "Use these file paths as the attached user-provided context."
       ].join("\n")
       : context.job.prompt;
+    const prompt = [environmentPrompt(repo), userPrompt].join("\n\n");
     const modelArgs = context.job.model ? ["-m", context.job.model] : [];
     const reasoningArgs = context.job.reasoningEffort ? ["-c", `model_reasoning_effort="${context.job.reasoningEffort}"`] : [];
     const args = context.job.codexThreadId
@@ -301,6 +303,26 @@ function codexExecutable(): { command: string; prefixArgs: string[] } {
     return { command: process.env.CMC_CODEX_NODE, prefixArgs: [process.env.CMC_CODEX_JS] };
   }
   return { command: process.env.CMC_CODEX_BIN || "codex", prefixArgs: [] };
+}
+
+function environmentPrompt(repo: RepoConfig): string {
+  const toolbelt = JSON.stringify(join(dirname(fileURLToPath(import.meta.url)), "codex-toolbelt.js"));
+  return [
+    "Codex web agent environment:",
+    `- Project: ${repo.name} at ${repo.path}.`,
+    "- You are running through codex.rodion.pro's Windows agent, not inside an interactive VS Code session.",
+    "- The in-app Browser/node_repl tools are not available inside this codex exec process unless they are explicitly listed in the current toolset.",
+    "- Prefer finite commands. Avoid WMI, detached Start-Process dev servers, and long-lived commands that only end by timeout.",
+    "- On Windows, use npm.cmd or the toolbelt npm wrapper; do not invoke npm.ps1 from PowerShell.",
+    "- Use the local helper for environment-sensitive tasks:",
+    `  - node ${toolbelt} doctor`,
+    `  - node ${toolbelt} npm -- run build`,
+    `  - node ${toolbelt} build`,
+    `  - node ${toolbelt} smoke dist`,
+    `  - node ${toolbelt} smoke http://127.0.0.1:<port>/`,
+    `  - node ${toolbelt} screenshot http://127.0.0.1:<port>/ dist/smoke.png`,
+    "- If native esbuild/headless browser launch is blocked by Windows policy or sandbox permissions, treat it as an environment limitation after one workaround attempt; use `smoke` for HTTP/static verification and report the limitation clearly."
+  ].join("\n");
 }
 
 function isIgnorableCodexWarning(line: string): boolean {
