@@ -4451,6 +4451,20 @@ function App() {
                   <Rocket size={16} />
                   <span>Launch</span>
                 </button>
+                <button
+                  className="project-menu-action"
+                  disabled={!selectedProjectUrl}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    if (!selectedProjectUrl) return;
+                    setActionMenuOpen(false);
+                    window.open(selectedProjectUrl, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  <ExternalLink size={16} />
+                  <span>Open</span>
+                </button>
                 <div className="menu-divider" />
                 <button disabled={vscodeBusy} role="menuitem" type="button" onClick={() => runVscodeCommand("openSidebar")}>
                   <PanelLeftOpen size={16} />
