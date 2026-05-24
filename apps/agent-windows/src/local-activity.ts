@@ -49,6 +49,9 @@ export function detectLocalCodexActivity(config: AgentConfig, currentJobId?: str
       busySinceAt: new Date(busySinceMs).toISOString()
     };
   }
+  if (lastBusyCandidate?.source === "codex.rodion.pro") {
+    resetBusyState();
+  }
 
   const candidate = [...recentCodexThreads(config), ...recentVsCodeSessions(config)]
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
@@ -83,16 +86,20 @@ export function detectLocalCodexActivity(config: AgentConfig, currentJobId?: str
     };
   }
 
-  busyKey = "";
-  busySinceMs = 0;
-  lastBusySeenMs = 0;
-  lastBusyCandidate = undefined;
+  resetBusyState();
   return {
     status: "idle",
     summary: "No recent local Codex activity.",
     source: "agent heartbeat",
     detectedAt
   };
+}
+
+function resetBusyState(): void {
+  busyKey = "";
+  busySinceMs = 0;
+  lastBusySeenMs = 0;
+  lastBusyCandidate = undefined;
 }
 
 function markBusy(key: string, seenAt: number, candidate: Candidate): void {
