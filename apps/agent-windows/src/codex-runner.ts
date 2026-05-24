@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentJobDone, AgentJobLog, AgentJobProgress } from "./types.js";
 import type { AgentConfig, RepoConfig } from "./config.js";
@@ -215,7 +215,9 @@ export class Runner {
         progressBusy = true;
         try {
           const stats = await diffProgress(repo.path);
-          context.sendProgress(progress(context.job.id, "working", "Checking current git diff.", stats));
+          if (hasDiffChanges(stats)) {
+            context.sendProgress(progress(context.job.id, "working", "Checking current git diff.", stats));
+          }
         } finally {
           progressBusy = false;
         }
@@ -331,20 +333,68 @@ async function diffProgress(repoPath: string): Promise<DiffProgress> {
   let added = 0;
   let deleted = 0;
   const files: DiffProgress["files"] = [];
+  const seen = new Set<string>();
   for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
     const [add, del, ...pathParts] = line.split(/\s+/);
+    const path = pathParts.join(" ").slice(0, 500) || "unknown";
+    seen.add(normalizeRepoPath(path));
     filesChanged += 1;
     const addedNumber = Number(add);
     const deletedNumber = Number(del);
     if (Number.isFinite(addedNumber)) added += addedNumber;
     if (Number.isFinite(deletedNumber)) deleted += deletedNumber;
     files.push({
-      path: pathParts.join(" ").slice(0, 500) || "unknown",
+      path,
       added: Number.isFinite(addedNumber) ? addedNumber : 0,
       deleted: Number.isFinite(deletedNumber) ? deletedNumber : 0
     });
   }
+  const untracked = await runCapture("git", ["-C", repoPath, "ls-files", "--others", "--exclude-standard"], undefined, 15000);
+  for (const rawPath of untracked.stdout.split(/\r?\n/).filter(Boolean)) {
+    const path = rawPath.trim();
+    const normalized = normalizeRepoPath(path);
+    if (!path || seen.has(normalized) || shouldIgnoreUntrackedPath(normalized)) continue;
+    const addedLines = countAddedLines(repoPath, path);
+    seen.add(normalized);
+    filesChanged += 1;
+    added += addedLines;
+    files.push({ path: path.slice(0, 500), added: addedLines, deleted: 0 });
+  }
   return { filesChanged, added, deleted, files: files.slice(0, 50) };
+}
+
+function hasDiffChanges(stats: DiffProgress): boolean {
+  return stats.filesChanged > 0 || stats.added > 0 || stats.deleted > 0 || stats.files.length > 0;
+}
+
+function normalizeRepoPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\/+/, "");
+}
+
+function shouldIgnoreUntrackedPath(path: string): boolean {
+  return path === ".git"
+    || path.startsWith(".git/")
+    || path === "node_modules"
+    || path.startsWith("node_modules/")
+    || path === "dist"
+    || path.startsWith("dist/")
+    || path === ".codex-web-attachments"
+    || path.startsWith(".codex-web-attachments/");
+}
+
+function countAddedLines(repoPath: string, relativePath: string): number {
+  try {
+    const fullPath = join(repoPath, relativePath);
+    const stat = statSync(fullPath);
+    if (!stat.isFile() || stat.size > 200_000) return 0;
+    const bytes = readFileSync(fullPath);
+    if (bytes.includes(0)) return 0;
+    const text = bytes.toString("utf8");
+    if (!text) return 0;
+    return text.split(/\r?\n/).length;
+  } catch {
+    return 0;
+  }
 }
 
 function handleCodexJsonLine(context: RunContext, line: string): { handled: boolean; threadId?: string; messageText?: string } {

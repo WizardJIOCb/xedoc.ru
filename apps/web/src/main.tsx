@@ -1172,7 +1172,7 @@ function jobProgressLabel(progress: JobProgress | null | undefined, fallback = "
     case "command":
       return "Выполняю команду";
     case "working":
-      return "Считаю diff";
+      return "Codex работает";
     case "message":
       return "Получен ответ";
     case "finalizing":
@@ -1192,7 +1192,7 @@ function jobProgressMessage(progress: JobProgress | null | undefined) {
   const phase = (progress?.phase ?? "").toLowerCase();
   const message = progress?.message?.trim() ?? "";
   if (phase === "thinking") return "Жду ответ локального Codex";
-  if (phase === "working") return "Проверяю изменения в рабочей папке";
+  if (phase === "working") return hasProgressChanges(progress) ? "Проверяю изменения в рабочей папке" : "Жду следующего события от локального Codex";
   if (phase === "finalizing") return "Собираю git diff и сохраняю ответ в web";
   if (phase === "completed") return "Финальный ответ получен, обновляю чат";
   if (message) return message;
