@@ -1268,6 +1268,7 @@ function displayLogMessage(log: Log) {
   const rawText = log.message.trim();
   if (!rawText) return null;
   if (/ERROR\s+codex_core::session:\s+failed to record rollout items:\s+thread .* not found/i.test(rawText)) return null;
+  if (log.stream === "system" && /^Starting\b/i.test(rawText)) return null;
   try {
     const event = JSON.parse(rawText) as Record<string, unknown>;
     const item = event.item && typeof event.item === "object" ? event.item as Record<string, unknown> : undefined;

@@ -661,12 +661,18 @@ function textFromContent(content: unknown): string {
 }
 
 function cleanSyncedContent(content: string, attachments: LocalAttachment[]): string {
-  const cleaned = stripLeadingCodexContextBlocks(content)
+  const cleaned = stripCodexAttachmentHelperBlock(stripLeadingCodexContextBlocks(content))
     .replace(/<image>\s*<\/image>/gi, "")
     .replace(/<image\s*\/>/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return cleaned || (attachments.length ? "Image attachment" : "");
+}
+
+function stripCodexAttachmentHelperBlock(content: string): string {
+  return content
+    .replace(/\n*Attached files saved locally for this task:\s*\n[\s\S]*?\n\s*Use these file paths as the attached user-provided context\.?\s*$/i, "")
+    .trim();
 }
 
 function collectImageAttachments(value: unknown): LocalAttachment[] {

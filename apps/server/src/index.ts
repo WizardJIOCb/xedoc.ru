@@ -845,10 +845,16 @@ function escapeRegex(value: string): string {
 }
 
 function cleanSyncedMessageContent(content: string): string {
-  return stripLeadingCodexContextBlocks(content)
+  return stripCodexAttachmentHelperBlock(stripLeadingCodexContextBlocks(content))
     .replace(/<image>\s*<\/image>/gi, "")
     .replace(/<image\s*\/>/gi, "")
     .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function stripCodexAttachmentHelperBlock(content: string): string {
+  return content
+    .replace(/\n*Attached files saved locally for this task:\s*\n[\s\S]*?\n\s*Use these file paths as the attached user-provided context\.?\s*$/i, "")
     .trim();
 }
 
@@ -890,19 +896,26 @@ function sanitizeSyncedMessages(messages: SyncedChatMessage[]): SyncedChatMessag
 
 function pruneSyncedContextMessages(chatId: string): boolean {
   const rows = db.prepare(`
-    SELECT id, content
+    SELECT id, role, content
     FROM chat_messages
     WHERE chat_id = ? AND source IN ('codex', 'vscode')
-  `).all(chatId) as Array<Pick<ChatMessageRow, "id" | "content">>;
+  `).all(chatId) as Array<Pick<ChatMessageRow, "id" | "role" | "content">>;
   let changed = false;
   for (const row of rows) {
     const content = cleanSyncedMessageContent(row.content);
     if (!content) {
       db.prepare("DELETE FROM chat_messages WHERE id = ?").run(row.id);
       changed = true;
-    } else if (content !== row.content) {
-      db.prepare("UPDATE chat_messages SET content = ? WHERE id = ?").run(content, row.id);
-      changed = true;
+    } else {
+      const duplicate = db.prepare("SELECT id FROM chat_messages WHERE chat_id = ? AND role = ? AND content = ? AND id != ? LIMIT 1")
+        .get(chatId, row.role, content, row.id) as { id: string } | undefined;
+      if (duplicate) {
+        db.prepare("DELETE FROM chat_messages WHERE id = ?").run(row.id);
+        changed = true;
+      } else if (content !== row.content) {
+        db.prepare("UPDATE chat_messages SET content = ? WHERE id = ?").run(content, row.id);
+        changed = true;
+      }
     }
   }
   return changed;
