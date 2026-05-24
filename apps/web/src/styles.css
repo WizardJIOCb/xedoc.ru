@@ -2915,10 +2915,6 @@ h2 > strong {
   font-weight: 800;
 }
 
-.current-edit {
-  padding: 0 10px;
-}
-
 .live-activity-card {
   display: grid;
   gap: 0;

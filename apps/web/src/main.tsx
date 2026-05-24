@@ -1880,7 +1880,6 @@ function App() {
     files: [],
     at: new Date().toISOString()
   } : null;
-  const firstActiveProgressFile = activeProgress?.files?.[0];
   const timelineItems = useMemo(() => buildChatTimeline(messages, jobs, activeChatLocalBusy || activeRunBusy), [messages, jobs, activeChatLocalBusy, activeRunBusy]);
   const showChatThinkingIndicator = Boolean(activeChat && !chatIsLoading && (activeChatLocalBusy || activeRunBusy));
 
@@ -4477,7 +4476,6 @@ function App() {
             {summary.messages.map((message, index) => {
               const jobId = messageJobId(message);
               const messageJob = jobId ? jobs.find((job) => job.id === jobId) ?? summary.job : summary.job;
-              const messageProgress = messageJob ? progressByJob[messageJob.id] ?? messageJob.progress ?? null : null;
               return (
                 <article className="run-trace-step" key={message.id}>
                   <div className="message-meta">
@@ -4487,7 +4485,6 @@ function App() {
                   {renderRichText(message.content, "rich-text message-body")}
                   {renderMessageAttachments(message.attachments, setImagePreview)}
                   {renderCodexActions(message, messageJob)}
-                  {renderCodexChangeCard(message, messageJob, messageProgress)}
                 </article>
               );
             })}
@@ -4509,6 +4506,7 @@ function App() {
             <strong>{activeJob.prompt}</strong>
           </div>
         )}
+        {renderLiveActivity()}
         {activeProgress && showActiveDiff && (
           <div className="progress-wrap">
             <div className="progress-panel">
@@ -4537,25 +4535,6 @@ function App() {
             ) : null}
           </div>
         )}
-        {firstActiveProgressFile ? (
-          <div className="message-actions current-edit">
-            <button type="button" onClick={() => setExpandedActions((current) => ({ ...current, currentProgress: !current.currentProgress }))}>
-              <Wrench size={15} />
-              <span>Editing {firstActiveProgressFile.path} +{firstActiveProgressFile.added} -{firstActiveProgressFile.deleted}</span>
-            </button>
-            {expandedActions.currentProgress && (
-              <div className="message-action-details">
-                {(activeProgress?.files ?? []).slice(0, 8).map((file) => (
-                  <div key={file.path}>
-                    <span>{file.path}</span>
-                    <small>+{file.added} -{file.deleted}</small>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : null}
-        {renderLiveActivity()}
       </>
     );
   }
