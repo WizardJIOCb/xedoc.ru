@@ -181,11 +181,57 @@ function githubRepoSlugFromRemote(value: string): string | undefined {
   return undefined;
 }
 
+function shouldRewriteGithubRemoteToSsh(value: string): boolean {
+  const trimmed = value.trim();
+  return /^https:\/\/github\.com\//i.test(trimmed) || /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/i.test(trimmed);
+}
+
+function githubSshRemoteFromSlug(repoSlug: string, sshHost: string): string {
+  const trimmedHost = sshHost.trim();
+  const host = trimmedHost === "github.com" ? "git@github.com" : trimmedHost;
+  return `${host}:${repoSlug}.git`;
+}
+
+function gitRemoteUrlForAgent(remoteUrl: string, output: string[]): string {
+  const githubSshHost = process.env.CMC_GITHUB_SSH_HOST?.trim();
+  if (!githubSshHost || !shouldRewriteGithubRemoteToSsh(remoteUrl)) return remoteUrl;
+
+  const repoSlug = githubRepoSlugFromRemote(remoteUrl);
+  if (!repoSlug) return remoteUrl;
+
+  const sshRemote = githubSshRemoteFromSlug(repoSlug, githubSshHost);
+  output.push(`Using GitHub SSH remote via ${githubSshHost}: ${sshRemote}`);
+  return sshRemote;
+}
+
+function gitFailureHelp(text: string): string {
+  if (/could not read Username for 'https:\/\/github\.com'/i.test(text)) {
+    return [
+      "GitHub HTTPS auth is unavailable in this non-interactive agent process.",
+      "Use a GitHub token/credential helper or configure CMC_GITHUB_SSH_HOST with a writable SSH key."
+    ].join("\n");
+  }
+  if (/marked as read only/i.test(text)) {
+    return [
+      "The GitHub SSH key was accepted, but it is read-only.",
+      "Add a writable deploy key for this repository or use an account SSH key with write access."
+    ].join("\n");
+  }
+  if (/Permission denied \(publickey\)/i.test(text)) {
+    return [
+      "GitHub rejected the SSH key.",
+      "Check the SSH host configured in CMC_GITHUB_SSH_HOST and make sure its public key has write access."
+    ].join("\n");
+  }
+  return "";
+}
+
 async function ensureGitHubRepository(
   remoteUrl: string,
   visibility: "private" | "public",
   output: string[],
-  cwd: string
+  cwd: string,
+  probeRemoteUrl = remoteUrl
 ): Promise<void> {
   const repoSlug = githubRepoSlugFromRemote(remoteUrl);
   if (!repoSlug) throw new Error("GitHub repository URL must be github.com/owner/repo or owner/repo.");
@@ -195,9 +241,9 @@ async function ensureGitHubRepository(
     return;
   }
 
-  if (/^(https:\/\/|git@)/i.test(remoteUrl)) {
-    const remoteCheck = await runCapture("git", ["ls-remote", remoteUrl], cwd, 30000);
-    output.push(`$ git ls-remote ${remoteUrl}`);
+  if (/^(https:\/\/|git@|[A-Za-z0-9_.-]+:)/i.test(probeRemoteUrl)) {
+    const remoteCheck = await runCapture("git", ["ls-remote", probeRemoteUrl], cwd, 30000);
+    output.push(`$ git ls-remote ${probeRemoteUrl}`);
     const remoteText = [remoteCheck.stdout.trim(), remoteCheck.stderr.trim()].filter(Boolean).join("\n");
     if (remoteText) output.push(remoteText);
     if (remoteCheck.exitCode === 0) {
@@ -323,19 +369,21 @@ async function gitSync(
     output.push(`$ git ${args.join(" ")}`);
     if (text) output.push(text);
     if (!allowExitCodes.includes(result.exitCode ?? -1)) {
-      throw new Error(text || `git ${args.join(" ")} failed with exit code ${result.exitCode}`);
+      const help = gitFailureHelp(text);
+      throw new Error([text || `git ${args.join(" ")} failed with exit code ${result.exitCode}`, help].filter(Boolean).join("\n"));
     }
     return result;
   };
+  const resolvedRemoteUrl = remoteUrl ? gitRemoteUrlForAgent(remoteUrl, output) : undefined;
 
   if (createRemote && remoteUrl) {
-    await ensureGitHubRepository(remoteUrl, remoteVisibility, output, repo.path);
+    await ensureGitHubRepository(remoteUrl, remoteVisibility, output, repo.path, resolvedRemoteUrl);
   }
 
-  if (remoteUrl) {
+  if (resolvedRemoteUrl) {
     const currentRemote = await runGit(["remote", "get-url", "origin"], 15000, [0, 2, 128]);
-    if (currentRemote.exitCode === 0) await runGit(["remote", "set-url", "origin", remoteUrl], 15000);
-    else await runGit(["remote", "add", "origin", remoteUrl], 15000);
+    if (currentRemote.exitCode === 0) await runGit(["remote", "set-url", "origin", resolvedRemoteUrl], 15000);
+    else await runGit(["remote", "add", "origin", resolvedRemoteUrl], 15000);
   } else {
     await runGit(["remote", "get-url", "origin"], 15000);
   }

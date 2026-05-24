@@ -478,3 +478,44 @@ Enable it again:
 Enable-ScheduledTask -TaskName 'Codex Server OpenAI Tunnel'
 Start-ScheduledTask -TaskName 'Codex Server OpenAI Tunnel'
 ```
+
+## GitHub Push From Server Agent
+
+The Ubuntu agent runs without an interactive GitHub credential prompt. HTTPS
+remotes like `https://github.com/WizardJIOCb/chat.rodion.pro` can clone/read
+public repos, but `git push` fails with:
+
+```text
+fatal: could not read Username for 'https://github.com': No such device or address
+```
+
+For Server Ubuntu projects, configure a writable SSH key instead:
+
+```bash
+ssh-keygen -t ed25519 -f /root/.ssh/codex_agent_github -C "codex-agent-linux@cyka.lol" -N ""
+cat >> /root/.ssh/config <<'SSH'
+
+Host github-codex
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/codex_agent_github
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+SSH
+chmod 600 /root/.ssh/config /root/.ssh/codex_agent_github
+cat /root/.ssh/codex_agent_github.pub
+```
+
+Add that public key to GitHub as an account SSH key, or as a repository deploy
+key with **Allow write access** enabled.
+
+Then set this in `/root/codex-agent/agent.env` and restart the Linux agent:
+
+```bash
+CMC_GITHUB_SSH_HOST=github-codex
+systemctl restart codex-agent-linux.service
+```
+
+With `CMC_GITHUB_SSH_HOST` set, the agent keeps normal GitHub URLs in the web UI
+but uses `github-codex:owner/repo.git` internally for `git remote set-url` and
+`git push`.
