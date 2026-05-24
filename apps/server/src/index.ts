@@ -101,6 +101,15 @@ type OAuthProfile = {
   email: string;
   displayName?: string;
 };
+type PublicProjectRow = RepoRow & {
+  author_id: string;
+  author_email: string;
+  author_nickname: string | null;
+  author_avatar_data_url: string | null;
+  author_bio: string | null;
+  author_created_at: string;
+  chat_count: number;
+};
 type AdminChatRow = ChatRow & {
   agent_name: string;
   repo_name: string | null;
@@ -299,6 +308,14 @@ function serializeUser(user: UserRow) {
   };
 }
 
+function publicProfileSlug(user: Pick<UserRow, "id" | "nickname">) {
+  return user.nickname?.trim() || user.id;
+}
+
+function publicProfileUrl(request: { protocol: string; hostname: string }, user: Pick<UserRow, "id" | "nickname">): string {
+  return `${publicOrigin(request)}/u/${encodeURIComponent(publicProfileSlug(user))}`;
+}
+
 function markUserActivity(userId: string): void {
   const stamp = nowIso();
   const day = stamp.slice(0, 10);
@@ -362,6 +379,66 @@ function serializeAdminUser(user: UserRow) {
     agents: agentStats.agents,
     stats,
     lastActiveAt: lastActive.lastActiveAt
+  };
+}
+
+function serializePublicProfile(user: UserRow, request: { protocol: string; hostname: string }) {
+  const publicProjects = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM repos r
+    JOIN agents a ON a.id = r.agent_id
+    WHERE a.user_id = ? AND r.visibility = 'public'
+  `).get(user.id) as { count: number };
+  return {
+    id: user.id,
+    email: user.email,
+    nickname: user.nickname,
+    bio: user.bio,
+    avatarDataUrl: user.avatar_data_url,
+    createdAt: user.created_at,
+    updatedAt: user.updated_at,
+    profileSlug: publicProfileSlug(user),
+    profileUrl: publicProfileUrl(request, user),
+    stats: profileStats({ id: user.id, role: "user" }),
+    publicProjects: publicProjects.count
+  };
+}
+
+function publicChatSummaries(agentId: string, repoId: string, limit = 5) {
+  const rows = db.prepare(`
+    SELECT * FROM chats
+    WHERE agent_id = ? AND repo_id = ? AND hidden_at IS NULL
+    ORDER BY updated_at DESC
+    LIMIT ?
+  `).all(agentId, repoId, limit) as ChatRow[];
+  return rows.map(serializeChat);
+}
+
+function serializePublicProject(row: PublicProjectRow, request: { protocol: string; hostname: string }) {
+  const author = {
+    id: row.author_id,
+    email: row.author_email,
+    nickname: row.author_nickname,
+    bio: row.author_bio,
+    avatarDataUrl: row.author_avatar_data_url,
+    createdAt: row.author_created_at,
+    profileSlug: row.author_nickname || row.author_id,
+    profileUrl: publicProfileUrl(request, { id: row.author_id, nickname: row.author_nickname })
+  };
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    name: row.name,
+    domain: row.domain,
+    githubUrl: row.github_url,
+    visibility: row.visibility,
+    currentBranch: row.current_branch,
+    dirty: row.dirty === 1,
+    updatedAt: row.updated_at,
+    url: projectUrlFromDomain(row.domain),
+    chatCount: row.chat_count,
+    author,
+    latestChats: publicChatSummaries(row.agent_id, row.id)
   };
 }
 
@@ -2386,6 +2463,117 @@ async function createApp(): Promise<FastifyInstance> {
     return { share: serializeShare(share, request) };
   });
 
+  app.get("/api/public/profiles/:slug", async (request, reply) => {
+    const slug = (request.params as { slug: string }).slug.trim();
+    if (!slug || slug.length > 180) return reply.code(404).send({ error: "not_found" });
+    const user = db.prepare("SELECT * FROM users WHERE blocked_at IS NULL AND (id = ? OR lower(nickname) = lower(?))")
+      .get(slug, slug) as UserRow | undefined;
+    if (!user) return reply.code(404).send({ error: "not_found" });
+    const rows = db.prepare(`
+      SELECT
+        r.*,
+        u.id AS author_id,
+        u.email AS author_email,
+        u.nickname AS author_nickname,
+        u.avatar_data_url AS author_avatar_data_url,
+        u.bio AS author_bio,
+        u.created_at AS author_created_at,
+        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL) AS chat_count
+      FROM repos r
+      JOIN agents a ON a.id = r.agent_id
+      JOIN users u ON u.id = a.user_id
+      WHERE a.user_id = ? AND r.visibility = 'public'
+      ORDER BY r.updated_at DESC
+      LIMIT 30
+    `).all(user.id) as PublicProjectRow[];
+    return {
+      profile: serializePublicProfile(user, request),
+      projects: rows.map((row) => serializePublicProject(row, request))
+    };
+  });
+
+  app.get("/api/public/search", async (request, reply) => {
+    const query = request.query as { type?: string; q?: string; limit?: string };
+    const type = query.type === "profiles" ? "profiles" : "projects";
+    const q = query.q?.trim().slice(0, 120) ?? "";
+    const limit = Math.max(1, Math.min(30, Number(query.limit ?? 10) || 10));
+    if (type === "profiles") {
+      const args: string[] = [];
+      const filters = ["blocked_at IS NULL"];
+      if (q) {
+        const like = `%${q.toLowerCase()}%`;
+        filters.push("(lower(email) LIKE ? OR lower(COALESCE(nickname, '')) LIKE ? OR lower(COALESCE(bio, '')) LIKE ?)");
+        args.push(like, like, like);
+      }
+      const rows = db.prepare(`
+        SELECT * FROM users
+        WHERE ${filters.join(" AND ")}
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).all(...args, limit) as UserRow[];
+      return { type, profiles: rows.map((row) => serializePublicProfile(row, request)) };
+    }
+
+    const args: string[] = [];
+    const filters = ["r.visibility = 'public'", "u.blocked_at IS NULL"];
+    if (q) {
+      const like = `%${q.toLowerCase()}%`;
+      filters.push("(lower(r.name) LIKE ? OR lower(COALESCE(r.domain, '')) LIKE ? OR lower(COALESCE(r.github_url, '')) LIKE ? OR lower(COALESCE(u.nickname, '')) LIKE ? OR lower(u.email) LIKE ?)");
+      args.push(like, like, like, like, like);
+    }
+    const rows = db.prepare(`
+      SELECT
+        r.*,
+        u.id AS author_id,
+        u.email AS author_email,
+        u.nickname AS author_nickname,
+        u.avatar_data_url AS author_avatar_data_url,
+        u.bio AS author_bio,
+        u.created_at AS author_created_at,
+        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL) AS chat_count
+      FROM repos r
+      JOIN agents a ON a.id = r.agent_id
+      JOIN users u ON u.id = a.user_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY r.updated_at DESC
+      LIMIT ?
+    `).all(...args, limit) as PublicProjectRow[];
+    return { type, projects: rows.map((row) => serializePublicProject(row, request)) };
+  });
+
+  app.get("/api/public/projects/:agentId/:repoId/chats", async (request, reply) => {
+    const { agentId, repoId } = request.params as { agentId: string; repoId: string };
+    const project = db.prepare(`
+      SELECT 1
+      FROM repos r
+      JOIN agents a ON a.id = r.agent_id
+      JOIN users u ON u.id = a.user_id
+      WHERE r.agent_id = ? AND r.id = ? AND r.visibility = 'public' AND u.blocked_at IS NULL
+    `).get(agentId, repoId) as { 1: number } | undefined;
+    if (!project) return reply.code(404).send({ error: "not_found" });
+    return { chats: publicChatSummaries(agentId, repoId, 100) };
+  });
+
+  app.get("/api/public/chats/:id", async (request, reply) => {
+    const chatId = (request.params as { id: string }).id;
+    const chat = db.prepare(`
+      SELECT c.*
+      FROM chats c
+      JOIN repos r ON r.agent_id = c.agent_id AND r.id = c.repo_id
+      JOIN agents a ON a.id = c.agent_id
+      JOIN users u ON u.id = a.user_id
+      WHERE c.id = ? AND c.hidden_at IS NULL AND r.visibility = 'public' AND u.blocked_at IS NULL
+    `).get(chatId) as ChatRow | undefined;
+    if (!chat) return reply.code(404).send({ error: "not_found" });
+    const jobs = db.prepare("SELECT * FROM jobs WHERE chat_id = ? ORDER BY created_at DESC").all(chatId) as JobRow[];
+    const messages = db.prepare("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC").all(chatId) as ChatMessageRow[];
+    return {
+      chat: serializeChat(chat),
+      jobs: jobs.map((row) => serializeJob(row, { includeDiff: false })),
+      messages: serializeMessagesForChat(chatId, messages, { includeChatDataLimitBytes: 1024 * 1024, lightMetadata: true })
+    };
+  });
+
   app.post("/api/agent/shared-chats", async (request, reply) => {
     const authHeader = request.headers.authorization;
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : undefined;
@@ -2771,6 +2959,8 @@ async function createApp(): Promise<FastifyInstance> {
       });
       if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_create_failed" });
       if (result.repos) upsertRepos(parsed.data.agentId, result.repos);
+      db.prepare("UPDATE repos SET visibility = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
+        .run(parsed.data.visibility, nowIso(), parsed.data.agentId, repoId);
       return reply.code(201).send({ repoId });
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
@@ -2784,15 +2974,22 @@ async function createApp(): Promise<FastifyInstance> {
     if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = UpdateProjectSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_project", details: parsed.error.flatten() });
+    const { visibility, ...agentPatch } = parsed.data;
     try {
-      const result = await requestAgentProject(params.agentId, {
-        type: "project.update",
-        requestId: id("req"),
-        repoId: params.repoId,
-        patch: parsed.data
-      });
-      if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_update_failed" });
-      if (result.repos) upsertRepos(params.agentId, result.repos);
+      if (Object.keys(agentPatch).length) {
+        const result = await requestAgentProject(params.agentId, {
+          type: "project.update",
+          requestId: id("req"),
+          repoId: params.repoId,
+          patch: agentPatch
+        });
+        if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_update_failed" });
+        if (result.repos) upsertRepos(params.agentId, result.repos);
+      }
+      if (visibility) {
+        db.prepare("UPDATE repos SET visibility = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
+          .run(visibility, nowIso(), params.agentId, params.repoId);
+      }
       return { ok: true };
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });

@@ -33,6 +33,7 @@ import {
   RefreshCw,
   Rocket,
   Save,
+  Search,
   Server,
   Settings,
   ShieldCheck,
@@ -52,6 +53,7 @@ import "./styles.css";
 type Sandbox = "read-only" | "workspace-write" | "danger-full-access";
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "standard" | "fast";
+type ProjectVisibility = "private" | "public";
 
 const SANDBOXES: Sandbox[] = ["read-only", "workspace-write", "danger-full-access"];
 const SANDBOX_LABELS: Record<Sandbox, string> = {
@@ -207,12 +209,58 @@ type Repo = {
   githubUrl?: string;
   serverPath?: string;
   domain?: string;
+  visibility?: ProjectVisibility;
   deploy?: DeployConfig;
   currentBranch?: string;
   dirty: boolean;
   defaultSandbox: Sandbox;
   allowedSandboxes: Sandbox[];
   testCommands: Array<{ id: string; label: string }>;
+};
+
+type PublicProfile = {
+  id: string;
+  email: string;
+  nickname?: string | null;
+  bio?: string | null;
+  avatarDataUrl?: string | null;
+  createdAt?: string;
+  updatedAt?: string | null;
+  profileSlug: string;
+  profileUrl: string;
+  stats: ProfileStats;
+  publicProjects: number;
+};
+
+type PublicProject = {
+  id: string;
+  agentId: string;
+  name: string;
+  domain?: string | null;
+  githubUrl?: string | null;
+  visibility: ProjectVisibility;
+  currentBranch?: string | null;
+  dirty: boolean;
+  updatedAt: string;
+  url?: string | null;
+  chatCount: number;
+  author: {
+    id: string;
+    email: string;
+    nickname?: string | null;
+    bio?: string | null;
+    avatarDataUrl?: string | null;
+    createdAt?: string;
+    profileSlug: string;
+    profileUrl: string;
+  };
+  latestChats: Chat[];
+};
+
+type PublicChatPayload = {
+  chat: Chat;
+  messages: ChatMessage[];
+  jobs: Job[];
 };
 
 type Chat = {
@@ -493,6 +541,15 @@ function defaultProjectValues(name: string, agent?: Agent | null) {
 function projectUrl(domain?: string) {
   const normalized = normalizeProjectDomain(domain ?? "");
   return normalized ? `https://${normalized}` : "";
+}
+
+function profileSlug(user?: Pick<User, "id" | "nickname"> | null) {
+  return user?.nickname?.trim() || user?.id || "";
+}
+
+function profileUrl(user?: Pick<User, "id" | "nickname"> | null) {
+  const slug = profileSlug(user);
+  return slug ? `${window.location.origin}/u/${encodeURIComponent(slug)}` : "";
 }
 
 function splitCommandLine(value: string) {
@@ -1091,6 +1148,34 @@ function renderMessageAttachments(attachments: MessageAttachment[] | undefined, 
   );
 }
 
+function PublicChatThread({ payload, onPreview }: { payload: PublicChatPayload; onPreview: (preview: ImagePreview) => void }) {
+  return (
+    <section className="public-chat-thread">
+      <div className="section-head">
+        <h2><MessageSquare size={18} /> {payload.chat.title}</h2>
+        <span>{payload.jobs.length} runs</span>
+      </div>
+      {payload.messages.map((message) => (
+        <article className={`message ${message.role}`} key={message.id}>
+          <div className="message-meta">
+            <div className="message-author-stack">
+              <span>{message.role === "user" ? "User" : message.role === "system" ? "System" : message.source === "vscode" ? "VS Code" : "Codex"}</span>
+              <small>{formatDateTime(message.createdAt)}</small>
+            </div>
+          </div>
+          {message.role === "system" ? (
+            <div className="system-message-body" title={normalizeDisplayText(message.content).trim()}>
+              {normalizeDisplayText(message.content).trim()}
+            </div>
+          ) : renderRichText(message.content, "rich-text message-body")}
+          {renderMessageAttachments(message.attachments, onPreview)}
+        </article>
+      ))}
+      {!payload.messages.length && <div className="empty small-empty">В этом чате пока нет сообщений.</div>}
+    </section>
+  );
+}
+
 const ADMIN_METRIC_META: Record<AdminStatsMetric, { label: string; color: string }> = {
   dau: { label: "DAU", color: "#0f8f6b" },
   wau: { label: "WAU", color: "#2563eb" },
@@ -1144,6 +1229,11 @@ function AdminStatsChart({ points, visible }: { points: AdminStatsPoint[]; visib
 
 function shareTokenFromLocation() {
   const match = window.location.pathname.match(/^\/share\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1] ?? "") : "";
+}
+
+function publicProfileSlugFromLocation() {
+  const match = window.location.pathname.match(/^\/u\/([^/?#]+)/);
   return match ? decodeURIComponent(match[1] ?? "") : "";
 }
 
@@ -1232,6 +1322,132 @@ function SharedChatPage({ token }: { token: string }) {
               </article>
             ))}
           </section>
+        </>
+      )}
+
+      {imagePreview && (
+        <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={imagePreview.name} onClick={() => setImagePreview(null)}>
+          <figure onClick={(event) => event.stopPropagation()}>
+            <button aria-label="Close image preview" type="button" onClick={() => setImagePreview(null)}>
+              <X size={20} />
+            </button>
+            <img alt={imagePreview.name} src={imagePreview.src} />
+            <figcaption>
+              <strong>{imagePreview.name}</strong>
+              <span>{imagePreview.mimeType} · {formatBytes(imagePreview.size)}</span>
+            </figcaption>
+          </figure>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function PublicProfilePage({ slug }: { slug: string }) {
+  const [profile, setProfile] = useState<PublicProfile | null>(null);
+  const [projects, setProjects] = useState<PublicProject[]>([]);
+  const [openedChat, setOpenedChat] = useState<PublicChatPayload | null>(null);
+  const [notice, setNotice] = useState("Загружаю профиль...");
+  const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api(`/api/public/profiles/${encodeURIComponent(slug)}`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) {
+          setNotice(data.error === "not_found" ? "Профиль не найден." : data.error || "Не удалось загрузить профиль.");
+          return;
+        }
+        setProfile(data.profile);
+        setProjects(data.projects ?? []);
+        setNotice("");
+      })
+      .catch(() => {
+        if (!cancelled) setNotice("Не удалось загрузить профиль.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [slug]);
+
+  async function openPublicChat(chat: Chat) {
+    setNotice("");
+    const response = await api(`/api/public/chats/${encodeURIComponent(chat.id)}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setNotice(data.error || "Не удалось открыть чат.");
+      return;
+    }
+    setOpenedChat({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
+  }
+
+  const stats = profile?.stats ?? { chats: 0, jobs: 0, completedJobs: 0, failedJobs: 0, projects: 0, generationSeconds: 0 };
+  const displayName = profile?.nickname || profile?.email || "Profile";
+
+  return (
+    <main className="share-page public-profile-page">
+      <header className="share-hero">
+        <div>
+          <img className="brand-logo" src="/favicon.svg" alt="" />
+          <span>codex.rodion.pro</span>
+        </div>
+        <h1>{displayName}</h1>
+        {profile && <p>{profile.email} · зарегистрирован {formatDateTime(profile.createdAt) || "unknown"}</p>}
+      </header>
+
+      {notice && <section className="share-card">{notice}</section>}
+
+      {profile && (
+        <>
+          <section className="public-profile-card">
+            <div className="profile-avatar">
+              {profile.avatarDataUrl ? <img alt="" src={profile.avatarDataUrl} /> : <UserCircle size={54} />}
+            </div>
+            <div>
+              <h2>{displayName}</h2>
+              <p>{profile.bio || "Описание профиля пока не заполнено."}</p>
+              <a className="secondary compact" href={profile.profileUrl}><Link2 size={15} /> {profile.profileUrl}</a>
+            </div>
+          </section>
+
+          <section className="profile-grid public-profile-stats">
+            <div className="stat-card"><MessageSquare size={18} /><span>Chats</span><strong>{stats.chats}</strong></div>
+            <div className="stat-card"><Activity size={18} /><span>Runs</span><strong>{stats.jobs}</strong></div>
+            <div className="stat-card"><CheckCircle2 size={18} /><span>Completed</span><strong>{stats.completedJobs}</strong></div>
+            <div className="stat-card"><FolderGit2 size={18} /><span>Projects</span><strong>{stats.projects}</strong></div>
+            <div className="stat-card"><Link2 size={18} /><span>Public</span><strong>{profile.publicProjects}</strong></div>
+            <div className="stat-card wide"><Clock3 size={18} /><span>Generation time</span><strong>{formatDuration(stats.generationSeconds)}</strong></div>
+          </section>
+
+          <section className="public-projects">
+            <div className="section-head">
+              <h2><FolderGit2 size={18} /> Публичные проекты</h2>
+              <span>{projects.length}</span>
+            </div>
+            {projects.map((project) => (
+              <article className="public-project-card" key={`${project.agentId}:${project.id}`}>
+                <div>
+                  <h3>{project.name}</h3>
+                  <p>{project.domain || project.githubUrl || "Без публичного домена"}</p>
+                </div>
+                <div className="public-project-actions">
+                  {project.url && <a className="secondary compact" href={project.url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open</a>}
+                  <span>{project.chatCount} chats</span>
+                </div>
+                <div className="public-chat-pills">
+                  {project.latestChats.map((chat) => (
+                    <button key={chat.id} type="button" onClick={() => void openPublicChat(chat)}>{chat.title}</button>
+                  ))}
+                  {!project.latestChats.length && <span className="small-empty">Публичных чатов пока нет.</span>}
+                </div>
+              </article>
+            ))}
+            {!projects.length && <div className="share-card">У пользователя пока нет публичных проектов.</div>}
+          </section>
+
+          {openedChat && <PublicChatThread payload={openedChat} onPreview={setImagePreview} />}
         </>
       )}
 
@@ -1770,6 +1986,7 @@ function App() {
   const [projectGithubUrl, setProjectGithubUrl] = useState("");
   const [projectServerPath, setProjectServerPath] = useState("");
   const [projectDomain, setProjectDomain] = useState("");
+  const [projectVisibility, setProjectVisibility] = useState<ProjectVisibility>("private");
   const [projectDeployMode, setProjectDeployMode] = useState<"ssh" | "local">("ssh");
   const [projectDeploySshTarget, setProjectDeploySshTarget] = useState("");
   const [projectDeploySourceDir, setProjectDeploySourceDir] = useState("dist");
@@ -1810,9 +2027,15 @@ function App() {
   const [chatNoticeOk, setChatNoticeOk] = useState(false);
   const [projectNotice, setProjectNotice] = useState("");
   const [attachmentNotice, setAttachmentNotice] = useState("");
-  const [view, setView] = useState<"projects" | "settings" | "profile" | "sync">("projects");
+  const [view, setView] = useState<"projects" | "search" | "settings" | "profile" | "sync">("projects");
   const [syncRepoKey, setSyncRepoKey] = useState("");
   const [syncNotice, setSyncNotice] = useState("");
+  const [searchType, setSearchType] = useState<"projects" | "profiles">("projects");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchProjects, setSearchProjects] = useState<PublicProject[]>([]);
+  const [searchProfiles, setSearchProfiles] = useState<PublicProfile[]>([]);
+  const [searchNotice, setSearchNotice] = useState("");
+  const [searchOpenedChat, setSearchOpenedChat] = useState<PublicChatPayload | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [profileStatsData, setProfileStatsData] = useState<ProfileStats | null>(null);
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
@@ -2345,6 +2568,34 @@ function App() {
     if (response.ok) setAuthOauthProviders((await response.json()).providers);
   }
 
+  async function loadPublicSearch(type = searchType, query = searchQuery) {
+    setSearchNotice("");
+    const response = await api(`/api/public/search?type=${encodeURIComponent(type)}&q=${encodeURIComponent(query.trim())}&limit=10`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setSearchNotice(data.error || "Search failed.");
+      return;
+    }
+    if (type === "profiles") {
+      setSearchProfiles(data.profiles ?? []);
+      setSearchProjects([]);
+    } else {
+      setSearchProjects(data.projects ?? []);
+      setSearchProfiles([]);
+    }
+  }
+
+  async function openPublicChat(chat: Chat) {
+    setSearchNotice("");
+    const response = await api(`/api/public/chats/${encodeURIComponent(chat.id)}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setSearchNotice(data.error || "Не удалось открыть публичный чат.");
+      return;
+    }
+    setSearchOpenedChat({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
+  }
+
   async function loadChats(repo: Repo, selectFirst = false) {
     const controller = new AbortController();
     loadChatsAbortRef.current = controller;
@@ -2709,6 +2960,16 @@ function App() {
     loadUsers();
   }
 
+  function openSearchView() {
+    setMobileMenuOpen(false);
+    setView("search");
+    setProjectPanel(null);
+    setChatProperties(null);
+    setChatMenuId("");
+    setSearchOpenedChat(null);
+    void loadPublicSearch();
+  }
+
   function openProfileView() {
     setMobileMenuOpen(false);
     setView("profile");
@@ -2788,6 +3049,7 @@ function App() {
     setProjectGithubUrl(defaults.githubUrl);
     setProjectServerPath(defaults.serverPath);
     setProjectDomain(defaults.domain);
+    setProjectVisibility("private");
     const defaultMode = isLinuxAgent(selectedAgent) ? "local" : "ssh";
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
@@ -2807,6 +3069,7 @@ function App() {
     setProjectGithubUrl(repo.githubUrl ?? "");
     setProjectServerPath(repo.serverPath ?? "");
     setProjectDomain(repo.domain ?? "");
+    setProjectVisibility(repo.visibility ?? "private");
     setProjectDeployMode(repo.deploy?.mode ?? "ssh");
     setProjectDeploySshTarget(repo.deploy?.sshTarget ?? "");
     setProjectDeploySourceDir(repo.deploy?.sourceDir ?? "dist");
@@ -2869,6 +3132,14 @@ function App() {
     void loadAdminUsers();
     void loadAdminStats();
   }, [csrf, currentUser?.role, isAdminRoute]);
+
+  useEffect(() => {
+    if (!csrf || view !== "search") return;
+    const timer = window.setTimeout(() => {
+      void loadPublicSearch(searchType, searchQuery);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [csrf, view, searchType, searchQuery]);
 
   useEffect(() => {
     try {
@@ -3263,17 +3534,29 @@ function App() {
     const shouldRunPrompt = submitter?.value === "run-prompt" && Boolean(projectStartPrompt.trim());
     setBusy(true);
     const normalizedDomain = normalizeProjectDomain(projectDomain);
-    const body: Record<string, unknown> = {
+    const deployConfig = buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null;
+    const body: Record<string, unknown> = isNew ? {
       agentId: targetAgent.id,
       name: projectName.trim(),
+      path: projectPath.trim(),
       githubUrl: projectGithubUrl.trim(),
       serverPath: projectServerPath.trim(),
       domain: normalizedDomain,
-      deploy: buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null,
-      defaultSandbox: sandbox,
-      allowedSandboxes: SANDBOXES
+      visibility: projectVisibility,
+      deploy: deployConfig,
+      defaultSandbox: sandbox
+    } : {
+      visibility: projectVisibility
     };
-    if (isNew || projectPath.trim() !== originalProjectPath) body.path = projectPath.trim();
+    if (!isNew) {
+      if (projectName.trim() !== selectedRepo?.name) body.name = projectName.trim();
+      if (projectPath.trim() !== originalProjectPath) body.path = projectPath.trim();
+      if (projectGithubUrl.trim() !== (selectedRepo?.githubUrl ?? "")) body.githubUrl = projectGithubUrl.trim();
+      if (projectServerPath.trim() !== (selectedRepo?.serverPath ?? "")) body.serverPath = projectServerPath.trim();
+      if (normalizedDomain !== (selectedRepo?.domain ?? "")) body.domain = normalizedDomain;
+      if (JSON.stringify(deployConfig) !== JSON.stringify(selectedRepo?.deploy ?? null)) body.deploy = deployConfig;
+      if (sandbox !== selectedRepo?.defaultSandbox) body.defaultSandbox = sandbox;
+    }
     const response = await api(isNew ? "/api/projects" : `/api/projects/${selectedRepo?.agentId}/${selectedRepo?.id}`, {
       method: isNew ? "POST" : "PUT",
       headers: { "x-csrf-token": csrf },
@@ -4199,6 +4482,89 @@ function App() {
     return provider === "mailru" ? "Mail.ru" : provider === "vk" ? "VK ID" : provider === "github" ? "GitHub" : "Google";
   }
 
+  function renderSearch() {
+    const emptyLabel = searchQuery.trim()
+      ? "Ничего не найдено."
+      : searchType === "projects" ? "Публичных проектов пока нет." : "Пользователей пока нет.";
+    return (
+      <section className="settings-work search-work">
+        <section className="project-form wide">
+          <div className="section-head">
+            <h2><Search size={18} /> Search</h2>
+            <button className="secondary" type="button" onClick={() => void loadPublicSearch()}><RefreshCw size={16} /> Refresh</button>
+          </div>
+          <div className="search-controls">
+            <input
+              placeholder={searchType === "projects" ? "Искать публичные проекты, домены, авторов..." : "Искать профили по email, nickname, bio..."}
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            <div className="segments">
+              <button className={searchType === "projects" ? "active" : ""} type="button" onClick={() => {
+                setSearchType("projects");
+                setSearchOpenedChat(null);
+              }}>Projects</button>
+              <button className={searchType === "profiles" ? "active" : ""} type="button" onClick={() => {
+                setSearchType("profiles");
+                setSearchOpenedChat(null);
+              }}>Profiles</button>
+            </div>
+          </div>
+
+          {searchNotice && <div className="notice danger">{searchNotice}</div>}
+
+          {searchType === "projects" ? (
+            <div className="public-result-list">
+              {searchProjects.map((project) => (
+                <article className="public-project-card" key={`${project.agentId}:${project.id}`}>
+                  <div>
+                    <h3>{project.name}</h3>
+                    <p>{project.domain || project.githubUrl || "Без публичного домена"}</p>
+                  </div>
+                  <div className="public-project-meta">
+                    <a href={project.author.profileUrl}><UserCircle size={15} /> {project.author.nickname || project.author.email}</a>
+                    <span>{project.chatCount} chats</span>
+                    {project.url && <a href={project.url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open result</a>}
+                  </div>
+                  <div className="public-chat-pills">
+                    {project.latestChats.map((chat) => (
+                      <button key={chat.id} type="button" onClick={() => void openPublicChat(chat)}>{chat.title}</button>
+                    ))}
+                    {!project.latestChats.length && <span className="small-empty">У проекта пока нет публичных чатов.</span>}
+                  </div>
+                </article>
+              ))}
+              {!searchProjects.length && <div className="empty">{emptyLabel}</div>}
+            </div>
+          ) : (
+            <div className="public-result-list">
+              {searchProfiles.map((profile) => (
+                <article className="public-profile-result" key={profile.id}>
+                  <div className="profile-avatar small">
+                    {profile.avatarDataUrl ? <img alt="" src={profile.avatarDataUrl} /> : <UserCircle size={32} />}
+                  </div>
+                  <div>
+                    <h3>{profile.nickname || profile.email}</h3>
+                    <p>{profile.bio || profile.email}</p>
+                    <div className="public-project-meta">
+                      <span>{profile.stats.chats} chats</span>
+                      <span>{profile.stats.projects} projects</span>
+                      <span>{profile.publicProjects} public</span>
+                    </div>
+                  </div>
+                  <a className="secondary compact" href={profile.profileUrl}><ExternalLink size={15} /> Open profile</a>
+                </article>
+              ))}
+              {!searchProfiles.length && <div className="empty">{emptyLabel}</div>}
+            </div>
+          )}
+
+          {searchOpenedChat && <PublicChatThread payload={searchOpenedChat} onPreview={setImagePreview} />}
+        </section>
+      </section>
+    );
+  }
+
   function renderAdmin() {
     const selectedAdminUser = adminUsers.find((user) => user.id === adminSelectedUserId) ?? adminUsers[0];
     const latestStats = adminStats[adminStats.length - 1] ?? { dau: 0, wau: 0, mau: 0, registrations: 0 };
@@ -4374,6 +4740,7 @@ function App() {
   function renderProfile() {
     const stats = profileStatsData ?? { chats: 0, jobs: 0, completedJobs: 0, failedJobs: 0, projects: 0, generationSeconds: 0 };
     const displayName = currentUser?.nickname || currentUser?.email || "Profile";
+    const ownProfileUrl = profileUrl(currentUser);
     return (
       <section className="settings-work profile-work">
         <section className="profile-hero">
@@ -4393,6 +4760,23 @@ function App() {
           <div className="stat-card"><CheckCircle2 size={18} /><span>Completed</span><strong>{stats.completedJobs}</strong></div>
           <div className="stat-card"><FolderGit2 size={18} /><span>Projects</span><strong>{stats.projects}</strong></div>
           <div className="stat-card wide"><Clock3 size={18} /><span>Generation time</span><strong>{formatDuration(stats.generationSeconds)}</strong></div>
+        </section>
+
+        <section className="settings-card profile-card">
+          <h2><Link2 size={18} /> Public profile link</h2>
+          <div className="copy-row">
+            <input readOnly value={ownProfileUrl} />
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(ownProfileUrl);
+                setProfileNotice("Profile link copied.");
+              }}
+            >
+              <Link2 size={16} /> Copy
+            </button>
+          </div>
         </section>
 
         <form className="settings-card profile-card" onSubmit={saveProfile}>
@@ -5437,6 +5821,13 @@ function App() {
           <div className="nav-group">
             <button className={view === "projects" ? "nav-item active" : "nav-item"} onClick={clearProjectSelection}><FolderGit2 size={17} /> Projects</button>
             <div className="nav-subtree">
+              <button className={view === "search" ? "nav-leaf project active" : "nav-leaf project"} type="button" onClick={openSearchView}>
+                <span className="nav-project-title">
+                  <Search size={14} />
+                  <span>Search</span>
+                </span>
+                <small>Public projects and profiles</small>
+              </button>
               {repos.map((repo) => {
                 const selected = selectedRepo?.agentId === repo.agentId && selectedRepo.id === repo.id;
                 const currentRepoKey = `${repo.agentId}:${repo.id}`;
@@ -5575,7 +5966,7 @@ function App() {
           </div>
           <div className="top-title">
             <span className={`status ${online ? "ok" : "bad"}`}>{online ? <Wifi size={16} /> : <WifiOff size={16} />} {selectedAgentStatusLabel}</span>
-            <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
+            <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : view === "search" ? "Search" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
           </div>
           <div className="top-actions">
             {selectedRepo && <button className="icon" onClick={clearProjectSelection} title="Проекты"><ArrowLeft size={18} /></button>}
@@ -5598,6 +5989,7 @@ function App() {
       {view === "settings" && renderSettings()}
       {view === "profile" && renderProfile()}
       {view === "sync" && renderSync()}
+      {view === "search" && renderSearch()}
 
       {view === "projects" && !selectedRepo && (
         <section className="project-picker">
@@ -5679,6 +6071,13 @@ function App() {
               <a href={projectUrl(projectDomain)} target="_blank" rel="noreferrer">{projectUrl(projectDomain)}</a>
             </div>
           )}
+          <label>
+            Project visibility
+            <select value={projectVisibility} onChange={(event) => setProjectVisibility(event.target.value as ProjectVisibility)}>
+              <option value="private">Private: виден только владельцу и админам</option>
+              <option value="public">Public: проект и его чаты видны в Search</option>
+            </select>
+          </label>
           <label>
             Deploy mode
             <select value={projectDeployMode} onChange={(event) => setProjectDeployMode(event.target.value as "ssh" | "local")}>
@@ -6050,4 +6449,11 @@ function App() {
 }
 
 const sharedToken = shareTokenFromLocation();
-createRoot(document.getElementById("root")!).render(sharedToken ? <SharedChatPage token={sharedToken} /> : <App />);
+const publicProfileSlug = publicProfileSlugFromLocation();
+createRoot(document.getElementById("root")!).render(
+  sharedToken
+    ? <SharedChatPage token={sharedToken} />
+    : publicProfileSlug
+      ? <PublicProfilePage slug={publicProfileSlug} />
+      : <App />
+);

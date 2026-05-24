@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { CodexUsage, DeployConfig, JobStatus, LocalCodexActivity, RepoInfo, Sandbox } from "@cmc/protocol";
+import type { CodexUsage, DeployConfig, JobStatus, LocalCodexActivity, ProjectVisibility, RepoInfo, Sandbox } from "@cmc/protocol";
 
 export type UserRow = {
   id: string;
@@ -67,6 +67,7 @@ export type RepoRow = {
   github_url: string | null;
   server_path: string | null;
   domain: string | null;
+  visibility: ProjectVisibility;
   deploy_json: string | null;
   current_branch: string | null;
   dirty: number;
@@ -220,6 +221,7 @@ export function openDb(path: string): DatabaseSync {
       github_url TEXT,
       server_path TEXT,
       domain TEXT,
+      visibility TEXT NOT NULL DEFAULT 'private',
       deploy_json TEXT,
       current_branch TEXT,
       dirty INTEGER NOT NULL,
@@ -428,6 +430,9 @@ export function openDb(path: string): DatabaseSync {
   if (!repoColumns.some((column) => column.name === "domain")) {
     db.exec("ALTER TABLE repos ADD COLUMN domain TEXT");
   }
+  if (!repoColumns.some((column) => column.name === "visibility")) {
+    db.exec("ALTER TABLE repos ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'");
+  }
   if (!repoColumns.some((column) => column.name === "deploy_json")) {
     db.exec("ALTER TABLE repos ADD COLUMN deploy_json TEXT");
   }
@@ -499,6 +504,7 @@ export function mapRepo(row: RepoRow): RepoInfo {
     githubUrl: row.github_url ?? undefined,
     serverPath: row.server_path ?? undefined,
     domain: row.domain ?? undefined,
+    visibility: row.visibility,
     deploy: parseDeployConfig(row.deploy_json),
     currentBranch: row.current_branch ?? undefined,
     dirty: row.dirty === 1,

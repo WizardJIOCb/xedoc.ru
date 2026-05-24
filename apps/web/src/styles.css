@@ -1271,6 +1271,12 @@ textarea:focus {
   object-fit: cover;
 }
 
+.profile-avatar.small {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+}
+
 .profile-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1306,6 +1312,147 @@ textarea:focus {
 
 .profile-card {
   max-width: 760px;
+}
+
+.copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.public-profile-page {
+  display: block;
+}
+
+.public-profile-card,
+.public-projects,
+.public-chat-thread,
+.public-result-list,
+.search-work {
+  width: min(980px, 100%);
+  margin: 0 auto;
+}
+
+.public-profile-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.public-profile-card h2,
+.public-profile-card p,
+.public-project-card h3,
+.public-project-card p,
+.public-profile-result h3,
+.public-profile-result p {
+  margin: 0;
+}
+
+.public-profile-card p,
+.public-project-card p,
+.public-profile-result p {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.public-profile-stats {
+  width: min(980px, 100%);
+  margin: 0 auto 10px;
+}
+
+.public-projects,
+.public-result-list {
+  display: grid;
+  gap: 10px;
+}
+
+.public-project-card,
+.public-profile-result,
+.public-chat-thread {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.public-project-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.public-project-card > .public-chat-pills,
+.public-project-card > .public-project-meta {
+  grid-column: 1 / -1;
+}
+
+.public-project-actions,
+.public-project-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.public-project-actions {
+  justify-content: flex-end;
+}
+
+.public-project-actions span,
+.public-project-meta span,
+.public-project-meta a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.public-chat-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.public-chat-pills button {
+  min-height: 30px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--panel-2);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.public-chat-pills button:hover {
+  border-color: var(--line-strong);
+  background: #ffffff;
+}
+
+.public-chat-thread {
+  margin-top: 12px;
+}
+
+.public-profile-result {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.search-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .avatar-upload {
@@ -4084,6 +4231,11 @@ button:disabled {
   .workspace,
   .project-workspace,
   .profile-grid,
+  .public-profile-card,
+  .public-project-card,
+  .public-profile-result,
+  .copy-row,
+  .search-controls,
   .admin-users-layout,
   .admin-stat-grid,
   .admin-stat-grid.compact,

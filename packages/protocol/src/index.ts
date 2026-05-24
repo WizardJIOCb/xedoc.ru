@@ -3,6 +3,9 @@ import { z } from "zod";
 export const SandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 export type Sandbox = z.infer<typeof SandboxSchema>;
 
+export const ProjectVisibilitySchema = z.enum(["private", "public"]);
+export type ProjectVisibility = z.infer<typeof ProjectVisibilitySchema>;
+
 export const JobStatusSchema = z.enum([
   "queued",
   "assigned",
@@ -43,6 +46,7 @@ export const RepoInfoSchema = z.object({
   githubUrl: z.string().max(300).optional(),
   serverPath: z.string().max(260).optional(),
   domain: z.string().max(253).optional(),
+  visibility: ProjectVisibilitySchema.optional(),
   deploy: DeployConfigSchema.optional(),
   currentBranch: z.string().optional(),
   dirty: z.boolean(),
@@ -424,6 +428,7 @@ export const CreateProjectSchema = z.object({
   githubUrl: z.string().max(300).optional(),
   serverPath: z.string().max(260).optional(),
   domain: z.string().max(253).optional(),
+  visibility: ProjectVisibilitySchema.default("private"),
   deploy: DeployConfigSchema.nullish(),
   defaultSandbox: SandboxSchema.default("danger-full-access")
 });
@@ -435,6 +440,7 @@ export const UpdateProjectSchema = z.object({
   githubUrl: z.string().max(300).optional(),
   serverPath: z.string().max(260).optional(),
   domain: z.string().max(253).optional(),
+  visibility: ProjectVisibilitySchema.optional(),
   deploy: DeployConfigSchema.nullish(),
   defaultSandbox: SandboxSchema.optional(),
   allowedSandboxes: z.array(SandboxSchema).min(1).optional()
