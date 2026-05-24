@@ -4345,12 +4345,15 @@ function App() {
 
   function renderActiveRun() {
     if (!activeJob || !activeRunBusy) return null;
+    const promptAlreadyVisible = messages.some((message) => isJobPromptMessage(message, activeJob.id));
     return (
       <>
-        <div className="job-head">
-          <span className={`pill ${activeJob.status}`}><CheckCircle2 size={15} /> {activeJob.status}</span>
-          <strong>{activeJob.prompt}</strong>
-        </div>
+        {!promptAlreadyVisible && (
+          <div className="job-head">
+            <span className={`pill ${activeJob.status}`}><CheckCircle2 size={15} /> {activeJob.status}</span>
+            <strong>{activeJob.prompt}</strong>
+          </div>
+        )}
         {activeProgress && (
           <div className="progress-wrap">
             <div className="progress-panel">
