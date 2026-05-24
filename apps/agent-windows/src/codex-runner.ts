@@ -176,6 +176,7 @@ export class Runner {
               ? "completed"
               : "failed";
         const resultMessage = failureMessage
+          ?? codexNetworkFailureMessage
           ?? (this.cancelled ? "Job cancelled." : exitCode === 0 ? "Codex finished." : "Codex process failed.");
         context.sendProgress(progress(
           context.job.id,
@@ -198,6 +199,7 @@ export class Runner {
           status,
           exitCode,
           finalMessage: failureMessage
+            ?? codexNetworkFailureMessage
             ?? (this.cancelled ? "Job cancelled." : finalMessage || rawOutputTail.trim() || (exitCode === 0 ? "Completed." : "Process failed.")),
           gitStatus: gitStatus.stdout,
           gitDiffStat: gitDiffStat.stdout,
