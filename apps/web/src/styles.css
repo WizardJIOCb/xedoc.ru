@@ -1975,7 +1975,7 @@ h2 > strong {
 .chat-scroll-controls {
   position: fixed;
   right: calc(300px + 32px);
-  bottom: calc(var(--composer-space, 150px) + env(safe-area-inset-bottom));
+  bottom: calc(var(--scroll-controls-bottom, 18px) + env(safe-area-inset-bottom));
   z-index: 80;
   display: grid;
   gap: 7px;
@@ -3996,7 +3996,7 @@ button:disabled {
 
   .chat-scroll-controls {
     right: max(12px, env(safe-area-inset-right));
-    bottom: calc(var(--composer-space, 150px) + env(safe-area-inset-bottom));
+    bottom: calc(var(--scroll-controls-bottom, 18px) + env(safe-area-inset-bottom));
     gap: 6px;
   }
 

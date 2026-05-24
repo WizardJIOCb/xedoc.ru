@@ -2107,9 +2107,17 @@ function App() {
 
   function updateComposerPlacement() {
     const composer = composerRef.current;
-    if (!composer) return;
+    if (!composer) {
+      document.documentElement.style.setProperty("--scroll-controls-bottom", "18px");
+      return;
+    }
     const height = Math.ceil(composer.getBoundingClientRect().height);
     document.documentElement.style.setProperty("--composer-space", `${height + 12}px`);
+    const rect = composer.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const visibleHeight = Math.max(0, Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0));
+    const bottom = visibleHeight > 10 ? Math.ceil(visibleHeight + 12) : 18;
+    document.documentElement.style.setProperty("--scroll-controls-bottom", `${bottom}px`);
   }
 
   function clearChatLoader(chatId: string, startedAt: number) {
@@ -2770,6 +2778,7 @@ function App() {
       setShowChatScrollTop(false);
       setShowChatScrollBottom(false);
       document.documentElement.style.removeProperty("--composer-space");
+      document.documentElement.style.removeProperty("--scroll-controls-bottom");
       return;
     }
 
