@@ -2804,8 +2804,20 @@ async function createApp(): Promise<FastifyInstance> {
         appendLog({ job_id: parsed.jobId, stream: parsed.stream, message: parsed.message, at: parsed.at });
       }
       if (parsed.type === "job.progress") {
-        db.prepare("UPDATE jobs SET status='running', started_at=COALESCE(started_at, ?), progress_json=? WHERE id=?")
-          .run(nowIso(), JSON.stringify(parsed), parsed.jobId);
+        const progressAt = nowIso();
+        db.prepare("UPDATE jobs SET status='running', started_at=COALESCE(started_at, ?), progress_json=?, codex_thread_id=COALESCE(codex_thread_id, ?) WHERE id=?")
+          .run(progressAt, JSON.stringify(parsed), parsed.codexThreadId ?? null, parsed.jobId);
+        if (parsed.codexThreadId) {
+          const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(parsed.jobId) as JobRow | undefined;
+          if (job?.chat_id) {
+            db.prepare("UPDATE chats SET external_id = COALESCE(external_id, ?), updated_at = ? WHERE id = ?")
+              .run(parsed.codexThreadId, progressAt, job.chat_id);
+            const mergedDuplicates = mergeLinkedSyncedChatDuplicates(agent.id, job.repo_id, parsed.codexThreadId, job.chat_id);
+            if (mergedDuplicates) {
+              broadcast({ type: "chats.updated", agentId: agent.id, repoId: job.repo_id, chatId: job.chat_id });
+            }
+          }
+        }
         broadcast(parsed);
       }
       if (parsed.type === "job.done") {

@@ -124,6 +124,7 @@ export const AgentJobProgressSchema = z.object({
   added: z.number().int().nonnegative().optional(),
   deleted: z.number().int().nonnegative().optional(),
   files: z.array(JobProgressFileSchema).max(50).optional(),
+  codexThreadId: z.string().optional(),
   at: z.string().datetime()
 });
 

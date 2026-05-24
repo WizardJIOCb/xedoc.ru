@@ -274,7 +274,7 @@ function progress(
   jobId: string,
   phase: string,
   message: string,
-  stats?: DiffProgress
+  stats?: Partial<DiffProgress> & { codexThreadId?: string }
 ): AgentJobProgress {
   return { type: "job.progress", jobId, phase, message, at: new Date().toISOString(), ...stats };
 }
@@ -320,8 +320,8 @@ function handleCodexJsonLine(context: RunContext, line: string): { handled: bool
   const type = "type" in event ? String(event.type) : "";
 
   if (type === "thread.started") {
-    context.sendProgress(progress(context.job.id, "started", "Codex thread started."));
     const threadId = "thread_id" in event && typeof event.thread_id === "string" ? event.thread_id : undefined;
+    context.sendProgress(progress(context.job.id, "started", "Codex thread started.", threadId ? { codexThreadId: threadId } : undefined));
     return { handled: true, threadId };
   }
   if (type === "turn.started") {
