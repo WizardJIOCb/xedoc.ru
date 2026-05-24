@@ -4838,15 +4838,28 @@ function App() {
               <div className="action-menu" role="menu">
                 <button className="project-menu-action" disabled={launchBusy || gitBusy || !gitMessage.trim()} role="menuitem" type="button" onClick={runGitSync}>
                   <UploadCloud size={16} />
+                  <span className="step-badge">1</span>
                   <span>Commit & push</span>
                 </button>
                 <button className="project-menu-action" disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={deployProject}>
                   <UploadCloud size={16} />
+                  <span className="step-badge">2</span>
                   <span>Deploy</span>
                 </button>
                 <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
                   <Rocket size={16} />
+                  <span className="step-badge">1-4</span>
                   <span>Launch</span>
+                </button>
+                <button className="project-menu-action" disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={configureNginx}>
+                  <Settings size={16} />
+                  <span className="step-badge">3</span>
+                  <span>Nginx</span>
+                </button>
+                <button className="project-menu-action" disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={configureSsl}>
+                  <Settings size={16} />
+                  <span className="step-badge">4</span>
+                  <span>SSL</span>
                 </button>
                 <button
                   className="project-menu-action"
@@ -4860,6 +4873,7 @@ function App() {
                   }}
                 >
                   <ExternalLink size={16} />
+                  <span className="step-badge">5</span>
                   <span>Open</span>
                 </button>
                 <div className="menu-divider" />
@@ -5384,12 +5398,12 @@ function App() {
             <form className="git-panel" onSubmit={syncGit}>
               <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
               <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
-              <button disabled={launchBusy || gitBusy || !gitMessage.trim()} type="submit"><UploadCloud size={16} /> Commit & push</button>
-              <button disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} type="button" onClick={launchProject}><Rocket size={16} /> Launch</button>
-              <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} type="button" onClick={deployProject}><UploadCloud size={16} /> Deploy</button>
-              <button disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} type="button" onClick={configureNginx}><Settings size={16} /> Nginx</button>
-              <button disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} type="button" onClick={configureSsl}><Settings size={16} /> SSL</button>
-              {selectedProjectUrl && <a className="launch-link" href={selectedProjectUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /> Open</a>}
+              <button disabled={launchBusy || gitBusy || !gitMessage.trim()} type="submit"><UploadCloud size={16} /> <span className="step-badge">1</span> Commit & push</button>
+              <button disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} type="button" onClick={launchProject}><Rocket size={16} /> <span className="step-badge">1-4</span> Launch</button>
+              <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} type="button" onClick={deployProject}><UploadCloud size={16} /> <span className="step-badge">2</span> Deploy</button>
+              <button disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} type="button" onClick={configureNginx}><Settings size={16} /> <span className="step-badge">3</span> Nginx</button>
+              <button disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} type="button" onClick={configureSsl}><Settings size={16} /> <span className="step-badge">4</span> SSL</button>
+              {selectedProjectUrl && <a className="launch-link" href={selectedProjectUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /> <span className="step-badge">5</span> Open</a>}
               {gitNotice && <pre>{gitNotice}</pre>}
               {launchNotice && <pre>{launchNotice}</pre>}
               {deployNotice && <pre>{deployNotice}</pre>}
