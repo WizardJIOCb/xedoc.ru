@@ -1617,12 +1617,7 @@ function App() {
     ))
     : undefined;
   const localActivity = selectedAgent?.localActivity;
-  const activeJobFinalMessageSeen = Boolean(activeJob && messages.some((message) => (
-    message.role === "assistant"
-    && messageJobId(message) === activeJob.id
-    && (message.externalId === `job:${activeJob.id}:final` || typeof message.metadata?.status === "string")
-  )));
-  const activeRunBusy = Boolean(activeJob && ["queued", "assigned", "running"].includes(activeJob.status) && !activeJobFinalMessageSeen);
+  const activeRunBusy = Boolean(activeJob && ["queued", "assigned", "running"].includes(activeJob.status));
   const runningJobs = useMemo(() => mergeJobs(allJobs, activeJob && activeRunBusy ? [activeJob] : []).filter(isJobRunning), [allJobs, activeJob, activeRunBusy]);
   const webActivityRunning = Boolean(
     localActivity?.source === "codex.rodion.pro"
