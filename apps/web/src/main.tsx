@@ -17,6 +17,7 @@ import {
   Database,
   Download,
   ExternalLink,
+  FilePenLine,
   FolderGit2,
   Github,
   GitBranch,
@@ -40,13 +41,13 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Square,
   PlugZap,
   Terminal,
   Trash2,
   UploadCloud,
   UserCircle,
-  Wrench,
   Wifi,
   WifiOff,
   X
@@ -5618,7 +5619,7 @@ function App() {
           <h2><FolderGit2 size={18} /> New project</h2>
           <div className="section-actions">
             <button className="secondary" type="button" onClick={() => applyProjectDefaultsToForm({ includePath: true })}>
-              <Wrench size={15} /> Defaults
+              <SlidersHorizontal size={15} /> Defaults
             </button>
             <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Close</button>
           </div>
@@ -5667,7 +5668,7 @@ function App() {
           <h2>Project settings</h2>
           <div className="section-actions">
             <button className="secondary" type="button" onClick={() => applyProjectDefaultsToForm({ includePath: false })}>
-              <Wrench size={15} /> Defaults
+              <SlidersHorizontal size={15} /> Defaults
             </button>
             <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Close</button>
           </div>
@@ -6162,7 +6163,7 @@ function App() {
       <div className="codex-change-card">
         <div className="codex-change-head">
           <div className="codex-change-title">
-            <span className="change-icon"><Wrench size={16} /></span>
+            <span className="change-icon"><FilePenLine size={16} /></span>
             <div>
               <strong>Edited {summary.files} {summary.files === 1 ? "file" : "files"}</strong>
               <small>

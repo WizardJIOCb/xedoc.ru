@@ -2789,6 +2789,7 @@ a.secondary {
   font-weight: 800;
   min-width: 0;
   white-space: normal;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
 }
 
 .segments button,
@@ -2811,6 +2812,32 @@ a.secondary {
 .danger-button {
   color: #ffffff;
   background: var(--danger);
+}
+
+.segments button:hover:not(:disabled),
+.secondary:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.segments .active:hover:not(:disabled),
+.new-chat button:hover:not(:disabled),
+.project-form button[type="submit"]:hover:not(:disabled),
+.git-panel button:hover:not(:disabled),
+.sticky-submit .run-button:hover:not(:disabled),
+.login button:hover:not(:disabled) {
+  color: var(--accent-text);
+  background: var(--accent-hover);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.danger-button:hover:not(:disabled),
+.sticky-submit .stop:hover:not(:disabled) {
+  color: #ffffff;
+  background: color-mix(in srgb, var(--danger) 86%, #000000);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--danger) 18%, transparent);
 }
 
 .sticky-submit {
@@ -4232,6 +4259,14 @@ h2 > strong {
   color: var(--text);
   background: var(--panel);
   font-weight: 800;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+
+.codex-change-head button:hover:not(:disabled),
+.show-more-files:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--text) 7%, transparent);
 }
 
 .codex-change-files {
