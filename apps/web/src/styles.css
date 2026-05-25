@@ -543,7 +543,30 @@ textarea:focus {
 }
 
 .nav-project-chats {
-  padding-left: 0;
+  position: relative;
+  gap: 6px;
+  margin-left: 10px;
+  padding: 7px 0 0 10px;
+  border-left: 1px solid var(--line-strong);
+}
+
+.nav-project {
+  position: relative;
+  border-radius: 8px;
+}
+
+.nav-project.open {
+  gap: 7px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
+}
+
+.nav-project.open > .nav-leaf.project {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--line-strong);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .nav-leaf {
@@ -631,6 +654,15 @@ textarea:focus {
   min-width: 0;
 }
 
+.nav-project-chats .nav-chat-row::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 15px;
+  width: 7px;
+  border-top: 1px solid var(--line-strong);
+}
+
 .nav-menu-trigger {
   width: 28px;
   min-height: 28px;
@@ -714,7 +746,14 @@ textarea:focus {
 
 .nav-leaf.chat-child {
   padding-block: 6px;
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--panel) 74%, transparent);
   font-size: 12px;
+}
+
+.nav-leaf.chat-child:hover,
+.nav-chat-row.active .nav-leaf.chat-child {
+  background: var(--panel);
 }
 
 .nav-chat-title {
@@ -737,10 +776,20 @@ textarea:focus {
 }
 
 .nav-new-chat {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto 32px;
   gap: 5px;
   min-width: 0;
+}
+
+.nav-project-chats .nav-new-chat::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 16px;
+  width: 7px;
+  border-top: 1px solid var(--line-strong);
 }
 
 .nav-new-chat input {

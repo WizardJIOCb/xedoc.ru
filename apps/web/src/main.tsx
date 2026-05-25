@@ -6465,7 +6465,7 @@ function App() {
                 const currentRepoKey = `${repo.agentId}:${repo.id}`;
                 const busyProjectCount = busyCountByRepo.get(currentRepoKey) ?? 0;
                 return (
-                  <div className="nav-project" key={currentRepoKey}>
+                  <div className={selected ? "nav-project open" : "nav-project"} key={currentRepoKey}>
                     <button className={selected ? "nav-leaf project active" : "nav-leaf project"} onClick={() => selectProject(repo)}>
                       <span className="nav-project-title">
                         {busyProjectCount > 0 && (
