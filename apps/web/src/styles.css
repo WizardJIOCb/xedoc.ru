@@ -2924,13 +2924,23 @@ a.secondary {
 }
 
 .sticky-submit .action-menu button {
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   min-height: 30px;
   padding: 5px 8px;
+  text-align: left;
   font-size: 14px;
   font-weight: 600;
   line-height: 1.2;
+}
+
+.sticky-submit .action-menu button > span {
+  min-width: 0;
+  text-align: left;
+}
+
+.sticky-submit .action-menu button > svg:last-child:not(:first-child) {
+  margin-left: auto;
 }
 
 .sticky-submit .action-menu > button:first-child,
