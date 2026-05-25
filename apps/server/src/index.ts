@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash, createHmac } from "node:crypto";
+import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
@@ -1720,6 +1721,18 @@ function projectUrlFromDomain(domain: string | null | undefined): string | null 
   return normalized ? `https://${normalized}` : null;
 }
 
+function projectPreviewUrlFromDomain(domain: string | null | undefined): string | null {
+  const normalized = domain?.trim().toLowerCase().replace(/^https?:\/\//i, "").replace(/\/.*$/g, "").replace(/\.+$/g, "");
+  if (!normalized || normalized.length > 253) return null;
+  if (isIP(normalized) || normalized === "localhost" || normalized.endsWith(".localhost") || normalized.endsWith(".local")) return null;
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(normalized)) return null;
+  return `https://${normalized}`;
+}
+
+function screenshotServiceUrl(targetUrl: string): string {
+  return `https://image.thum.io/get/width/1280/crop/800/noanimate/${targetUrl}`;
+}
+
 function stripPrivateAttachmentUrls<T extends { attachments?: object[] }>(messages: T[]): T[] {
   return messages.map((message) => ({
     ...message,
@@ -2997,6 +3010,42 @@ async function createApp(): Promise<FastifyInstance> {
       return { ok: true };
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
+  app.get("/api/projects/:agentId/:repoId/preview", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth) return;
+    const params = request.params as { agentId: string; repoId: string };
+    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const repo = db.prepare("SELECT domain FROM repos WHERE agent_id = ? AND id = ?")
+      .get(params.agentId, params.repoId) as Pick<RepoRow, "domain"> | undefined;
+    const targetUrl = projectPreviewUrlFromDomain(repo?.domain);
+    if (!targetUrl) return reply.code(404).send({ error: "preview_not_available" });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 9000);
+    try {
+      const response = await fetch(screenshotServiceUrl(targetUrl), {
+        headers: { accept: "image/*" },
+        signal: controller.signal
+      });
+      if (!response.ok) return reply.code(502).send({ error: "preview_fetch_failed" });
+      const contentType = response.headers.get("content-type") ?? "image/jpeg";
+      if (!contentType.toLowerCase().startsWith("image/")) return reply.code(502).send({ error: "preview_not_image" });
+      const contentLength = Number(response.headers.get("content-length") ?? 0);
+      if (Number.isFinite(contentLength) && contentLength > 3 * 1024 * 1024) return reply.code(502).send({ error: "preview_too_large" });
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.byteLength > 3 * 1024 * 1024) return reply.code(502).send({ error: "preview_too_large" });
+      reply.header("Content-Type", contentType);
+      reply.header("Cache-Control", "private, max-age=900");
+      reply.header("X-Content-Type-Options", "nosniff");
+      return reply.send(bytes);
+    } catch (error) {
+      const aborted = error instanceof Error && error.name === "AbortError";
+      return reply.code(aborted ? 504 : 502).send({ error: aborted ? "preview_timeout" : "preview_fetch_failed" });
+    } finally {
+      clearTimeout(timeout);
     }
   });
 
