@@ -557,7 +557,7 @@ textarea:focus {
 
 .nav-project.open {
   gap: 7px;
-  padding: 0 0 0 6px;
+  padding: 0;
   border: 0;
   background: transparent;
 }
