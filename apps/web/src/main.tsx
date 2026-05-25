@@ -6068,8 +6068,29 @@ function App() {
     const previewLabel = selectedRepo.domain || selectedRepo.githubUrl || selectedRepo.pathMasked;
     return (
       <section className="project-home" aria-label="Обзор проекта">
-        <article className="project-site-card">
-          {!selectedProjectUrl && (
+        {selectedProjectUrl ? (
+          <div className="project-site-preview">
+            <div className="project-site-framebar">
+              <span className="project-site-browser">
+                <i />
+                <i />
+                <i />
+                <strong>{selectedProjectUrl}</strong>
+              </span>
+              <a className="project-site-open" href={selectedProjectUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={14} /> Open
+              </a>
+            </div>
+            <iframe
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              sandbox="allow-forms allow-popups allow-same-origin allow-scripts"
+              src={selectedProjectUrl}
+              title={`Preview ${selectedRepo.name}`}
+            />
+          </div>
+        ) : (
+          <article className="project-site-card">
             <div className="project-home-head">
               <div>
                 <h3><ExternalLink size={16} /> Сайт</h3>
@@ -6079,36 +6100,13 @@ function App() {
                 <Settings size={15} /> Домен
               </button>
             </div>
-          )}
-          {selectedProjectUrl ? (
-            <div className="project-site-preview">
-              <div className="project-site-framebar">
-                <span className="project-site-browser">
-                  <i />
-                  <i />
-                  <i />
-                  <strong>{selectedProjectUrl}</strong>
-                </span>
-                <a className="project-site-open" href={selectedProjectUrl} target="_blank" rel="noreferrer">
-                  <ExternalLink size={14} /> Open
-                </a>
-              </div>
-              <iframe
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                sandbox="allow-forms allow-popups allow-same-origin allow-scripts"
-                src={selectedProjectUrl}
-                title={`Preview ${selectedRepo.name}`}
-              />
-            </div>
-          ) : (
             <div className="project-site-empty">
               <ExternalLink size={18} />
               <strong>Домен не привязан</strong>
               <small>{selectedRepo.githubUrl || selectedRepo.pathMasked}</small>
             </div>
-          )}
-        </article>
+          </article>
+        )}
         <article className="project-recent-card">
           <div className="project-home-head">
             <div>
