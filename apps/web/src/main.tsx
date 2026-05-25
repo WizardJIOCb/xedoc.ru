@@ -6249,31 +6249,39 @@ function App() {
   function renderCommandCard(ownerKey: string, action: CodexAction, index: number) {
     const parsed = parseCommandOutput(action.output);
     const commandKey = `command:${ownerKey}:${action.id || index}`;
-    const commandOpen = expandedActions[commandKey] !== false;
     const status = commandStatusLabel(action, parsed.exitCode);
+    const defaultOpen = status === "Failed" || status === "Running";
+    const commandOpen = expandedActions[commandKey] ?? defaultOpen;
     const body = parsed.body || (action.status.toLowerCase().includes("running") ? "Command is still running..." : "");
+    const statusClass = status.toLowerCase();
+    const detailsLabel = parsed.wallTime
+      ? `Output · ${parsed.wallTime}`
+      : body
+        ? "Output"
+        : "No output";
     return (
-      <div className={`command-card ${status.toLowerCase()}`} key={action.id || index}>
+      <div className={`command-card ${statusClass}`} key={action.id || index}>
         <button
           className="command-card-toggle"
           type="button"
-          onClick={() => setExpandedActions((current) => ({ ...current, [commandKey]: current[commandKey] === false }))}
+          onClick={() => setExpandedActions((current) => ({ ...current, [commandKey]: !commandOpen }))}
         >
-          <span>{commandRunLabel(action, parsed.wallTime)}</span>
+          <span className={`command-status-pill ${statusClass}`}>{status}</span>
+          <code title={action.command}>{action.command}</code>
+          <small>{detailsLabel}</small>
           <ChevronDown className={commandOpen ? "open" : ""} size={15} />
         </button>
         {commandOpen && (
           <div className="command-console">
             <div className="command-console-head">
-              <span>Shell</span>
+              <span>{commandRunLabel(action, parsed.wallTime)}</span>
               {parsed.exitCode && <small>Exit {parsed.exitCode}</small>}
             </div>
-            <pre>
-              <code>
-                <span className="command-prompt">$ {action.command}</span>
-                {body && <>{`\n\n${body}`}</>}
-              </code>
-            </pre>
+            {body ? (
+              <pre><code>{body}</code></pre>
+            ) : (
+              <div className="command-empty">Вывода нет.</div>
+            )}
             <div className="command-console-status">
               <span>{status}</span>
             </div>
