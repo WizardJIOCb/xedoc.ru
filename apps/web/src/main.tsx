@@ -6515,7 +6515,7 @@ function App() {
                     </button>
                   ))}
                 </div>
-                <div className="menu-summary">
+                <div className="menu-summary current-mode">
                   {selectedModelLabel} · {selectedReasoningLabel} · {selectedSpeedLabel}
                 </div>
                 {vscodeNotice && <div className="menu-summary">{vscodeNotice}</div>}

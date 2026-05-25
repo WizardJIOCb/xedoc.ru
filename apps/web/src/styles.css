@@ -2977,6 +2977,27 @@ a.secondary {
   font-weight: 600;
 }
 
+.menu-summary.current-mode {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line));
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  box-shadow: inset 3px 0 0 var(--accent);
+  font-weight: 850;
+}
+
+.menu-summary.current-mode::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 .sticky-submit .run-button {
   width: 100%;
 }
