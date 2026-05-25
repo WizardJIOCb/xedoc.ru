@@ -6109,7 +6109,7 @@ function App() {
           <div className="project-home-head">
             <div>
               <h3><MessageSquare size={16} /> Последние чаты</h3>
-              <small>{recentProjectChats.length ? `${recentProjectChats.length} recent` : "Нет истории"}</small>
+              <small>{recentProjectChats.length ? `${recentProjectChats.length} последних` : "Нет истории"}</small>
             </div>
             <button className="secondary compact" type="button" onClick={openProjectNewChat}>
               <Plus size={15} /> Новый чат
@@ -6694,7 +6694,7 @@ function App() {
           <section className="chat-work">
             <div className="section-head">
               <div className="chat-heading">
-                <h2><MessageSquare size={18} /> <span>{activeChat?.title ?? "Project chat"}</span></h2>
+                <h2><MessageSquare size={18} /> <span>{activeChat?.title ?? "Обзор проекта"}</span></h2>
                 {activeChat && (
                   <small title={activeChat.externalId || undefined}>
                     {chatIdentityText(activeChat)}
@@ -6702,6 +6702,9 @@ function App() {
                 )}
               </div>
               <div className="section-actions">
+                <button className="secondary compact" type="button" onClick={openProjectNewChat}>
+                  <Plus size={15} /> Новый чат
+                </button>
                 {activeChat && (
                   <button
                     aria-label="Скопировать ссылку на чат"
@@ -6735,6 +6738,7 @@ function App() {
                 </button>
               </div>
             )}
+            {!activeChat && renderProjectOverview()}
             <form className="project-cockpit" onSubmit={syncGit}>
               <div className="cockpit-main">
                 <div className="cockpit-title">
