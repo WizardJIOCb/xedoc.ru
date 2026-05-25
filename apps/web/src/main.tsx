@@ -470,6 +470,7 @@ type CodexAction = {
   command: string;
   status: string;
   output: string;
+  outputOmitted?: boolean;
   at: string;
 };
 
@@ -1941,6 +1942,7 @@ function metadataCodexActions(message: ChatMessage): CodexAction[] {
       command: summarizeDisplayCommand(command),
       status: typeof value.status === "string" ? value.status : "completed",
       output: typeof value.output === "string" ? normalizeDisplayText(value.output).trim() : "",
+      outputOmitted: value.outputOmitted === true,
       at: typeof value.at === "string" ? value.at : message.createdAt
     }];
   });
@@ -6240,22 +6242,25 @@ function App() {
         </button>
         {expanded && (
           <div className="message-action-details command-details">
-            {actions.map((action, index) => renderCommandCard(message.id, action, index))}
+            {actions.map((action, index) => renderCommandCard(message, action, index))}
           </div>
         )}
       </div>
     );
   }
 
-  function renderCommandCard(ownerKey: string, action: CodexAction, index: number) {
+  function renderCommandCard(message: ChatMessage, action: CodexAction, index: number) {
     const parsed = parseCommandOutput(action.output);
-    const commandKey = `command:${ownerKey}:${action.id || index}`;
+    const commandKey = `command:${message.id}:${action.id || index}`;
     const status = commandStatusLabel(action, parsed.exitCode);
     const defaultOpen = status === "Failed" || status === "Running";
     const commandOpen = expandedActions[commandKey] ?? defaultOpen;
+    const outputOmitted = action.outputOmitted || Boolean(message.metadata?.metadataOmitted);
     const body = parsed.body || (action.status.toLowerCase().includes("running") ? "Command is still running..." : "");
     const statusClass = status.toLowerCase();
-    const detailsLabel = parsed.wallTime
+    const detailsLabel = outputOmitted
+      ? "Load output"
+      : parsed.wallTime
       ? `Output · ${parsed.wallTime}`
       : body
         ? "Output"
@@ -6265,7 +6270,10 @@ function App() {
         <button
           className="command-card-toggle"
           type="button"
-          onClick={() => setExpandedActions((current) => ({ ...current, [commandKey]: !commandOpen }))}
+          onClick={() => {
+            setExpandedActions((current) => ({ ...current, [commandKey]: !commandOpen }));
+            if (!commandOpen && outputOmitted) loadMessageDetails(message.id).catch(() => undefined);
+          }}
         >
           <span className={`command-status-pill ${statusClass}`}>{status}</span>
           <code title={action.command}>{action.command}</code>
@@ -6278,7 +6286,9 @@ function App() {
               <span>{commandRunLabel(action, parsed.wallTime)}</span>
               {parsed.exitCode && <small>Exit {parsed.exitCode}</small>}
             </div>
-            {body ? (
+            {outputOmitted ? (
+              <div className="command-empty">Вывод ещё не загружен. Детали команды догружаются...</div>
+            ) : body ? (
               <pre><code>{body}</code></pre>
             ) : (
               <div className="command-empty">Вывода нет.</div>
