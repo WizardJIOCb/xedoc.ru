@@ -970,6 +970,149 @@ function commandRunLabel(action: CodexAction, wallTime?: string) {
   return `${running ? "Running" : "Ran"} command${wallTime ? ` for ${wallTime}` : ""}`;
 }
 
+function codexActionHasLoadedOutput(action: Pick<CodexAction, "output" | "outputOmitted">) {
+  return typeof action.output === "string" && action.output.trim().length > 0 && action.outputOmitted !== true;
+}
+
+function codexActionOutputOmitted(action: CodexAction, metadataOmitted: boolean) {
+  return action.outputOmitted === true || (metadataOmitted && !codexActionHasLoadedOutput(action));
+}
+
+type CommandCardProps = {
+  action: CodexAction;
+  index: number;
+  messageId: string;
+  metadataOmitted: boolean;
+  onLoadMessageDetails: (messageId: string) => Promise<void>;
+};
+
+function sameCodexAction(left: CodexAction, right: CodexAction) {
+  return left.id === right.id
+    && left.command === right.command
+    && left.status === right.status
+    && left.output === right.output
+    && left.outputOmitted === right.outputOmitted
+    && left.at === right.at;
+}
+
+function sameCodexActions(left: CodexAction[], right: CodexAction[]) {
+  if (left.length !== right.length) return false;
+  return left.every((action, index) => sameCodexAction(action, right[index]!));
+}
+
+const CommandCard = React.memo(function CommandCard({
+  action,
+  index,
+  messageId,
+  metadataOmitted,
+  onLoadMessageDetails
+}: CommandCardProps) {
+  const parsed = useMemo(() => parseCommandOutput(action.output), [action.output]);
+  const status = commandStatusLabel(action, parsed.exitCode);
+  const defaultOpen = status === "Failed" || status === "Running";
+  const [open, setOpen] = useState(defaultOpen);
+  const outputOmitted = codexActionOutputOmitted(action, metadataOmitted);
+  const body = parsed.body || (action.status.toLowerCase().includes("running") ? "Command is still running..." : "");
+  const statusClass = status.toLowerCase();
+  const detailsLabel = outputOmitted
+    ? "Load output"
+    : parsed.wallTime
+    ? `Output · ${parsed.wallTime}`
+    : body
+      ? "Output"
+      : "No output";
+
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
+
+  function toggleOpen() {
+    setOpen((current) => {
+      const next = !current;
+      if (next && outputOmitted) onLoadMessageDetails(messageId).catch(() => undefined);
+      return next;
+    });
+  }
+
+  return (
+    <article className={`command-card ${statusClass}`} key={action.id || index}>
+      <button
+        className="command-card-toggle"
+        type="button"
+        onClick={toggleOpen}
+      >
+        <span className={`command-status-pill ${statusClass}`}>{status}</span>
+        <code title={action.command}>{action.command}</code>
+        <small>{detailsLabel}</small>
+        <ChevronDown className={open ? "open" : ""} size={15} />
+      </button>
+      {open && (
+        <div className="command-console">
+          <div className="command-console-head">
+            <span>{commandRunLabel(action, parsed.wallTime)}</span>
+            {parsed.exitCode && <small>Exit {parsed.exitCode}</small>}
+          </div>
+          {outputOmitted ? (
+            <div className="command-empty">Вывод ещё не загружен. Детали команды догружаются...</div>
+          ) : body ? (
+            <pre><code>{body}</code></pre>
+          ) : (
+            <div className="command-empty">Вывода нет.</div>
+          )}
+          <div className="command-console-status">
+            <span>{status}</span>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}, (previous, next) => previous.index === next.index
+  && previous.messageId === next.messageId
+  && previous.metadataOmitted === next.metadataOmitted
+  && sameCodexAction(previous.action, next.action));
+
+type CommandActionsProps = {
+  actions: CodexAction[];
+  messageId: string;
+  metadataOmitted: boolean;
+  onLoadMessageDetails: (messageId: string) => Promise<void>;
+};
+
+const CommandActions = React.memo(function CommandActions({
+  actions,
+  messageId,
+  metadataOmitted,
+  onLoadMessageDetails
+}: CommandActionsProps) {
+  const [expanded, setExpanded] = useState(false);
+  if (!actions.length) return null;
+  return (
+    <div className="message-actions run-actions">
+      <button type="button" onClick={() => setExpanded((current) => !current)}>
+        <Terminal size={15} />
+        <span>Ran {actions.length} commands</span>
+        <ChevronDown className={expanded ? "open" : ""} size={15} />
+      </button>
+      {expanded && (
+        <div className="message-action-details command-details">
+          {actions.map((action, index) => (
+            <CommandCard
+              action={action}
+              index={index}
+              key={action.id || index}
+              messageId={messageId}
+              metadataOmitted={metadataOmitted}
+              onLoadMessageDetails={onLoadMessageDetails}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}, (previous, next) => previous.messageId === next.messageId
+  && previous.metadataOmitted === next.metadataOmitted
+  && sameCodexActions(previous.actions, next.actions));
+
 function normalizeDisplayText(value: string) {
   return value
     .replace(/\r\n/g, "\n")
@@ -2034,11 +2177,18 @@ function mergeJobs(current: Job[], incoming: Job[]) {
   return [...byId.values()].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
 }
 
-function actionMergeKey(value: Record<string, unknown>, index: number) {
+function actionMergeKeys(value: Record<string, unknown>, index: number) {
+  const keys: string[] = [];
   const id = typeof value.id === "string" ? value.id : "";
-  if (id) return `id:${id}`;
+  if (id) keys.push(`id:${id}`);
   const command = typeof value.command === "string" ? value.command : "";
-  return command ? `command:${command}` : `index:${index}`;
+  if (command) keys.push(`command:${command}`);
+  keys.push(`index:${index}`);
+  return keys;
+}
+
+function actionRecordHasLoadedOutput(value: Record<string, unknown>) {
+  return typeof value.output === "string" && value.output.trim().length > 0 && value.outputOmitted !== true;
 }
 
 function mergeLoadedCodexActionOutputs(existingActions: unknown, incomingActions: unknown) {
@@ -2047,15 +2197,17 @@ function mergeLoadedCodexActionOutputs(existingActions: unknown, incomingActions
   existingActions.forEach((item, index) => {
     if (!item || typeof item !== "object") return;
     const value = item as Record<string, unknown>;
-    if (typeof value.output !== "string" || value.outputOmitted === true) return;
-    existingByKey.set(actionMergeKey(value, index), value);
+    if (!actionRecordHasLoadedOutput(value)) return;
+    actionMergeKeys(value, index).forEach((key) => existingByKey.set(key, value));
   });
   if (!existingByKey.size) return incomingActions;
   return incomingActions.map((item, index) => {
     if (!item || typeof item !== "object") return item;
     const value = item as Record<string, unknown>;
-    if (typeof value.output === "string" && value.outputOmitted !== true) return item;
-    const existing = existingByKey.get(actionMergeKey(value, index));
+    if (actionRecordHasLoadedOutput(value)) return item;
+    const existing = actionMergeKeys(value, index)
+      .map((key) => existingByKey.get(key))
+      .find((action) => typeof action?.output === "string");
     if (typeof existing?.output !== "string") return item;
     const merged: Record<string, unknown> = { ...value, output: existing.output };
     delete merged.outputOmitted;
@@ -2490,6 +2642,7 @@ function App() {
   const currentScrollChatRef = useRef("");
   const chatCacheRef = useRef<Map<string, { etag: string; data: ChatPayload }>>(new Map());
   const messageDetailsLoadingRef = useRef<Set<string>>(new Set());
+  const messageDetailsLoadedRef = useRef<Set<string>>(new Set());
   const missingChangeDetailsRequestedRef = useRef<Set<string>>(new Set());
   const previousMessageIdsRef = useRef<Set<string>>(new Set());
   const previousMessageSignaturesRef = useRef<Map<string, string>>(new Map());
@@ -3157,6 +3310,7 @@ function App() {
   }
 
   async function loadMessageDetails(messageId: string) {
+    if (messageDetailsLoadedRef.current.has(messageId)) return;
     if (messageDetailsLoadingRef.current.has(messageId)) return;
     messageDetailsLoadingRef.current.add(messageId);
     try {
@@ -3164,6 +3318,7 @@ function App() {
       if (!response.ok) return;
       const data = await response.json();
       setMessages((current) => current.map((message) => message.id === messageId ? data.message : message));
+      messageDetailsLoadedRef.current.add(messageId);
     } finally {
       messageDetailsLoadingRef.current.delete(messageId);
     }
@@ -6169,10 +6324,6 @@ function App() {
     }
   }
 
-  function expandCodexActions(actionKey: string) {
-    setExpandedActions((current) => ({ ...current, [actionKey]: !current[actionKey] }));
-  }
-
   function toggleFileDiff(diffKey: string, message: ChatMessage, job?: Job, fileDiff?: FileDiff) {
     const willExpand = !expandedActions[diffKey];
     setExpandedActions((current) => ({ ...current, [diffKey]: !current[diffKey] }));
@@ -6267,73 +6418,18 @@ function App() {
   function renderCodexActions(message: ChatMessage, job?: Job) {
     const jobId = messageJobId(message);
     const webActions = job && job.id === activeJob?.id && jobId === activeJob.id ? codexActionEntries(logs) : [];
-    const actions = webActions.length ? webActions : metadataCodexActions(message);
+    const metadataActions = metadataCodexActions(message);
+    const actions = webActions.length
+      ? mergeLoadedCodexActionOutputs(metadataActions, webActions) as CodexAction[]
+      : metadataActions;
     if (!actions.length) return null;
-    const actionKey = `actions:${message.id}`;
-    const expanded = Boolean(expandedActions[actionKey]);
     return (
-      <div className="message-actions run-actions">
-        <button type="button" onClick={() => expandCodexActions(actionKey)}>
-          <Terminal size={15} />
-          <span>Ran {actions.length} commands</span>
-          <ChevronDown className={expanded ? "open" : ""} size={15} />
-        </button>
-        {expanded && (
-          <div className="message-action-details command-details">
-            {actions.map((action, index) => renderCommandCard(message, action, index))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function renderCommandCard(message: ChatMessage, action: CodexAction, index: number) {
-    const parsed = parseCommandOutput(action.output);
-    const status = commandStatusLabel(action, parsed.exitCode);
-    const defaultOpen = status === "Failed" || status === "Running";
-    const outputOmitted = action.outputOmitted || Boolean(message.metadata?.metadataOmitted);
-    const body = parsed.body || (action.status.toLowerCase().includes("running") ? "Command is still running..." : "");
-    const statusClass = status.toLowerCase();
-    const detailsLabel = outputOmitted
-      ? "Load output"
-      : parsed.wallTime
-      ? `Output · ${parsed.wallTime}`
-      : body
-        ? "Output"
-        : "No output";
-    return (
-      <details
-        className={`command-card ${statusClass}`}
-        key={action.id || index}
-        open={defaultOpen ? true : undefined}
-        onToggle={(event) => {
-          if (!outputOmitted || !event.currentTarget.open) return;
-          loadMessageDetails(message.id).catch(() => undefined);
-        }}
-      >
-        <summary className="command-card-toggle">
-          <span className={`command-status-pill ${statusClass}`}>{status}</span>
-          <code title={action.command}>{action.command}</code>
-          <small>{detailsLabel}</small>
-          <ChevronDown className="open" size={15} />
-        </summary>
-        <div className="command-console">
-          <div className="command-console-head">
-            <span>{commandRunLabel(action, parsed.wallTime)}</span>
-            {parsed.exitCode && <small>Exit {parsed.exitCode}</small>}
-          </div>
-          {outputOmitted ? (
-            <div className="command-empty">Вывод ещё не загружен. Детали команды догружаются...</div>
-          ) : body ? (
-            <pre><code>{body}</code></pre>
-          ) : (
-            <div className="command-empty">Вывода нет.</div>
-          )}
-          <div className="command-console-status">
-            <span>{status}</span>
-          </div>
-        </div>
-      </details>
+      <CommandActions
+        actions={actions}
+        messageId={message.id}
+        metadataOmitted={Boolean(message.metadata?.metadataOmitted)}
+        onLoadMessageDetails={loadMessageDetails}
+      />
     );
   }
 
