@@ -6402,6 +6402,62 @@ function App() {
             </button>
             {actionMenuOpen && (
               <div className="action-menu" role="menu">
+                <div className="menu-section">
+                  <span className="menu-section-title">Intelligence</span>
+                  {REASONING_OPTIONS.map((option) => (
+                    <button
+                      className={reasoningEffort === option.value ? "selected" : ""}
+                      key={option.value}
+                      role="menuitemcheckbox"
+                      aria-checked={reasoningEffort === option.value}
+                      type="button"
+                      onClick={() => setReasoningEffort(option.value)}
+                    >
+                      <span>{option.label}</span>
+                      {reasoningEffort === option.value && <Check size={15} />}
+                    </button>
+                  ))}
+                </div>
+                <div className="menu-section">
+                  <span className="menu-section-title">Model</span>
+                  {CODEX_MODEL_OPTIONS.map((option) => (
+                    <button
+                      className={codexModel === option.value ? "selected" : ""}
+                      key={option.value}
+                      role="menuitemcheckbox"
+                      aria-checked={codexModel === option.value}
+                      type="button"
+                      onClick={() => setCodexModel(option.value)}
+                    >
+                      <span>{option.label}</span>
+                      {codexModel === option.value && <Check size={15} />}
+                    </button>
+                  ))}
+                </div>
+                <div className="menu-section">
+                  <span className="menu-section-title">Speed</span>
+                  {SPEED_OPTIONS.map((option) => (
+                    <button
+                      className={`speed-option ${codexSpeed === option.value ? "selected" : ""}`}
+                      key={option.value}
+                      role="menuitemcheckbox"
+                      aria-checked={codexSpeed === option.value}
+                      type="button"
+                      onClick={() => setCodexSpeed(option.value)}
+                    >
+                      <span>
+                        <strong>{option.label}</strong>
+                        <small>{option.note}</small>
+                      </span>
+                      {codexSpeed === option.value && <Check size={15} />}
+                    </button>
+                  ))}
+                </div>
+                <div className="menu-summary current-mode">
+                  {selectedModelLabel} · {selectedReasoningLabel} · {selectedSpeedLabel}
+                </div>
+                {vscodeNotice && <div className="menu-summary">{vscodeNotice}</div>}
+                <div className="menu-divider" />
                 <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
                   <Rocket size={16} />
                   <span className="step-badge">1-4</span>
@@ -6463,62 +6519,6 @@ function App() {
                   <Plus size={16} />
                   <span>Add current context</span>
                 </button>
-                <div className="menu-divider" />
-                <div className="menu-section">
-                  <span className="menu-section-title">Intelligence</span>
-                  {REASONING_OPTIONS.map((option) => (
-                    <button
-                      className={reasoningEffort === option.value ? "selected" : ""}
-                      key={option.value}
-                      role="menuitemcheckbox"
-                      aria-checked={reasoningEffort === option.value}
-                      type="button"
-                      onClick={() => setReasoningEffort(option.value)}
-                    >
-                      <span>{option.label}</span>
-                      {reasoningEffort === option.value && <Check size={15} />}
-                    </button>
-                  ))}
-                </div>
-                <div className="menu-section">
-                  <span className="menu-section-title">Model</span>
-                  {CODEX_MODEL_OPTIONS.map((option) => (
-                    <button
-                      className={codexModel === option.value ? "selected" : ""}
-                      key={option.value}
-                      role="menuitemcheckbox"
-                      aria-checked={codexModel === option.value}
-                      type="button"
-                      onClick={() => setCodexModel(option.value)}
-                    >
-                      <span>{option.label}</span>
-                      {codexModel === option.value && <Check size={15} />}
-                    </button>
-                  ))}
-                </div>
-                <div className="menu-section">
-                  <span className="menu-section-title">Speed</span>
-                  {SPEED_OPTIONS.map((option) => (
-                    <button
-                      className={`speed-option ${codexSpeed === option.value ? "selected" : ""}`}
-                      key={option.value}
-                      role="menuitemcheckbox"
-                      aria-checked={codexSpeed === option.value}
-                      type="button"
-                      onClick={() => setCodexSpeed(option.value)}
-                    >
-                      <span>
-                        <strong>{option.label}</strong>
-                        <small>{option.note}</small>
-                      </span>
-                      {codexSpeed === option.value && <Check size={15} />}
-                    </button>
-                  ))}
-                </div>
-                <div className="menu-summary current-mode">
-                  {selectedModelLabel} · {selectedReasoningLabel} · {selectedSpeedLabel}
-                </div>
-                {vscodeNotice && <div className="menu-summary">{vscodeNotice}</div>}
               </div>
             )}
           </div>
