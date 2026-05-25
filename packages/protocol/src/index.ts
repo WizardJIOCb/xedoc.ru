@@ -139,7 +139,7 @@ export const AgentJobProgressSchema = z.object({
   type: z.literal("job.progress"),
   jobId: z.string().min(1),
   phase: z.string().min(1).max(80),
-  message: z.string().min(1).max(2000),
+  message: z.string().max(2000),
   filesChanged: z.number().int().nonnegative().optional(),
   added: z.number().int().nonnegative().optional(),
   deleted: z.number().int().nonnegative().optional(),

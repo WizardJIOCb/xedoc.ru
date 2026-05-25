@@ -795,6 +795,28 @@ function appendLog(log: Omit<LogRow, "id">): void {
   broadcast({ type: "job.log", jobId: log.job_id, stream: log.stream, message: log.message, at: log.at });
 }
 
+function latestJobLogText(jobId: string, stream: "stdout" | "stderr"): string | null {
+  const row = db.prepare(`
+    SELECT message FROM job_logs
+    WHERE job_id = ? AND stream = ? AND TRIM(message) != ''
+    ORDER BY at DESC
+    LIMIT 1
+  `).get(jobId, stream) as { message: string } | undefined;
+  return row?.message.trim().slice(-4000) || null;
+}
+
+function isGenericFinalMessage(message: string): boolean {
+  return ["Completed.", "Codex finished.", "Codex process failed.", "Process failed."].includes(message.trim());
+}
+
+function finalMessageForCompletedJob(jobId: string, finalMessage: string | undefined): string | null {
+  const trimmed = finalMessage?.trim();
+  if (trimmed && !isGenericFinalMessage(trimmed)) return trimmed;
+  const stdout = latestJobLogText(jobId, "stdout");
+  if (stdout) return stdout;
+  return trimmed || null;
+}
+
 function appendChatMessage(message: Omit<ChatMessageRow, "id"> & { id?: string }): void {
   db.prepare("UPDATE chats SET updated_at=? WHERE id=?").run(message.created_at, message.chat_id);
   db.prepare(`
@@ -3725,13 +3747,16 @@ async function createApp(): Promise<FastifyInstance> {
       }
       if (parsed.type === "job.done") {
         const finishedAt = nowIso();
+        const finalMessage = parsed.status === "completed"
+          ? finalMessageForCompletedJob(parsed.jobId, parsed.finalMessage)
+          : parsed.finalMessage?.trim() || latestJobLogText(parsed.jobId, "stderr") || null;
         db.prepare(`
           UPDATE jobs SET status=?, exit_code=?, final_message=?, git_status=?, git_diff_stat=?, git_diff=?, branch_name=?, codex_thread_id=?, finished_at=?
           WHERE id=?
         `).run(
           parsed.status,
           parsed.exitCode,
-          parsed.finalMessage ?? null,
+          finalMessage,
           parsed.gitStatus ?? null,
           parsed.gitDiffStat ?? null,
           parsed.gitDiff ?? null,
@@ -3745,7 +3770,7 @@ async function createApp(): Promise<FastifyInstance> {
           db.prepare("UPDATE chats SET external_id = COALESCE(external_id, ?), updated_at = ? WHERE id = ?")
             .run(parsed.codexThreadId, finishedAt, job.chat_id);
         }
-        if (job?.chat_id && parsed.finalMessage) {
+        if (job?.chat_id && finalMessage) {
           const startedAt = job.started_at ?? job.created_at;
           const startedAtMs = Date.parse(startedAt);
           const finishedAtMs = Date.parse(finishedAt);
@@ -3755,7 +3780,7 @@ async function createApp(): Promise<FastifyInstance> {
           appendChatMessage({
             chat_id: job.chat_id,
             role: "assistant",
-            content: parsed.finalMessage,
+            content: finalMessage,
             source: "codex",
             external_id: `job:${parsed.jobId}:final`,
             metadata_json: JSON.stringify({
