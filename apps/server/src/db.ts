@@ -69,6 +69,7 @@ export type RepoRow = {
   domain: string | null;
   visibility: ProjectVisibility;
   deploy_json: string | null;
+  data_json: string | null;
   current_branch: string | null;
   dirty: number;
   default_sandbox: Sandbox;
@@ -223,6 +224,7 @@ export function openDb(path: string): DatabaseSync {
       domain TEXT,
       visibility TEXT NOT NULL DEFAULT 'private',
       deploy_json TEXT,
+      data_json TEXT,
       current_branch TEXT,
       dirty INTEGER NOT NULL,
       default_sandbox TEXT NOT NULL,
@@ -436,6 +438,9 @@ export function openDb(path: string): DatabaseSync {
   if (!repoColumns.some((column) => column.name === "deploy_json")) {
     db.exec("ALTER TABLE repos ADD COLUMN deploy_json TEXT");
   }
+  if (!repoColumns.some((column) => column.name === "data_json")) {
+    db.exec("ALTER TABLE repos ADD COLUMN data_json TEXT");
+  }
   if (!agentColumns.some((column) => column.name === "codex_usage_json")) {
     db.exec("ALTER TABLE agents ADD COLUMN codex_usage_json TEXT");
   }
@@ -506,6 +511,7 @@ export function mapRepo(row: RepoRow): RepoInfo {
     domain: row.domain ?? undefined,
     visibility: row.visibility,
     deploy: parseDeployConfig(row.deploy_json),
+    data: parseProjectDataConfig(row.data_json),
     currentBranch: row.current_branch ?? undefined,
     dirty: row.dirty === 1,
     defaultSandbox: row.default_sandbox,
@@ -518,6 +524,15 @@ function parseDeployConfig(value: string | null): DeployConfig | undefined {
   if (!value) return undefined;
   try {
     return JSON.parse(value) as DeployConfig;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseProjectDataConfig(value: string | null): RepoInfo["data"] {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as RepoInfo["data"];
   } catch {
     return undefined;
   }

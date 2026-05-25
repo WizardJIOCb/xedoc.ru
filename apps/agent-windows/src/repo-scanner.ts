@@ -20,6 +20,7 @@ export async function scanRepo(repo: RepoConfig): Promise<RepoInfo> {
     serverPath: repo.serverPath,
     domain: repo.domain,
     deploy: repo.deploy,
+    data: repo.data,
     currentBranch: branch.stdout.trim() || undefined,
     dirty: status.stdout.trim().length > 0,
     defaultSandbox: repo.defaultSandbox,

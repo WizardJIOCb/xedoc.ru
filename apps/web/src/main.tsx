@@ -11,8 +11,10 @@ import {
   CheckCircle2,
   ChevronDown,
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Clock3,
+  Database,
   Download,
   ExternalLink,
   FolderGit2,
@@ -25,6 +27,7 @@ import {
   Menu,
   MoreHorizontal,
   MessageSquare,
+  Palette,
   Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
@@ -54,6 +57,13 @@ type Sandbox = "read-only" | "workspace-write" | "danger-full-access";
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "standard" | "fast";
 type ProjectVisibility = "private" | "public";
+type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
+type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
+type ProjectDataLocation = "local" | "server";
+type ProjectDataConfig = {
+  location: ProjectDataLocation;
+  path: string;
+};
 
 const SANDBOXES: Sandbox[] = ["read-only", "workspace-write", "danger-full-access"];
 const SANDBOX_LABELS: Record<Sandbox, string> = {
@@ -80,6 +90,21 @@ const DEFAULT_SERVER_ROOT = "/var/www";
 const SPEED_OPTIONS: Array<{ value: CodexSpeed; label: string; note: string }> = [
   { value: "standard", label: "Standard", note: "Default speed, normal usage" },
   { value: "fast", label: "Fast", note: "Saved with run metadata" }
+];
+const UI_THEME_OPTIONS: Array<{ value: UiTheme; label: string; note: string; swatches: string[] }> = [
+  { value: "paper", label: "Paper", note: "Светлая нейтральная", swatches: ["#f7f7f4", "#ffffff", "#202123", "#10a37f"] },
+  { value: "graphite", label: "Graphite", note: "Темная контрастная", swatches: ["#101214", "#1b1f22", "#e7ece8", "#4fd1b0"] },
+  { value: "lagoon", label: "Lagoon", note: "Холодная рабочая", swatches: ["#eef7f7", "#ffffff", "#16323a", "#0e7490"] },
+  { value: "moss", label: "Moss", note: "Спокойная зеленая", swatches: ["#f1f6ee", "#ffffff", "#233025", "#4d7c0f"] },
+  { value: "rose", label: "Rose", note: "Мягкая теплая", swatches: ["#fbf3f6", "#ffffff", "#35242a", "#be3455"] }
+];
+const UI_THEMES = UI_THEME_OPTIONS.map((option) => option.value);
+const PROJECT_WIZARD_STEPS: Array<{ id: ProjectWizardStep; label: string }> = [
+  { id: "project", label: "Project" },
+  { id: "git", label: "Git" },
+  { id: "deploy", label: "Deploy" },
+  { id: "data", label: "Data" },
+  { id: "ready", label: "Ready" }
 ];
 const LOCAL_CHAT_SYNC_REFRESH_DELAYS_MS = [0, 800, 2000, 4000, 8000, 15000];
 type VscodeCommand = "ping" | "openSidebar" | "newChat" | "newCodexPanel" | "addToThread" | "addFileToThread" | "openThread" | "reopenThread" | "refreshThreadIfOpen";
@@ -211,6 +236,7 @@ type Repo = {
   domain?: string;
   visibility?: ProjectVisibility;
   deploy?: DeployConfig;
+  data?: ProjectDataConfig;
   currentBranch?: string;
   dirty: boolean;
   defaultSandbox: Sandbox;
@@ -528,6 +554,10 @@ function defaultGithubUrlForDomain(domain: string) {
   return domain ? `https://github.com/${DEFAULT_GITHUB_OWNER}/${domain}` : "";
 }
 
+function isUiTheme(value: string | null): value is UiTheme {
+  return UI_THEMES.includes(value as UiTheme);
+}
+
 function defaultProjectValues(name: string, agent?: Agent | null) {
   const domain = defaultProjectDomain(name);
   return {
@@ -541,6 +571,17 @@ function defaultProjectValues(name: string, agent?: Agent | null) {
 function projectUrl(domain?: string) {
   const normalized = normalizeProjectDomain(domain ?? "");
   return normalized ? `https://${normalized}` : "";
+}
+
+function appendProjectPath(root: string, segment: string) {
+  const trimmed = root.trim().replace(/[\\/]+$/g, "");
+  if (!trimmed) return segment;
+  const separator = /^[a-z]:\\/i.test(trimmed) || trimmed.includes("\\") ? "\\" : "/";
+  return `${trimmed}${separator}${segment}`;
+}
+
+function defaultProjectDataPath(location: ProjectDataLocation, projectPath: string, serverPath: string) {
+  return appendProjectPath(location === "server" ? serverPath : projectPath, "data");
 }
 
 function profileSlug(user?: Pick<User, "id" | "nickname"> | null) {
@@ -591,6 +632,12 @@ function buildDeployConfig(mode: "ssh" | "local", sshTarget: string, sourceDir: 
       timeoutMs: 900000
     } : undefined
   };
+}
+
+function buildProjectDataConfig(location: ProjectDataLocation, path: string): ProjectDataConfig | undefined {
+  const dataPath = path.trim();
+  if (!dataPath) return undefined;
+  return { location, path: dataPath };
 }
 
 function formatBytes(value: number) {
@@ -1993,9 +2040,14 @@ function App() {
   const [projectDeployRemoteSubdir, setProjectDeployRemoteSubdir] = useState("");
   const [projectDeployBuildCommand, setProjectDeployBuildCommand] = useState(defaultBuildCommandForAgent(null));
   const [projectDeployCleanRemote, setProjectDeployCleanRemote] = useState(false);
+  const [projectDeployEnabled, setProjectDeployEnabled] = useState(true);
+  const [projectDataLocation, setProjectDataLocation] = useState<ProjectDataLocation>("local");
+  const [projectDataPath, setProjectDataPath] = useState("");
   const [projectStartPrompt, setProjectStartPrompt] = useState("");
+  const [projectWizardStep, setProjectWizardStep] = useState<ProjectWizardStep>("project");
   const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [projectActionsOpen, setProjectActionsOpen] = useState(false);
   const [codexModel, setCodexModel] = useState("gpt-5.5");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
   const [codexSpeed, setCodexSpeed] = useState<CodexSpeed>("standard");
@@ -2053,6 +2105,15 @@ function App() {
   const [newAgentUserId, setNewAgentUserId] = useState("");
   const [agentSetup, setAgentSetup] = useState<AgentSetup | null>(null);
   const [settingsNotice, setSettingsNotice] = useState("");
+  const [uiTheme, setUiTheme] = useState<UiTheme>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.uiTheme");
+      if (isUiTheme(stored)) return stored;
+    } catch {
+      // Ignore blocked storage.
+    }
+    return "paper";
+  });
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -2106,8 +2167,21 @@ function App() {
   const online = Boolean(selectedAgent && selectedAgent.status === "online");
   const selectedAgentStatusLabel = selectedAgent ? `${selectedAgent.name} ${online ? "online" : "offline"}` : (online ? "Agent online" : "Agent offline");
   const projectDraftDeployConfig = useMemo(() => (
-    buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null
-  ), [projectDeployBuildCommand, projectDeployCleanRemote, projectDeployMode, projectDeployRemoteSubdir, projectDeploySourceDir, projectDeploySshTarget]);
+    projectDeployEnabled
+      ? buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null
+      : null
+  ), [projectDeployBuildCommand, projectDeployCleanRemote, projectDeployEnabled, projectDeployMode, projectDeployRemoteSubdir, projectDeploySourceDir, projectDeploySshTarget]);
+  const projectDraftDataConfig = useMemo(() => (
+    buildProjectDataConfig(projectDataLocation, projectDataPath) ?? null
+  ), [projectDataLocation, projectDataPath]);
+  const projectWizardStepIndex = PROJECT_WIZARD_STEPS.findIndex((step) => step.id === projectWizardStep);
+  const projectWizardCanContinue = projectWizardStep === "project"
+    ? Boolean(projectName.trim() && projectPath.trim() && projectFormAgent)
+    : projectWizardStep === "deploy"
+      ? Boolean(!projectDeployEnabled || projectDraftDeployConfig)
+      : projectWizardStep === "data"
+        ? Boolean(projectDraftDataConfig)
+        : true;
   const projectSettingsNeedsAgent = useMemo(() => {
     if (projectPanel !== "settings" || !selectedRepo) return false;
     const normalizedDomain = normalizeProjectDomain(projectDomain);
@@ -2118,9 +2192,10 @@ function App() {
       || projectServerPath.trim() !== (selectedRepo.serverPath ?? "")
       || normalizedDomain !== (selectedRepo.domain ?? "")
       || JSON.stringify(projectDraftDeployConfig) !== JSON.stringify(selectedRepo.deploy ?? null)
+      || JSON.stringify(projectDraftDataConfig) !== JSON.stringify(selectedRepo.data ?? null)
       || sandbox !== selectedRepo.defaultSandbox
     );
-  }, [originalProjectPath, projectDraftDeployConfig, projectDomain, projectGithubUrl, projectName, projectPanel, projectPath, projectServerPath, sandbox, selectedRepo]);
+  }, [originalProjectPath, projectDraftDataConfig, projectDraftDeployConfig, projectDomain, projectGithubUrl, projectName, projectPanel, projectPath, projectServerPath, sandbox, selectedRepo]);
   const projectSaveAgentOnline = projectPanel === "new"
     ? projectFormAgent?.status === "online"
     : selectedRepoAgent?.status === "online";
@@ -2950,6 +3025,7 @@ function App() {
     setProjectPanel(null);
     setChatProperties(null);
     setChatMenuId("");
+    setProjectActionsOpen(false);
     loadChats(repo, !sameRepo);
     void syncLocalChats(repo);
   }
@@ -2969,6 +3045,7 @@ function App() {
     setProjectPanel(null);
     setChatProperties(null);
     setChatMenuId("");
+    setProjectActionsOpen(false);
     setGitNotice("");
     setDeployNotice("");
     setNginxNotice("");
@@ -3022,6 +3099,8 @@ function App() {
     setProjectDomain(defaults.domain);
     setProjectServerPath(defaults.serverPath);
     setProjectGithubUrl(defaults.githubUrl);
+    setProjectDataPath(defaultProjectDataPath(projectDataLocation, options.includePath ? defaults.path : projectPath, defaults.serverPath));
+    setProjectDeployEnabled(true);
     const defaultMode = isLinuxAgent(projectPanel === "new" ? projectFormAgent : selectedAgent) ? "local" : "ssh";
     setProjectDeployMode(defaultMode);
     if (!projectDeploySshTarget.trim()) setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
@@ -3035,6 +3114,12 @@ function App() {
     if (projectPanel !== "new") return;
     const defaults = defaultProjectValues(projectName, agent);
     setProjectPath(defaults.path);
+    setProjectServerPath(defaults.serverPath);
+    setProjectGithubUrl(defaults.githubUrl);
+    setProjectDomain(defaults.domain);
+    const nextDataLocation = isLinuxAgent(agent) ? "server" : "local";
+    setProjectDataLocation(nextDataLocation);
+    setProjectDataPath(defaultProjectDataPath(nextDataLocation, defaults.path, defaults.serverPath));
     const defaultMode = isLinuxAgent(agent) ? "local" : "ssh";
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
@@ -3042,6 +3127,7 @@ function App() {
   }
 
   function handleProjectNameChange(value: string) {
+    const previousDataPath = defaultProjectDataPath(projectDataLocation, projectPath, projectServerPath);
     setProjectName(value);
     if (projectPanel !== "new") return;
     const defaults = defaultProjectValues(value, projectFormAgent);
@@ -3049,21 +3135,50 @@ function App() {
     setProjectDomain(defaults.domain);
     setProjectServerPath(defaults.serverPath);
     setProjectGithubUrl(defaults.githubUrl);
+    if (!projectDataPath.trim() || projectDataPath === previousDataPath) {
+      setProjectDataPath(defaultProjectDataPath(projectDataLocation, defaults.path, defaults.serverPath));
+    }
   }
 
   function handleProjectDomainChange(value: string) {
     const previousDomain = normalizeProjectDomain(projectDomain);
     const previousServerPath = defaultServerPathForDomain(previousDomain);
     const previousGithubUrl = defaultGithubUrlForDomain(previousDomain);
+    const previousDataPath = defaultProjectDataPath(projectDataLocation, projectPath, projectServerPath);
     setProjectDomain(value);
     const nextDomain = normalizeProjectDomain(value);
     if (!nextDomain) return;
+    const nextServerPath = defaultServerPathForDomain(nextDomain);
     if (!projectServerPath.trim() || projectServerPath.trim() === previousServerPath) {
-      setProjectServerPath(defaultServerPathForDomain(nextDomain));
+      setProjectServerPath(nextServerPath);
+      if (projectDataLocation === "server" && (!projectDataPath.trim() || projectDataPath === previousDataPath)) {
+        setProjectDataPath(defaultProjectDataPath("server", projectPath, nextServerPath));
+      }
     }
     if (!projectGithubUrl.trim() || projectGithubUrl.trim() === previousGithubUrl) {
       setProjectGithubUrl(defaultGithubUrlForDomain(nextDomain));
     }
+  }
+
+  function handleProjectPathChange(value: string) {
+    const previousDataPath = defaultProjectDataPath(projectDataLocation, projectPath, projectServerPath);
+    setProjectPath(value);
+    if (projectPanel === "new" && projectDataLocation === "local" && (!projectDataPath.trim() || projectDataPath === previousDataPath)) {
+      setProjectDataPath(defaultProjectDataPath("local", value, projectServerPath));
+    }
+  }
+
+  function handleProjectServerPathChange(value: string) {
+    const previousDataPath = defaultProjectDataPath(projectDataLocation, projectPath, projectServerPath);
+    setProjectServerPath(value);
+    if (projectDataLocation === "server" && (!projectDataPath.trim() || projectDataPath === previousDataPath)) {
+      setProjectDataPath(defaultProjectDataPath("server", projectPath, value));
+    }
+  }
+
+  function handleProjectDataLocationChange(location: ProjectDataLocation) {
+    setProjectDataLocation(location);
+    setProjectDataPath(defaultProjectDataPath(location, projectPath, projectServerPath));
   }
 
   function openNewProject() {
@@ -3076,14 +3191,18 @@ function App() {
     setProjectDomain(defaults.domain);
     setProjectVisibility("private");
     const defaultMode = isLinuxAgent(selectedAgent) ? "local" : "ssh";
+    setProjectDeployEnabled(true);
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
     setProjectDeploySourceDir("dist");
     setProjectDeployRemoteSubdir("");
     setProjectDeployBuildCommand(defaultBuildCommandForAgent(selectedAgent));
     setProjectDeployCleanRemote(false);
+    setProjectDataLocation(isLinuxAgent(selectedAgent) ? "server" : "local");
+    setProjectDataPath(defaultProjectDataPath(isLinuxAgent(selectedAgent) ? "server" : "local", defaults.path, defaults.serverPath));
     setProjectStartPrompt("");
     setOriginalProjectPath("");
+    setProjectWizardStep("project");
     setProjectPanel("new");
   }
 
@@ -3101,6 +3220,9 @@ function App() {
     setProjectDeployRemoteSubdir(repo.deploy?.remoteSubdir ?? "");
     setProjectDeployBuildCommand(formatBuildCommand(repo.deploy) || defaultBuildCommandForAgent(agents.find((agent) => agent.id === repo.agentId)));
     setProjectDeployCleanRemote(repo.deploy?.cleanRemote ?? false);
+    setProjectDeployEnabled(Boolean(repo.deploy));
+    setProjectDataLocation(repo.data?.location ?? "local");
+    setProjectDataPath(repo.data?.path ?? defaultProjectDataPath(repo.data?.location ?? "local", repo.pathMasked, repo.serverPath ?? ""));
     setProjectStartPrompt("");
     setOriginalProjectPath(repo.pathMasked);
     setSandbox(repo.defaultSandbox);
@@ -3194,6 +3316,15 @@ function App() {
       // The settings are just a UI convenience; a blocked storage write should not break chat.
     }
   }, [codexModel, reasoningEffort, codexSpeed]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = uiTheme;
+    try {
+      localStorage.setItem("cmc.uiTheme", uiTheme);
+    } catch {
+      // Theme is local preference only.
+    }
+  }, [uiTheme]);
 
   useEffect(() => {
     if (!csrf) return;
@@ -3495,6 +3626,20 @@ function App() {
     refresh();
   }
 
+  function projectStartPromptWithSetup(promptText: string) {
+    const details = [
+      `Project: ${projectName.trim() || "Untitled"}`,
+      `Folder: ${projectPath.trim() || "not set"}`,
+      projectGithubUrl.trim() ? `GitHub: ${projectGithubUrl.trim()}` : "",
+      projectServerPath.trim() ? `Server folder: ${projectServerPath.trim()}` : "",
+      normalizeProjectDomain(projectDomain) ? `Domain: ${normalizeProjectDomain(projectDomain)}` : "",
+      projectDraftDeployConfig ? `Deploy: ${projectDraftDeployConfig.mode}${projectDraftDeployConfig.mode === "ssh" ? ` via ${projectDraftDeployConfig.sshTarget}` : ""}, source ${projectDraftDeployConfig.sourceDir}` : "Deploy: not configured",
+      projectDraftDataConfig ? `Data storage: ${projectDraftDataConfig.location}, ${projectDraftDataConfig.path}` : "",
+      `Default sandbox: ${SANDBOX_LABELS[sandbox]}`
+    ].filter(Boolean);
+    return `${promptText.trim()}\n\nProject setup:\n${details.map((item) => `- ${item}`).join("\n")}`;
+  }
+
   async function startProjectPrompt(repo: { agentId: string; id: string }, promptText: string): Promise<boolean> {
     if (!csrf || !promptText.trim()) return false;
     if (localCodexBusy) {
@@ -3502,6 +3647,7 @@ function App() {
       setChatNotice("Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web.");
       return false;
     }
+    const promptWithSetup = projectStartPromptWithSetup(promptText);
     const chatResponse = await api("/api/chats", {
       method: "POST",
       headers: { "x-csrf-token": csrf },
@@ -3526,7 +3672,7 @@ function App() {
         agentId: repo.agentId,
         repoId: repo.id,
         chatId,
-        prompt: promptText,
+        prompt: promptWithSetup,
         sandbox,
         branchMode: "current",
         model: codexModel,
@@ -3566,6 +3712,7 @@ function App() {
     setBusy(true);
     const normalizedDomain = normalizeProjectDomain(projectDomain);
     const deployConfig = projectDraftDeployConfig;
+    const dataConfig = projectDraftDataConfig;
     const body: Record<string, unknown> = isNew ? {
       agentId: targetAgent.id,
       name: projectName.trim(),
@@ -3575,6 +3722,7 @@ function App() {
       domain: normalizedDomain,
       visibility: projectVisibility,
       deploy: deployConfig,
+      data: dataConfig,
       defaultSandbox: sandbox
     } : {
       visibility: projectVisibility
@@ -3586,6 +3734,7 @@ function App() {
       if (projectServerPath.trim() !== (selectedRepo?.serverPath ?? "")) body.serverPath = projectServerPath.trim();
       if (normalizedDomain !== (selectedRepo?.domain ?? "")) body.domain = normalizedDomain;
       if (JSON.stringify(deployConfig) !== JSON.stringify(selectedRepo?.deploy ?? null)) body.deploy = deployConfig;
+      if (JSON.stringify(dataConfig) !== JSON.stringify(selectedRepo?.data ?? null)) body.data = dataConfig;
       if (sandbox !== selectedRepo?.defaultSandbox) body.defaultSandbox = sandbox;
     }
     const response = await api(isNew ? "/api/projects" : `/api/projects/${selectedRepo?.agentId}/${selectedRepo?.id}`, {
@@ -3945,6 +4094,7 @@ function App() {
     const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("git-sync", "Commit & push", operationDetails) : "";
     setGitBusy(true);
     setActionMenuOpen(false);
+    setProjectActionsOpen(false);
     setGitNotice(targetChatId ? "" : "Git sync started...");
     try {
       const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`, {
@@ -4858,6 +5008,334 @@ function App() {
     );
   }
 
+  function renderDeployModeSelect() {
+    return (
+      <label>
+        Deploy mode
+        <select
+          value={projectDeployEnabled ? projectDeployMode : "none"}
+          onChange={(event) => {
+            const value = event.target.value as "none" | "ssh" | "local";
+            if (value === "none") {
+              setProjectDeployEnabled(false);
+              return;
+            }
+            setProjectDeployEnabled(true);
+            setProjectDeployMode(value);
+            if (value === "ssh" && !projectDeploySshTarget.trim()) setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
+          }}
+        >
+          <option value="none">No deploy yet</option>
+          <option value="ssh">SSH upload from this agent</option>
+          <option value="local">Local server copy</option>
+        </select>
+      </label>
+    );
+  }
+
+  function renderDeployFields() {
+    return (
+      <>
+        <label>
+          Server project folder
+          <input placeholder="/var/www/project.domain" value={projectServerPath} onChange={(event) => handleProjectServerPathChange(event.target.value)} />
+        </label>
+        <label>
+          Domain or subdomain
+          <input
+            placeholder={`playground or playground.${PROJECT_DOMAIN_ROOT}`}
+            value={projectDomain}
+            onBlur={() => setProjectDomain(normalizeProjectDomain(projectDomain))}
+            onChange={(event) => handleProjectDomainChange(event.target.value)}
+          />
+        </label>
+        {projectUrl(projectDomain) && (
+          <div className="project-preview">
+            <span>Project URL</span>
+            <a href={projectUrl(projectDomain)} target="_blank" rel="noreferrer">{projectUrl(projectDomain)}</a>
+          </div>
+        )}
+        {!projectDeployEnabled && (
+          <div className="wizard-muted">
+            Deploy can be connected later from project settings.
+          </div>
+        )}
+        {projectDeployEnabled && (
+          <>
+        <label>
+          Deploy SSH target
+          <input disabled={projectDeployMode === "local"} placeholder="myserver" value={projectDeployMode === "local" ? "" : projectDeploySshTarget} onChange={(event) => setProjectDeploySshTarget(event.target.value)} />
+        </label>
+        <div className="wizard-two-col">
+          <label>
+            Deploy source folder
+            <input placeholder="dist" value={projectDeploySourceDir} onChange={(event) => setProjectDeploySourceDir(event.target.value)} />
+          </label>
+          <label>
+            Deploy target subfolder
+            <input placeholder="dist, optional" value={projectDeployRemoteSubdir} onChange={(event) => setProjectDeployRemoteSubdir(event.target.value)} />
+          </label>
+        </div>
+        <label>
+          Build command
+          <input placeholder={defaultBuildCommandForAgent(projectPanel === "new" ? projectFormAgent : selectedAgent)} value={projectDeployBuildCommand} onChange={(event) => setProjectDeployBuildCommand(event.target.value)} />
+        </label>
+        <label className="checkbox-row">
+          <input checked={projectDeployCleanRemote} type="checkbox" onChange={(event) => setProjectDeployCleanRemote(event.target.checked)} />
+          Clean server folder before upload
+        </label>
+          </>
+        )}
+      </>
+    );
+  }
+
+  function renderDataFields() {
+    return (
+      <>
+        <div className="storage-choice" role="group" aria-label="Data storage location">
+          <button className={projectDataLocation === "local" ? "active" : ""} type="button" onClick={() => handleProjectDataLocationChange("local")}>
+            <FolderGit2 size={16} />
+            <span>
+              <strong>Local</strong>
+              <small>Project agent folder</small>
+            </span>
+          </button>
+          <button className={projectDataLocation === "server" ? "active" : ""} type="button" onClick={() => handleProjectDataLocationChange("server")}>
+            <Server size={16} />
+            <span>
+              <strong>Server</strong>
+              <small>Deploy machine folder</small>
+            </span>
+          </button>
+        </div>
+        <label>
+          Data folder
+          <input value={projectDataPath} onChange={(event) => setProjectDataPath(event.target.value)} />
+        </label>
+      </>
+    );
+  }
+
+  function renderProjectWizardStep() {
+    if (projectWizardStep === "project") {
+      return (
+        <div className="wizard-step-panel">
+          <label>
+            Name
+            <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
+          </label>
+          <label>
+            Agent
+            <select value={projectAgentId || projectFormAgent?.id || ""} onChange={(event) => handleProjectAgentChange(event.target.value)}>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name} · {agent.status}{isLinuxAgent(agent) ? " · Linux" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Folder on selected agent
+            <input value={projectPath} onChange={(event) => handleProjectPathChange(event.target.value)} />
+          </label>
+          <label>
+            Project visibility
+            <select value={projectVisibility} onChange={(event) => setProjectVisibility(event.target.value as ProjectVisibility)}>
+              <option value="private">Private: виден только владельцу и админам</option>
+              <option value="public">Public: проект и его чаты видны в Search</option>
+            </select>
+          </label>
+        </div>
+      );
+    }
+    if (projectWizardStep === "git") {
+      return (
+        <div className="wizard-step-panel">
+          <label>
+            GitHub repository
+            <input placeholder="https://github.com/WizardJIOCb/project.git" value={projectGithubUrl} onChange={(event) => setProjectGithubUrl(event.target.value)} />
+          </label>
+          <div className="wizard-summary-grid">
+            <div><span>Local repo</span><strong>{projectPath || "not set"}</strong></div>
+            <div><span>Default commit</span><strong>{`Update ${projectName.trim() || "project"}`}</strong></div>
+          </div>
+        </div>
+      );
+    }
+    if (projectWizardStep === "deploy") {
+      return (
+        <div className="wizard-step-panel">
+          {renderDeployModeSelect()}
+          {renderDeployFields()}
+        </div>
+      );
+    }
+    if (projectWizardStep === "data") {
+      return (
+        <div className="wizard-step-panel">
+          {renderDataFields()}
+          <div className="wizard-summary-grid">
+            <div><span>Location</span><strong>{projectDataLocation}</strong></div>
+            <div><span>Folder</span><strong>{projectDataPath || "not set"}</strong></div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="wizard-step-panel ready">
+        <div className="wizard-summary-grid">
+          <div><span>Project</span><strong>{projectName || "Untitled"}</strong></div>
+          <div><span>Agent</span><strong>{projectFormAgent?.name || "No agent"}</strong></div>
+          <div><span>Folder</span><strong>{projectPath || "not set"}</strong></div>
+          <div><span>GitHub</span><strong>{projectGithubUrl || "not connected"}</strong></div>
+          <div><span>Deploy</span><strong>{projectDraftDeployConfig ? `${projectDraftDeployConfig.mode} · ${projectServerPath || "server path"}` : "not configured"}</strong></div>
+          <div><span>Data</span><strong>{projectDraftDataConfig ? `${projectDraftDataConfig.location} · ${projectDraftDataConfig.path}` : "not configured"}</strong></div>
+          <div><span>Domain</span><strong>{normalizeProjectDomain(projectDomain) || "not set"}</strong></div>
+          <div><span>Visibility</span><strong>{projectVisibility}</strong></div>
+        </div>
+        <label>
+          Start prompt
+          <textarea
+            placeholder="Опишите первый шаг для Codex после сохранения проекта"
+            value={projectStartPrompt}
+            onChange={(event) => setProjectStartPrompt(event.target.value)}
+          />
+        </label>
+        <div className="segments">
+          {SANDBOXES.map((item) => (
+            <button className={sandbox === item ? "active" : ""} key={item} type="button" onClick={() => setSandbox(item)}>{SANDBOX_LABELS[item]}</button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderProjectWizard() {
+    const canGoBack = projectWizardStepIndex > 0;
+    const canGoNext = projectWizardStepIndex >= 0 && projectWizardStepIndex < PROJECT_WIZARD_STEPS.length - 1;
+    const nextStep = () => {
+      if (!projectWizardCanContinue) return;
+      const next = PROJECT_WIZARD_STEPS[projectWizardStepIndex + 1];
+      if (next) setProjectWizardStep(next.id);
+    };
+    const previousStep = () => {
+      const previous = PROJECT_WIZARD_STEPS[projectWizardStepIndex - 1];
+      if (previous) setProjectWizardStep(previous.id);
+    };
+
+    return (
+      <form className="project-form project-wizard" onSubmit={saveProject}>
+        <div className="section-head">
+          <h2><FolderGit2 size={18} /> New project</h2>
+          <div className="section-actions">
+            <button className="secondary" type="button" onClick={() => applyProjectDefaultsToForm({ includePath: true })}>
+              <Wrench size={15} /> Defaults
+            </button>
+            <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Close</button>
+          </div>
+        </div>
+        <div className="wizard-steps">
+          {PROJECT_WIZARD_STEPS.map((step, index) => (
+            <button
+              className={step.id === projectWizardStep ? "active" : index < projectWizardStepIndex ? "done" : ""}
+              key={step.id}
+              type="button"
+              onClick={() => setProjectWizardStep(step.id)}
+            >
+              <span>{index + 1}</span>
+              {step.label}
+            </button>
+          ))}
+        </div>
+        {renderProjectWizardStep()}
+        {projectNotice && <div className="notice danger">{projectNotice}</div>}
+        {!projectSaveAgentOnline && (
+          <div className="notice warning">Выбранный агент offline. Новый проект можно сохранить после подключения агента.</div>
+        )}
+        <div className="project-form-actions wizard-actions">
+          {canGoBack ? (
+            <button className="secondary" type="button" onClick={previousStep}><ArrowLeft size={16} /> Back</button>
+          ) : (
+            <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Cancel</button>
+          )}
+          {canGoNext ? (
+            <button disabled={!projectWizardCanContinue} type="button" onClick={nextStep}>Next <ArrowRight size={16} /></button>
+          ) : (
+            <>
+              <button disabled={!canSaveProject} type="submit" value="save"><Save size={16} /> Create project</button>
+              <button className="secondary" disabled={!canSaveAndRunProject} type="submit" value="run-prompt"><Play size={16} /> Create & run prompt</button>
+            </>
+          )}
+        </div>
+      </form>
+    );
+  }
+
+  function renderProjectSettingsForm() {
+    return (
+      <form className="project-form" onSubmit={saveProject}>
+        <div className="section-head">
+          <h2>Project settings</h2>
+          <div className="section-actions">
+            <button className="secondary" type="button" onClick={() => applyProjectDefaultsToForm({ includePath: false })}>
+              <Wrench size={15} /> Defaults
+            </button>
+            <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Close</button>
+          </div>
+        </div>
+        <label>
+          Name
+          <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
+        </label>
+        <label>
+          Folder on selected agent
+          <input value={projectPath} onChange={(event) => handleProjectPathChange(event.target.value)} />
+        </label>
+        <label>
+          GitHub repository
+          <input placeholder="https://github.com/WizardJIOCb/project.git" value={projectGithubUrl} onChange={(event) => setProjectGithubUrl(event.target.value)} />
+        </label>
+        {renderDeployModeSelect()}
+        {renderDeployFields()}
+        <label>
+          Project visibility
+          <select value={projectVisibility} onChange={(event) => setProjectVisibility(event.target.value as ProjectVisibility)}>
+            <option value="private">Private: виден только владельцу и админам</option>
+            <option value="public">Public: проект и его чаты видны в Search</option>
+          </select>
+        </label>
+        {renderDataFields()}
+        <label>
+          Start prompt
+          <textarea
+            placeholder="Опишите первый шаг для Codex после сохранения проекта"
+            value={projectStartPrompt}
+            onChange={(event) => setProjectStartPrompt(event.target.value)}
+          />
+        </label>
+        <div className="segments">
+          {SANDBOXES.map((item) => (
+            <button className={sandbox === item ? "active" : ""} key={item} type="button" onClick={() => setSandbox(item)}>{SANDBOX_LABELS[item]}</button>
+          ))}
+        </div>
+        {projectNotice && <div className="notice danger">{projectNotice}</div>}
+        {projectPanel === "settings" && selectedRepoAgent?.status !== "online" && (
+          <div className="notice">
+            {projectSettingsNeedsAgent
+              ? "Агент проекта offline: сейчас можно сохранить только Public/Private для Search. Локальные поля сохранятся после подключения агента."
+              : "Агент проекта offline: Public/Private для Search можно сохранить прямо сейчас."}
+          </div>
+        )}
+        <div className="project-form-actions">
+          <button disabled={!canSaveProject} type="submit" value="save"><Save size={16} /> Save project</button>
+          <button className="secondary" disabled={!canSaveAndRunProject} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
+        </div>
+        <button className="danger-button" disabled={busy || !selectedRepo} type="button" onClick={deleteProject}>Remove project from service</button>
+      </form>
+    );
+  }
+
   function renderSettings() {
     return (
       <section className="settings-work">
@@ -4868,6 +5346,31 @@ function App() {
           <div className="notice">
             Пользователь запускает Windows-agent у себя на ПК, логинится в Codex локально через <code>codex login</code>, а сайт только отправляет задачи его агенту.
             Для второго ПК или ноутбука создай отдельного агента: один <code>agentId</code> рассчитан на одно активное подключение.
+          </div>
+          <div className="settings-card appearance-card">
+            <div className="section-head">
+              <h2><Palette size={18} /> Appearance</h2>
+              <strong>{UI_THEME_OPTIONS.find((option) => option.value === uiTheme)?.label}</strong>
+            </div>
+            <div className="theme-grid">
+              {UI_THEME_OPTIONS.map((option) => (
+                <button
+                  className={uiTheme === option.value ? "theme-option active" : "theme-option"}
+                  key={option.value}
+                  type="button"
+                  onClick={() => setUiTheme(option.value)}
+                >
+                  <span className="theme-swatches" aria-hidden="true">
+                    {option.swatches.map((color) => <i key={color} style={{ background: color }} />)}
+                  </span>
+                  <span>
+                    <strong>{option.label}</strong>
+                    <small>{option.note}</small>
+                  </span>
+                  {uiTheme === option.value && <Check size={16} />}
+                </button>
+              ))}
+            </div>
           </div>
           <form className="settings-card" onSubmit={createAgent}>
             <h2><Bot size={18} /> Create personal agent</h2>
@@ -6053,122 +6556,7 @@ function App() {
       )}
 
       {view === "projects" && projectPanel && (
-        <form className="project-form" onSubmit={saveProject}>
-          <div className="section-head">
-            <h2>{projectPanel === "new" ? "New project" : "Project settings"}</h2>
-            <div className="section-actions">
-              <button className="secondary" type="button" onClick={() => applyProjectDefaultsToForm({ includePath: projectPanel === "new" })}>
-                <Wrench size={15} /> Defaults
-              </button>
-              <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Close</button>
-            </div>
-          </div>
-          <label>
-            Name
-            <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
-          </label>
-          {projectPanel === "new" && (
-            <label>
-              Agent
-              <select value={projectAgentId || projectFormAgent?.id || ""} onChange={(event) => handleProjectAgentChange(event.target.value)}>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name} · {agent.status}{isLinuxAgent(agent) ? " · Linux" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label>
-            Folder on selected agent
-            <input value={projectPath} onChange={(event) => setProjectPath(event.target.value)} />
-          </label>
-          <label>
-            GitHub repository
-            <input placeholder="https://github.com/WizardJIOCb/project.git" value={projectGithubUrl} onChange={(event) => setProjectGithubUrl(event.target.value)} />
-          </label>
-          <label>
-            Server project folder
-            <input placeholder="/var/www/project.domain" value={projectServerPath} onChange={(event) => setProjectServerPath(event.target.value)} />
-          </label>
-          <label>
-            Domain or subdomain
-            <input
-              placeholder={`playground or playground.${PROJECT_DOMAIN_ROOT}`}
-              value={projectDomain}
-              onBlur={() => setProjectDomain(normalizeProjectDomain(projectDomain))}
-              onChange={(event) => handleProjectDomainChange(event.target.value)}
-            />
-          </label>
-          {projectUrl(projectDomain) && (
-            <div className="project-preview">
-              <span>Project URL</span>
-              <a href={projectUrl(projectDomain)} target="_blank" rel="noreferrer">{projectUrl(projectDomain)}</a>
-            </div>
-          )}
-          <label>
-            Project visibility
-            <select value={projectVisibility} onChange={(event) => setProjectVisibility(event.target.value as ProjectVisibility)}>
-              <option value="private">Private: виден только владельцу и админам</option>
-              <option value="public">Public: проект и его чаты видны в Search</option>
-            </select>
-          </label>
-          <label>
-            Deploy mode
-            <select value={projectDeployMode} onChange={(event) => setProjectDeployMode(event.target.value as "ssh" | "local")}>
-              <option value="ssh">SSH upload from this agent</option>
-              <option value="local">Local server copy</option>
-            </select>
-          </label>
-          <label>
-            Deploy SSH target
-            <input disabled={projectDeployMode === "local"} placeholder="myserver" value={projectDeployMode === "local" ? "" : projectDeploySshTarget} onChange={(event) => setProjectDeploySshTarget(event.target.value)} />
-          </label>
-          <label>
-            Deploy source folder
-            <input placeholder="dist" value={projectDeploySourceDir} onChange={(event) => setProjectDeploySourceDir(event.target.value)} />
-          </label>
-          <label>
-            Deploy target subfolder
-            <input placeholder="dist, optional" value={projectDeployRemoteSubdir} onChange={(event) => setProjectDeployRemoteSubdir(event.target.value)} />
-          </label>
-          <label>
-            Build command
-            <input placeholder={defaultBuildCommandForAgent(projectPanel === "new" ? projectFormAgent : selectedAgent)} value={projectDeployBuildCommand} onChange={(event) => setProjectDeployBuildCommand(event.target.value)} />
-          </label>
-          <label className="checkbox-row">
-            <input checked={projectDeployCleanRemote} type="checkbox" onChange={(event) => setProjectDeployCleanRemote(event.target.checked)} />
-            Clean server folder before upload (deletes existing files)
-          </label>
-          <label>
-            Start prompt
-            <textarea
-              placeholder="Опишите первый шаг для Codex после сохранения проекта"
-              value={projectStartPrompt}
-              onChange={(event) => setProjectStartPrompt(event.target.value)}
-            />
-          </label>
-          <div className="segments">
-            {SANDBOXES.map((item) => (
-              <button className={sandbox === item ? "active" : ""} key={item} type="button" onClick={() => setSandbox(item)}>{SANDBOX_LABELS[item]}</button>
-            ))}
-          </div>
-          {projectNotice && <div className="notice danger">{projectNotice}</div>}
-          {projectPanel === "settings" && selectedRepoAgent?.status !== "online" && (
-            <div className="notice">
-              {projectSettingsNeedsAgent
-                ? "Агент проекта offline: сейчас можно сохранить только Public/Private для Search. Локальные поля сохранятся после подключения агента."
-                : "Агент проекта offline: Public/Private для Search можно сохранить прямо сейчас."}
-            </div>
-          )}
-          <div className="project-form-actions">
-            <button disabled={!canSaveProject} type="submit" value="save"><Save size={16} /> Save project</button>
-            <button className="secondary" disabled={!canSaveAndRunProject} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
-          </div>
-          {projectPanel === "settings" && (
-            <button className="danger-button" disabled={busy || !selectedRepo} type="button" onClick={deleteProject}>Remove project from service</button>
-          )}
-        </form>
+        projectPanel === "new" ? renderProjectWizard() : renderProjectSettingsForm()
       )}
 
       {view === "projects" && selectedRepo && (
@@ -6261,20 +6649,101 @@ function App() {
                 </button>
               </div>
             )}
-            <form className="git-panel" onSubmit={syncGit}>
-              <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
-              <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
-              <button disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} type="button" onClick={launchProject}><Rocket size={16} /> <span className="step-badge">1-4</span> Launch</button>
-              <button disabled={launchBusy || gitBusy || !gitMessage.trim()} type="submit"><UploadCloud size={16} /> <span className="step-badge">1</span> Commit & push</button>
-              <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} type="button" onClick={deployProject}><UploadCloud size={16} /> <span className="step-badge">2</span> Deploy</button>
-              <button disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} type="button" onClick={configureNginx}><Settings size={16} /> <span className="step-badge">3</span> Nginx</button>
-              <button disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} type="button" onClick={configureSsl}><Settings size={16} /> <span className="step-badge">4</span> SSL</button>
-              {selectedProjectUrl && <a className="launch-link" href={selectedProjectUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} /> <span className="step-badge">5</span> Open</a>}
-              {gitNotice && <pre>{gitNotice}</pre>}
-              {launchNotice && <pre>{launchNotice}</pre>}
-              {deployNotice && <pre>{deployNotice}</pre>}
-              {nginxNotice && <pre>{nginxNotice}</pre>}
-              {sslNotice && <pre>{sslNotice}</pre>}
+            <form className="project-cockpit" onSubmit={syncGit}>
+              <div className="cockpit-main">
+                <div className="cockpit-title">
+                  <strong>{selectedRepo.name}</strong>
+                  <span>
+                    <GitBranch size={14} /> {selectedRepo.currentBranch || "no branch"} · {selectedRepo.dirty ? "dirty" : "clean"}
+                    {selectedRepo.data?.path && <> · <Database size={14} /> {selectedRepo.data.path}</>}
+                  </span>
+                </div>
+                <button
+                  className="cockpit-launch"
+                  disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)}
+                  type="button"
+                  onClick={() => {
+                    setProjectActionsOpen(false);
+                    void launchProject();
+                  }}
+                >
+                  <Rocket size={16} />
+                  Launch
+                </button>
+                <div className="project-action-control">
+                  <button
+                    aria-expanded={projectActionsOpen}
+                    className="secondary compact"
+                    type="button"
+                    onClick={() => setProjectActionsOpen((value) => !value)}
+                  >
+                    <MoreHorizontal size={16} /> Actions
+                  </button>
+                  {projectActionsOpen && (
+                    <div className="project-action-menu" role="menu">
+                      <button disabled={launchBusy || gitBusy || !gitMessage.trim()} role="menuitem" type="submit" onClick={() => setProjectActionsOpen(false)}>
+                        <UploadCloud size={16} />
+                        <span className="step-badge">1</span>
+                        <span>Commit & push</span>
+                      </button>
+                      <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
+                        setProjectActionsOpen(false);
+                        void deployProject();
+                      }}>
+                        <UploadCloud size={16} />
+                        <span className="step-badge">2</span>
+                        <span>Deploy</span>
+                      </button>
+                      <button disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
+                        setProjectActionsOpen(false);
+                        void configureNginx();
+                      }}>
+                        <Settings size={16} />
+                        <span className="step-badge">3</span>
+                        <span>Nginx</span>
+                      </button>
+                      <button disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
+                        setProjectActionsOpen(false);
+                        void configureSsl();
+                      }}>
+                        <Settings size={16} />
+                        <span className="step-badge">4</span>
+                        <span>SSL</span>
+                      </button>
+                      <button disabled={!selectedProjectUrl} role="menuitem" type="button" onClick={() => {
+                        if (!selectedProjectUrl) return;
+                        setProjectActionsOpen(false);
+                        window.open(selectedProjectUrl, "_blank", "noopener,noreferrer");
+                      }}>
+                        <ExternalLink size={16} />
+                        <span className="step-badge">5</span>
+                        <span>Open</span>
+                      </button>
+                      <div className="menu-divider" />
+                      <button role="menuitem" type="button" onClick={() => {
+                        setProjectActionsOpen(false);
+                        openProjectSettings(selectedRepo);
+                      }}>
+                        <Settings size={16} />
+                        <span>Project settings</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="cockpit-fields">
+                <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
+                <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
+              </div>
+              {(gitNotice || launchNotice || deployNotice || nginxNotice || sslNotice) && (
+                <div className="cockpit-notices">
+                  {gitNotice && <pre>{gitNotice}</pre>}
+                  {launchNotice && <pre>{launchNotice}</pre>}
+                  {deployNotice && <pre>{deployNotice}</pre>}
+                  {nginxNotice && <pre>{nginxNotice}</pre>}
+                  {sslNotice && <pre>{sslNotice}</pre>}
+                </div>
+              )}
             </form>
             {activeChat ? (
               <>

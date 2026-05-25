@@ -39,6 +39,12 @@ export const DeployConfigSchema = z.object({
 });
 export type DeployConfig = z.infer<typeof DeployConfigSchema>;
 
+export const ProjectDataConfigSchema = z.object({
+  location: z.enum(["local", "server"]).default("local"),
+  path: z.string().min(1).max(260)
+});
+export type ProjectDataConfig = z.infer<typeof ProjectDataConfigSchema>;
+
 export const RepoInfoSchema = z.object({
   id: z.string().min(1).max(80),
   name: z.string().min(1).max(120),
@@ -48,6 +54,7 @@ export const RepoInfoSchema = z.object({
   domain: z.string().max(253).optional(),
   visibility: ProjectVisibilitySchema.optional(),
   deploy: DeployConfigSchema.optional(),
+  data: ProjectDataConfigSchema.optional(),
   currentBranch: z.string().optional(),
   dirty: z.boolean(),
   defaultSandbox: SandboxSchema,
@@ -307,6 +314,7 @@ export const ServerProjectCreateSchema = z.object({
     serverPath: z.string().max(260).optional(),
     domain: z.string().max(253).optional(),
     deploy: DeployConfigSchema.nullish(),
+    data: ProjectDataConfigSchema.nullish(),
     defaultSandbox: SandboxSchema.default("danger-full-access"),
     allowedSandboxes: z.array(SandboxSchema).min(1).default(["read-only", "workspace-write", "danger-full-access"])
   })
@@ -323,6 +331,7 @@ export const ServerProjectUpdateSchema = z.object({
     serverPath: z.string().max(260).optional(),
     domain: z.string().max(253).optional(),
     deploy: DeployConfigSchema.nullish(),
+    data: ProjectDataConfigSchema.nullish(),
     defaultSandbox: SandboxSchema.optional(),
     allowedSandboxes: z.array(SandboxSchema).min(1).optional()
   })
@@ -430,6 +439,7 @@ export const CreateProjectSchema = z.object({
   domain: z.string().max(253).optional(),
   visibility: ProjectVisibilitySchema.default("private"),
   deploy: DeployConfigSchema.nullish(),
+  data: ProjectDataConfigSchema.nullish(),
   defaultSandbox: SandboxSchema.default("danger-full-access")
 });
 export type CreateProject = z.infer<typeof CreateProjectSchema>;
@@ -442,6 +452,7 @@ export const UpdateProjectSchema = z.object({
   domain: z.string().max(253).optional(),
   visibility: ProjectVisibilitySchema.optional(),
   deploy: DeployConfigSchema.nullish(),
+  data: ProjectDataConfigSchema.nullish(),
   defaultSandbox: SandboxSchema.optional(),
   allowedSandboxes: z.array(SandboxSchema).min(1).optional()
 });

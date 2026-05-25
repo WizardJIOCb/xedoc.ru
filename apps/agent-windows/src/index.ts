@@ -904,6 +904,7 @@ function connect() {
           serverPath: optionalText(message.project.serverPath),
           domain: optionalText(message.project.domain),
           deploy: message.project.deploy ?? undefined,
+          data: message.project.data ?? undefined,
           defaultSandbox: message.project.defaultSandbox,
           allowedSandboxes: message.project.allowedSandboxes,
           testCommands: []
@@ -933,6 +934,7 @@ function connect() {
             serverPath: optionalText(message.patch.serverPath),
             domain: optionalText(message.patch.domain),
             deploy: message.patch.deploy ?? undefined,
+            data: message.patch.data ?? undefined,
             defaultSandbox: message.patch.defaultSandbox ?? "danger-full-access",
             allowedSandboxes: message.patch.allowedSandboxes ?? ["read-only", "workspace-write", "danger-full-access"],
             testCommands: []
@@ -948,6 +950,7 @@ function connect() {
           if ("serverPath" in message.patch) repo.serverPath = optionalText(message.patch.serverPath);
           if ("domain" in message.patch) repo.domain = optionalText(message.patch.domain);
           if ("deploy" in message.patch) repo.deploy = message.patch.deploy ?? undefined;
+          if ("data" in message.patch) repo.data = message.patch.data ?? undefined;
           if (message.patch.defaultSandbox) repo.defaultSandbox = message.patch.defaultSandbox;
           if (message.patch.allowedSandboxes) repo.allowedSandboxes = message.patch.allowedSandboxes;
         }

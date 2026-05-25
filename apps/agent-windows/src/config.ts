@@ -31,6 +31,11 @@ const DeployConfigSchema = z.object({
   }
 });
 
+const ProjectDataConfigSchema = z.object({
+  location: z.enum(["local", "server"]).default("local"),
+  path: z.string().min(1).max(260)
+});
+
 const RepoConfigSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -39,6 +44,7 @@ const RepoConfigSchema = z.object({
   serverPath: z.string().max(260).optional(),
   domain: z.string().max(253).optional(),
   deploy: DeployConfigSchema.optional(),
+  data: ProjectDataConfigSchema.optional(),
   defaultSandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]),
   allowedSandboxes: z.array(z.enum(["read-only", "workspace-write", "danger-full-access"])).min(1),
   testCommands: z.array(TestCommandSchema).default([])

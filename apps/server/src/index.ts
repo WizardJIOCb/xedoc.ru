@@ -730,6 +730,7 @@ function fullProjectPatchFromRepo(row: RepoRow): Extract<ServerToAgent, { type: 
     serverPath: repo.serverPath,
     domain: repo.domain,
     deploy: repo.deploy ?? null,
+    data: repo.data ?? null,
     defaultSandbox: repo.defaultSandbox,
     allowedSandboxes: repo.allowedSandboxes
   };
@@ -749,8 +750,8 @@ async function syncAgentProjectConfig(agentId: string, row: RepoRow): Promise<vo
 function upsertRepos(agentId: string, repos: RepoInfo[]): void {
   const stamp = nowIso();
   const upsert = db.prepare(`
-    INSERT INTO repos (id,agent_id,name,path_masked,github_url,server_path,domain,deploy_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    INSERT INTO repos (id,agent_id,name,path_masked,github_url,server_path,domain,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(agent_id,id) DO UPDATE SET
       name=excluded.name,
       path_masked=excluded.path_masked,
@@ -758,6 +759,7 @@ function upsertRepos(agentId: string, repos: RepoInfo[]): void {
       server_path=excluded.server_path,
       domain=excluded.domain,
       deploy_json=excluded.deploy_json,
+      data_json=excluded.data_json,
       current_branch=excluded.current_branch,
       dirty=excluded.dirty,
       default_sandbox=excluded.default_sandbox,
@@ -775,6 +777,7 @@ function upsertRepos(agentId: string, repos: RepoInfo[]): void {
       repo.serverPath ?? null,
       repo.domain ?? null,
       repo.deploy ? JSON.stringify(repo.deploy) : null,
+      repo.data ? JSON.stringify(repo.data) : null,
       repo.currentBranch ?? null,
       repo.dirty ? 1 : 0,
       repo.defaultSandbox,
@@ -2953,6 +2956,7 @@ async function createApp(): Promise<FastifyInstance> {
           serverPath: parsed.data.serverPath?.trim() || undefined,
           domain: parsed.data.domain?.trim() || undefined,
           deploy: parsed.data.deploy ?? undefined,
+          data: parsed.data.data ?? undefined,
           defaultSandbox: parsed.data.defaultSandbox,
           allowedSandboxes: ["read-only", "workspace-write", "danger-full-access"]
         }
