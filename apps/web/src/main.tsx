@@ -2141,6 +2141,7 @@ function App() {
 
   const selectedRepo = useMemo(() => repos.find((repo) => `${repo.agentId}:${repo.id}` === repoKey), [repoKey, repos]);
   const selectedProjectUrl = useMemo(() => projectUrl(selectedRepo?.domain), [selectedRepo?.domain]);
+  const recentProjectChats = useMemo(() => chats.slice().sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 5), [chats]);
   const agentNameById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents]);
   const syncRepo = useMemo(() => (
     repos.find((repo) => `${repo.agentId}:${repo.id}` === syncRepoKey)
@@ -2999,9 +3000,18 @@ function App() {
     else await loadJob(job.id);
   }
 
+  function resetActiveChatView() {
+    setActiveChatId("");
+    setChatLoadingId("");
+    setChatLoadingProgress(null);
+    setJobs([]);
+    setMessages([]);
+    setActiveJob(null);
+    setLogs([]);
+  }
+
   function selectProject(repo: Repo) {
     const nextRepoKey = `${repo.agentId}:${repo.id}`;
-    const sameRepo = repoKey === nextRepoKey;
     setMobileMenuOpen(false);
     setView("projects");
     setRepoKey(nextRepoKey);
@@ -3013,20 +3023,12 @@ function App() {
     setNginxNotice("");
     setSslNotice("");
     setLaunchNotice("");
-    if (!sameRepo) {
-      setActiveChatId("");
-      setChatLoadingId("");
-      setChatLoadingProgress(null);
-      setJobs([]);
-      setMessages([]);
-      setActiveJob(null);
-      setLogs([]);
-    }
+    resetActiveChatView();
     setProjectPanel(null);
     setChatProperties(null);
     setChatMenuId("");
     setProjectActionsOpen(false);
-    loadChats(repo, !sameRepo);
+    loadChats(repo);
     void syncLocalChats(repo);
   }
 
@@ -3035,13 +3037,7 @@ function App() {
     setView("projects");
     setRepoKey("");
     setChats([]);
-    setActiveChatId("");
-    setChatLoadingId("");
-    setChatLoadingProgress(null);
-    setJobs([]);
-    setMessages([]);
-    setActiveJob(null);
-    setLogs([]);
+    resetActiveChatView();
     setProjectPanel(null);
     setChatProperties(null);
     setChatMenuId("");
@@ -3924,14 +3920,7 @@ function App() {
     const nextChats = chats.filter((item) => item.id !== chat.id);
     setChats(nextChats);
     if (activeChatId === chat.id) {
-      setActiveChatId("");
-      setChatLoadingId("");
-      setChatLoadingProgress(null);
-      setJobs([]);
-      setMessages([]);
-      setActiveJob(null);
-      setLogs([]);
-      if (nextChats[0]) await loadChat(nextChats[0].id);
+      resetActiveChatView();
     }
     await loadChats(selectedRepo);
   }
@@ -6058,6 +6047,103 @@ function App() {
           </div>
         )}
       </>
+    );
+  }
+
+  function openProjectNewChat() {
+    if (!selectedRepo) return;
+    setChatProperties(null);
+    setChatMenuId("");
+    setChatNotice("");
+    setChatNoticeOk(false);
+    resetActiveChatView();
+    window.requestAnimationFrame(() => {
+      composerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      composerRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+    });
+  }
+
+  function renderProjectOverview() {
+    if (!selectedRepo || activeChat) return null;
+    const previewLabel = selectedRepo.domain || selectedRepo.githubUrl || selectedRepo.pathMasked;
+    return (
+      <section className="project-home" aria-label="Обзор проекта">
+        <article className="project-site-card">
+          <div className="project-home-head">
+            <div>
+              <h3><ExternalLink size={16} /> Сайт</h3>
+              <small>{previewLabel}</small>
+            </div>
+            {selectedProjectUrl ? (
+              <a className="secondary compact" href={selectedProjectUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={15} /> Open
+              </a>
+            ) : (
+              <button className="secondary compact" type="button" onClick={() => openProjectSettings(selectedRepo)}>
+                <Settings size={15} /> Домен
+              </button>
+            )}
+          </div>
+          {selectedProjectUrl ? (
+            <div className="project-site-frame">
+              <iframe
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                sandbox="allow-forms allow-popups allow-scripts"
+                src={selectedProjectUrl}
+                title={`Preview ${selectedRepo.name}`}
+              />
+              <a className="project-site-open" href={selectedProjectUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={14} /> Open
+              </a>
+            </div>
+          ) : (
+            <div className="project-site-empty">
+              <ExternalLink size={18} />
+              <strong>Домен не привязан</strong>
+              <small>{selectedRepo.githubUrl || selectedRepo.pathMasked}</small>
+            </div>
+          )}
+        </article>
+        <article className="project-recent-card">
+          <div className="project-home-head">
+            <div>
+              <h3><MessageSquare size={16} /> Последние чаты</h3>
+              <small>{recentProjectChats.length ? `${recentProjectChats.length} recent` : "Нет истории"}</small>
+            </div>
+            <button className="secondary compact" type="button" onClick={openProjectNewChat}>
+              <Plus size={15} /> Новый чат
+            </button>
+          </div>
+          <div className="project-recent-list">
+            {recentProjectChats.map((chat) => (
+              <button
+                className="project-recent-chat"
+                key={chat.id}
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setView("projects");
+                  loadChat(chat.id, undefined, true).catch(() => undefined);
+                }}
+              >
+                <span>
+                  <strong>{chat.title}</strong>
+                  <small>{chatIdentityText(chat)}</small>
+                </span>
+                <time dateTime={chat.updatedAt}>{formatDateTime(chat.updatedAt)}</time>
+              </button>
+            ))}
+            {!recentProjectChats.length && (
+              <div className="project-recent-empty">
+                <MessageSquare size={18} />
+                <strong>Чатов пока нет</strong>
+                <small>Первое сообщение создаст чат.</small>
+              </div>
+            )}
+          </div>
+        </article>
+      </section>
     );
   }
 
