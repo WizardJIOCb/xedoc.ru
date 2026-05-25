@@ -2034,6 +2034,35 @@ function mergeJobs(current: Job[], incoming: Job[]) {
   return [...byId.values()].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
 }
 
+function actionMergeKey(value: Record<string, unknown>, index: number) {
+  const id = typeof value.id === "string" ? value.id : "";
+  if (id) return `id:${id}`;
+  const command = typeof value.command === "string" ? value.command : "";
+  return command ? `command:${command}` : `index:${index}`;
+}
+
+function mergeLoadedCodexActionOutputs(existingActions: unknown, incomingActions: unknown) {
+  if (!Array.isArray(existingActions) || !Array.isArray(incomingActions)) return incomingActions;
+  const existingByKey = new Map<string, Record<string, unknown>>();
+  existingActions.forEach((item, index) => {
+    if (!item || typeof item !== "object") return;
+    const value = item as Record<string, unknown>;
+    if (typeof value.output !== "string" || value.outputOmitted === true) return;
+    existingByKey.set(actionMergeKey(value, index), value);
+  });
+  if (!existingByKey.size) return incomingActions;
+  return incomingActions.map((item, index) => {
+    if (!item || typeof item !== "object") return item;
+    const value = item as Record<string, unknown>;
+    if (typeof value.output === "string" && value.outputOmitted !== true) return item;
+    const existing = existingByKey.get(actionMergeKey(value, index));
+    if (typeof existing?.output !== "string") return item;
+    const merged: Record<string, unknown> = { ...value, output: existing.output };
+    delete merged.outputOmitted;
+    return merged;
+  });
+}
+
 function mergeChatMessages(current: ChatMessage[], incoming: ChatMessage[]) {
   const byId = new Map(current.map((message) => [message.id, message]));
   return incoming.map((message) => {
@@ -2050,6 +2079,12 @@ function mergeChatMessages(current: ChatMessage[], incoming: ChatMessage[]) {
     if (incomingMetadata.metadataOmitted && Array.isArray(existing.metadata.codexActions) && !Array.isArray(incomingMetadata.codexActions)) {
       metadata.codexActions = existing.metadata.codexActions;
       metadata.metadataOmitted = false;
+    }
+    if (incomingMetadata.metadataOmitted && Array.isArray(existing.metadata.codexActions) && Array.isArray(incomingMetadata.codexActions)) {
+      metadata.codexActions = mergeLoadedCodexActionOutputs(existing.metadata.codexActions, incomingMetadata.codexActions);
+      const stillOmitted = Array.isArray(metadata.codexActions)
+        && metadata.codexActions.some((item) => item && typeof item === "object" && (item as Record<string, unknown>).outputOmitted === true);
+      if (!stillOmitted && !metadata.gitDiffOmitted) metadata.metadataOmitted = false;
     }
     return { ...message, metadata };
   });
@@ -6127,12 +6162,8 @@ function App() {
     }
   }
 
-  function expandCodexActions(actionKey: string, message: ChatMessage) {
-    const willExpand = !expandedActions[actionKey];
+  function expandCodexActions(actionKey: string) {
     setExpandedActions((current) => ({ ...current, [actionKey]: !current[actionKey] }));
-    if (willExpand && message.metadata?.metadataOmitted) {
-      loadMessageDetails(message.id).catch(() => undefined);
-    }
   }
 
   function toggleFileDiff(diffKey: string, message: ChatMessage, job?: Job, fileDiff?: FileDiff) {
@@ -6235,7 +6266,7 @@ function App() {
     const expanded = Boolean(expandedActions[actionKey]);
     return (
       <div className="message-actions run-actions">
-        <button type="button" onClick={() => expandCodexActions(actionKey, message)}>
+        <button type="button" onClick={() => expandCodexActions(actionKey)}>
           <Terminal size={15} />
           <span>Ran {actions.length} commands</span>
           <ChevronDown className={expanded ? "open" : ""} size={15} />
