@@ -6069,21 +6069,17 @@ function App() {
     return (
       <section className="project-home" aria-label="Обзор проекта">
         <article className="project-site-card">
-          <div className="project-home-head">
-            <div>
-              <h3><ExternalLink size={16} /> Сайт</h3>
-              <small>{previewLabel}</small>
-            </div>
-            {selectedProjectUrl ? (
-              <a className="secondary compact" href={selectedProjectUrl} target="_blank" rel="noreferrer">
-                <ExternalLink size={15} /> Open
-              </a>
-            ) : (
+          {!selectedProjectUrl && (
+            <div className="project-home-head">
+              <div>
+                <h3><ExternalLink size={16} /> Сайт</h3>
+                <small>{previewLabel}</small>
+              </div>
               <button className="secondary compact" type="button" onClick={() => openProjectSettings(selectedRepo)}>
                 <Settings size={15} /> Домен
               </button>
-            )}
-          </div>
+            </div>
+          )}
           {selectedProjectUrl ? (
             <div className="project-site-preview">
               <div className="project-site-framebar">
