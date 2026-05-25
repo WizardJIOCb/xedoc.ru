@@ -6908,7 +6908,7 @@ function App() {
                                     <div className="message-author-stack">
                                       <span>
                                         {author}
-                                        {assistantDetails.settings.length > 0 && <small className="message-run-settings">{assistantDetails.settings.join(" · ")}</small>}
+                                        {assistantDetails.settings.length > 0 && <> <small className="message-run-settings">{assistantDetails.settings.join(" · ")}</small></>}
                                       </span>
                                       {assistantDetails.timing.length > 0 && <small>{assistantDetails.timing.join(" · ")}</small>}
                                     </div>
