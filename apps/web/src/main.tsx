@@ -2123,6 +2123,7 @@ function App() {
   const [repoKey, setRepoKey] = useState("");
   const [activeChatId, setActiveChatId] = useState("");
   const [chatListLoadingRepoKey, setChatListLoadingRepoKey] = useState("");
+  const [chatListSyncingRepoKey, setChatListSyncingRepoKey] = useState("");
   const [chatLoadingId, setChatLoadingId] = useState("");
   const [chatLoadingProgress, setChatLoadingProgress] = useState<ChatLoadingProgress | null>(null);
   const [sandbox, setSandbox] = useState<Sandbox>("danger-full-access");
@@ -2901,18 +2902,28 @@ function App() {
   }
 
   async function refreshChatsAfterLocalSync(repo: Repo, refreshId: number) {
-    for (const pause of LOCAL_CHAT_SYNC_REFRESH_DELAYS_MS) {
-      if (pause) await delay(pause);
-      if (localChatSyncRefreshRef.current !== refreshId) return;
-      await loadChats(repo);
-      await loadHiddenLocalChats(repo);
-      if (activeChatIdRef.current) await loadChat(activeChatIdRef.current).catch(() => undefined);
+    const syncingRepoKey = repoKeyFor(repo);
+    try {
+      for (const pause of LOCAL_CHAT_SYNC_REFRESH_DELAYS_MS) {
+        if (pause) await delay(pause);
+        if (localChatSyncRefreshRef.current !== refreshId) return;
+        await loadChats(repo);
+        await loadHiddenLocalChats(repo);
+        if (activeChatIdRef.current) await loadChat(activeChatIdRef.current).catch(() => undefined);
+      }
+    } finally {
+      if (localChatSyncRefreshRef.current === refreshId) {
+        setChatListSyncingRepoKey((current) => (current === syncingRepoKey ? "" : current));
+      }
     }
   }
 
   async function syncLocalChats(repo = selectedRepo) {
     if (!repo || !csrf || localChatSyncing) return;
+    const syncingRepoKey = repoKeyFor(repo);
+    let refreshStarted = false;
     setLocalChatSyncing(true);
+    setChatListSyncingRepoKey(syncingRepoKey);
     setChatNotice("");
     setChatNoticeOk(false);
     setSyncNotice("");
@@ -2934,9 +2945,13 @@ function App() {
         : `Синхронизация прошла: агент отправил ${data.sent ?? 0} чатов.`);
       const refreshId = localChatSyncRefreshRef.current + 1;
       localChatSyncRefreshRef.current = refreshId;
+      refreshStarted = true;
       void refreshChatsAfterLocalSync(repo, refreshId).catch(() => undefined);
     } finally {
       setLocalChatSyncing(false);
+      if (!refreshStarted) {
+        setChatListSyncingRepoKey((current) => (current === syncingRepoKey ? "" : current));
+      }
     }
   }
 
@@ -3206,6 +3221,7 @@ function App() {
     setView("projects");
     setRepoKey("");
     setChatListLoadingRepoKey("");
+    setChatListSyncingRepoKey("");
     setChats([]);
     resetActiveChatView();
     setProjectPanel(null);
@@ -6846,7 +6862,7 @@ function App() {
                 const selected = selectedRepo?.agentId === repo.agentId && selectedRepo.id === repo.id;
                 const currentRepoKey = `${repo.agentId}:${repo.id}`;
                 const busyProjectCount = busyCountByRepo.get(currentRepoKey) ?? 0;
-                const chatListLoading = chatListLoadingRepoKey === currentRepoKey;
+                const chatListLoading = chatListLoadingRepoKey === currentRepoKey || (chatListSyncingRepoKey === currentRepoKey && !chats.length);
                 return (
                   <div className={selected ? "nav-project open" : "nav-project"} key={currentRepoKey}>
                     <button className={selected ? "nav-leaf project active" : "nav-leaf project"} onClick={() => selectProject(repo)}>
