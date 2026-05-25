@@ -72,10 +72,10 @@ const SANDBOX_LABELS: Record<Sandbox, string> = {
   "danger-full-access": "full-access"
 };
 const REASONING_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
+  { value: "xhigh", label: "Extra High" },
   { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra High" }
+  { value: "medium", label: "Medium" },
+  { value: "low", label: "Low" }
 ];
 const CODEX_MODEL_OPTIONS = [
   { value: "gpt-5.5", label: "GPT-5.5" },
