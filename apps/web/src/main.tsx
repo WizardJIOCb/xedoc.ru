@@ -2227,6 +2227,7 @@ function App() {
   const [showChatScrollTop, setShowChatScrollTop] = useState(false);
   const [showChatScrollBottom, setShowChatScrollBottom] = useState(false);
   const [restoredChatScrollId, setRestoredChatScrollId] = useState("");
+  const [loadedChatAutoScroll, setLoadedChatAutoScroll] = useState<{ chatId: string; behavior: ScrollBehavior; tick: number } | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [adminTab, setAdminTab] = useState<"users" | "stats">("users");
@@ -2955,7 +2956,12 @@ function App() {
     }
   }
 
-  async function loadChat(chatId: string, preferredJobId?: string, showLoader = false) {
+  async function loadChat(
+    chatId: string,
+    preferredJobId?: string,
+    showLoader = false,
+    scrollAfterLoad: ScrollBehavior | false = showLoader ? "auto" : false
+  ) {
     const currentLoad = loadChatInFlightRef.current;
     if (currentLoad?.chatId === chatId && (!showLoader || currentLoad.foreground)) return;
     const controller = new AbortController();
@@ -3065,6 +3071,9 @@ function App() {
       }
       setChatLoadingId((current) => current === chatId ? "" : current);
       setChatLoadingProgress((current) => current?.startedAt === loadingStartedAt ? null : current);
+      if (scrollAfterLoad) {
+        setLoadedChatAutoScroll({ chatId, behavior: scrollAfterLoad, tick: Date.now() });
+      }
     } catch (error) {
       if (loadChatAbortRef.current === controller) {
         loadChatAbortRef.current = null;
@@ -3488,7 +3497,7 @@ function App() {
         setRestoredChatScrollId("");
         return;
       }
-      await loadChat(stored.chatId, undefined, true).catch(() => {
+      await loadChat(stored.chatId, undefined, true, false).catch(() => {
         resetActiveChatView();
         saveProjectState(repo);
         setRestoredChatScrollId("");
@@ -3693,6 +3702,34 @@ function App() {
     const raf = window.requestAnimationFrame(() => scrollChatToLatest("smooth"));
     return () => window.cancelAnimationFrame(raf);
   }, [showChatThinkingIndicator, activeChatId]);
+
+  useEffect(() => {
+    if (!loadedChatAutoScroll || loadedChatAutoScroll.chatId !== activeChatId || chatIsLoading || !activeChat) return;
+    chatStickToBottomRef.current = true;
+    setShowJumpToLatest(false);
+    setShowChatScrollBottom(false);
+
+    const { chatId, behavior, tick } = loadedChatAutoScroll;
+    const timers: number[] = [];
+    const scrollDown = () => {
+      if (activeChatIdRef.current !== chatId) return;
+      scrollChatToLatest(behavior);
+    };
+    const raf = window.requestAnimationFrame(() => {
+      scrollDown();
+      timers.push(window.setTimeout(scrollDown, 40));
+      timers.push(window.setTimeout(scrollDown, 140));
+      timers.push(window.setTimeout(() => {
+        scrollDown();
+        setLoadedChatAutoScroll((current) => current?.tick === tick ? null : current);
+      }, 260));
+    });
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [loadedChatAutoScroll, activeChatId, activeChat, chatIsLoading, messages.length, timelineItems.length]);
 
   useEffect(() => {
     if (!restoredChatScrollId || restoredChatScrollId !== activeChatId || chatIsLoading || !activeChat) return;
