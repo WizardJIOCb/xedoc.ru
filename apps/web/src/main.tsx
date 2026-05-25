@@ -6650,11 +6650,17 @@ function App() {
                                     || (localBusyRepoKey === currentRepoKey && localBusyChatTitle === chat.title)
                                     || (localBusyRepoKey === currentRepoKey && localBusyChatId === chat.id);
                                   return (
-                                    <button className="nav-leaf chat-child" type="button" onClick={() => {
+                                    <button
+                                      aria-current={activeChatId === chat.id ? "page" : undefined}
+                                      className="nav-leaf chat-child"
+                                      title={activeChatId === chat.id ? "Открытый чат" : chat.title}
+                                      type="button"
+                                      onClick={() => {
                                       setMobileMenuOpen(false);
                                       setView("projects");
                                       loadChat(chat.id, undefined, true).catch(() => undefined);
-                                    }}>
+                                    }}
+                                    >
                                       <span className="nav-chat-title">
                                         {chatIsBusy && <RefreshCw className="spin" size={13} />}
                                         <span>{chat.title}</span>

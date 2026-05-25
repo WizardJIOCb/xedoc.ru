@@ -570,6 +570,7 @@ textarea:focus {
 }
 
 .nav-leaf {
+  position: relative;
   display: grid;
   gap: 3px;
   width: 100%;
@@ -600,7 +601,6 @@ textarea:focus {
 .nav-leaf.active,
 .nav-chat-row.active .nav-leaf {
   color: var(--text);
-  background: var(--panel-2);
   background: var(--panel-2);
   border-color: var(--line-strong);
 }
@@ -661,6 +661,26 @@ textarea:focus {
   top: 15px;
   width: 7px;
   border-top: 1px solid var(--line-strong);
+}
+
+.nav-project-chats .nav-chat-row.active::before {
+  left: -12px;
+  top: 21px;
+  width: 10px;
+  border-top: 2px solid var(--accent-2);
+}
+
+.nav-chat-row.active::after {
+  content: "";
+  position: absolute;
+  left: -15px;
+  top: 18px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--panel);
+  border-radius: 999px;
+  background: var(--accent-2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-2) 18%, transparent);
 }
 
 .nav-menu-trigger {
@@ -745,14 +765,58 @@ textarea:focus {
 }
 
 .nav-leaf.chat-child {
+  min-height: 48px;
   padding-block: 6px;
   border-color: var(--line);
   background: color-mix(in srgb, var(--panel) 74%, transparent);
   font-size: 12px;
 }
 
-.nav-leaf.chat-child:hover,
 .nav-chat-row.active .nav-leaf.chat-child {
+  padding-right: 58px;
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent-2) 48%, var(--line));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent-2) 18%, transparent), color-mix(in srgb, var(--accent) 4%, var(--panel)) 72%),
+    var(--panel);
+  box-shadow:
+    inset 4px 0 0 var(--accent-2),
+    0 8px 20px color-mix(in srgb, var(--accent-2) 14%, transparent);
+}
+
+.nav-chat-row:not(.active) .nav-leaf.chat-child:hover {
+  background: var(--panel);
+}
+
+.nav-chat-row.active .nav-leaf.chat-child::after {
+  content: "Открыт";
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  max-width: 46px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 38%, var(--line));
+  border-radius: 999px;
+  color: var(--accent-2);
+  background: var(--panel);
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.nav-chat-row.active .nav-chat-title span {
+  font-weight: 850;
+}
+
+.nav-chat-row.active .nav-leaf.chat-child small {
+  color: var(--muted);
+}
+
+.nav-chat-row.active .nav-menu-trigger {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent-2) 30%, var(--line));
   background: var(--panel);
 }
 
