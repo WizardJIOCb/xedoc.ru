@@ -2078,7 +2078,6 @@ function App() {
   const [chatNotice, setChatNotice] = useState("");
   const [chatNoticeOk, setChatNoticeOk] = useState(false);
   const [projectNotice, setProjectNotice] = useState("");
-  const [projectPreviewFailures, setProjectPreviewFailures] = useState<Record<string, boolean>>({});
   const [attachmentNotice, setAttachmentNotice] = useState("");
   const [view, setView] = useState<"projects" | "search" | "settings" | "profile" | "sync">("projects");
   const [syncRepoKey, setSyncRepoKey] = useState("");
@@ -2142,11 +2141,6 @@ function App() {
 
   const selectedRepo = useMemo(() => repos.find((repo) => `${repo.agentId}:${repo.id}` === repoKey), [repoKey, repos]);
   const selectedProjectUrl = useMemo(() => projectUrl(selectedRepo?.domain), [selectedRepo?.domain]);
-  const selectedProjectPreviewSrc = useMemo(() => (
-    selectedRepo?.domain
-      ? `/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/preview?v=${encodeURIComponent(selectedRepo.domain)}`
-      : ""
-  ), [selectedRepo?.agentId, selectedRepo?.domain, selectedRepo?.id]);
   const recentProjectChats = useMemo(() => chats.slice().sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 5), [chats]);
   const agentNameById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents]);
   const syncRepo = useMemo(() => (
@@ -6072,7 +6066,6 @@ function App() {
   function renderProjectOverview() {
     if (!selectedRepo || activeChat) return null;
     const previewLabel = selectedRepo.domain || selectedRepo.githubUrl || selectedRepo.pathMasked;
-    const previewFailed = !selectedProjectPreviewSrc || Boolean(projectPreviewFailures[selectedProjectPreviewSrc]);
     return (
       <section className="project-home" aria-label="Обзор проекта">
         <article className="project-site-card">
@@ -6092,35 +6085,24 @@ function App() {
             )}
           </div>
           {selectedProjectUrl ? (
-            <a className={`project-site-preview ${previewFailed ? "image-failed" : ""}`} href={selectedProjectUrl} target="_blank" rel="noreferrer">
-              <span className="project-site-image">
-                {!previewFailed && (
-                  <img
-                    alt=""
-                    loading="lazy"
-                    src={selectedProjectPreviewSrc}
-                    onError={() => setProjectPreviewFailures((current) => ({ ...current, [selectedProjectPreviewSrc]: true }))}
-                  />
-                )}
-                <span className="project-site-browser">
-                  <i />
-                  <i />
-                  <i />
-                  <strong>{selectedProjectUrl}</strong>
-                </span>
-                <span className="project-site-identity">
-                  <ExternalLink size={22} />
-                  <span>
-                    <strong>{selectedRepo.name}</strong>
-                    <small>{selectedRepo.domain}</small>
-                  </span>
-                </span>
+            <div className="project-site-preview">
+              <span className="project-site-browser">
+                <i />
+                <i />
+                <i />
+                <strong>{selectedProjectUrl}</strong>
               </span>
-              <span className="project-site-foot">
-                <small>{selectedRepo.githubUrl || selectedRepo.serverPath || selectedRepo.pathMasked}</small>
-                <em><ExternalLink size={14} /> Open</em>
-              </span>
-            </a>
+              <iframe
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                sandbox="allow-forms allow-popups allow-same-origin allow-scripts"
+                src={selectedProjectUrl}
+                title={`Preview ${selectedRepo.name}`}
+              />
+              <a className="project-site-open" href={selectedProjectUrl} target="_blank" rel="noreferrer">
+                <ExternalLink size={14} /> Open
+              </a>
+            </div>
           ) : (
             <div className="project-site-empty">
               <ExternalLink size={18} />
