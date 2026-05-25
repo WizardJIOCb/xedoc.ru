@@ -3781,7 +3781,7 @@ h2 > strong {
   white-space: nowrap;
 }
 
-.run-actions .open {
+.run-actions > button .open {
   transform: rotate(180deg);
 }
 
@@ -3814,7 +3814,7 @@ h2 > strong {
   font-weight: 750;
 }
 
-.run-trace .open {
+.run-trace > button .open {
   transform: rotate(180deg);
 }
 
@@ -3878,6 +3878,13 @@ h2 > strong {
   font-weight: 700;
   line-height: 1.25;
   text-align: left;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.command-card-toggle::-webkit-details-marker {
+  display: none;
 }
 
 .command-card-toggle:hover {
@@ -3923,6 +3930,11 @@ h2 > strong {
 }
 
 .command-card-toggle .open {
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.command-card[open] > .command-card-toggle .open {
   transform: rotate(180deg);
 }
 

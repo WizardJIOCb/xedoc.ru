@@ -2489,6 +2489,7 @@ function App() {
   const actionControlRef = useRef<HTMLDivElement | null>(null);
   const currentScrollChatRef = useRef("");
   const chatCacheRef = useRef<Map<string, { etag: string; data: ChatPayload }>>(new Map());
+  const messageDetailsLoadingRef = useRef<Set<string>>(new Set());
   const missingChangeDetailsRequestedRef = useRef<Set<string>>(new Set());
   const previousMessageIdsRef = useRef<Set<string>>(new Set());
   const previousMessageSignaturesRef = useRef<Map<string, string>>(new Map());
@@ -3156,10 +3157,16 @@ function App() {
   }
 
   async function loadMessageDetails(messageId: string) {
-    const response = await api(`/api/chat-messages/${messageId}/details`);
-    if (!response.ok) return;
-    const data = await response.json();
-    setMessages((current) => current.map((message) => message.id === messageId ? data.message : message));
+    if (messageDetailsLoadingRef.current.has(messageId)) return;
+    messageDetailsLoadingRef.current.add(messageId);
+    try {
+      const response = await api(`/api/chat-messages/${messageId}/details`);
+      if (!response.ok) return;
+      const data = await response.json();
+      setMessages((current) => current.map((message) => message.id === messageId ? data.message : message));
+    } finally {
+      messageDetailsLoadingRef.current.delete(messageId);
+    }
   }
 
   function scheduleLoadChats(repo: Repo) {
@@ -6282,10 +6289,8 @@ function App() {
 
   function renderCommandCard(message: ChatMessage, action: CodexAction, index: number) {
     const parsed = parseCommandOutput(action.output);
-    const commandKey = `command:${message.id}:${action.id || index}`;
     const status = commandStatusLabel(action, parsed.exitCode);
     const defaultOpen = status === "Failed" || status === "Running";
-    const commandOpen = expandedActions[commandKey] ?? defaultOpen;
     const outputOmitted = action.outputOmitted || Boolean(message.metadata?.metadataOmitted);
     const body = parsed.body || (action.status.toLowerCase().includes("running") ? "Command is still running..." : "");
     const statusClass = status.toLowerCase();
@@ -6297,39 +6302,38 @@ function App() {
         ? "Output"
         : "No output";
     return (
-      <div className={`command-card ${statusClass}`} key={action.id || index}>
-        <button
-          className="command-card-toggle"
-          type="button"
-          onClick={() => {
-            setExpandedActions((current) => ({ ...current, [commandKey]: !commandOpen }));
-            if (!commandOpen && outputOmitted) loadMessageDetails(message.id).catch(() => undefined);
-          }}
-        >
+      <details
+        className={`command-card ${statusClass}`}
+        key={action.id || index}
+        open={defaultOpen ? true : undefined}
+        onToggle={(event) => {
+          if (!outputOmitted || !event.currentTarget.open) return;
+          loadMessageDetails(message.id).catch(() => undefined);
+        }}
+      >
+        <summary className="command-card-toggle">
           <span className={`command-status-pill ${statusClass}`}>{status}</span>
           <code title={action.command}>{action.command}</code>
           <small>{detailsLabel}</small>
-          <ChevronDown className={commandOpen ? "open" : ""} size={15} />
-        </button>
-        {commandOpen && (
-          <div className="command-console">
-            <div className="command-console-head">
-              <span>{commandRunLabel(action, parsed.wallTime)}</span>
-              {parsed.exitCode && <small>Exit {parsed.exitCode}</small>}
-            </div>
-            {outputOmitted ? (
-              <div className="command-empty">Вывод ещё не загружен. Детали команды догружаются...</div>
-            ) : body ? (
-              <pre><code>{body}</code></pre>
-            ) : (
-              <div className="command-empty">Вывода нет.</div>
-            )}
-            <div className="command-console-status">
-              <span>{status}</span>
-            </div>
+          <ChevronDown className="open" size={15} />
+        </summary>
+        <div className="command-console">
+          <div className="command-console-head">
+            <span>{commandRunLabel(action, parsed.wallTime)}</span>
+            {parsed.exitCode && <small>Exit {parsed.exitCode}</small>}
           </div>
-        )}
-      </div>
+          {outputOmitted ? (
+            <div className="command-empty">Вывод ещё не загружен. Детали команды догружаются...</div>
+          ) : body ? (
+            <pre><code>{body}</code></pre>
+          ) : (
+            <div className="command-empty">Вывода нет.</div>
+          )}
+          <div className="command-console-status">
+            <span>{status}</span>
+          </div>
+        </div>
+      </details>
     );
   }
 
