@@ -3852,14 +3852,21 @@ h2 > strong {
   max-height: min(360px, 52vh);
   overflow-y: auto;
   overscroll-behavior: contain;
+  overflow-anchor: none;
+  contain: layout paint style;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--accent-2) 35%, var(--line-strong)) transparent;
+}
+
+.command-details.many {
+  height: min(360px, 52vh);
 }
 
 .command-card {
   min-width: 0;
   display: grid;
   gap: 4px;
+  contain: layout paint style;
 }
 
 .command-card-toggle {
@@ -3905,14 +3912,16 @@ h2 > strong {
 
 .command-card-toggle code::-webkit-scrollbar,
 .command-details::-webkit-scrollbar,
-.command-console pre::-webkit-scrollbar {
+.command-console pre::-webkit-scrollbar,
+.command-output::-webkit-scrollbar {
   width: 7px;
   height: 7px;
 }
 
 .command-card-toggle code::-webkit-scrollbar-thumb,
 .command-details::-webkit-scrollbar-thumb,
-.command-console pre::-webkit-scrollbar-thumb {
+.command-console pre::-webkit-scrollbar-thumb,
+.command-output::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent-2) 38%, var(--line-strong));
 }
@@ -3980,6 +3989,11 @@ h2 > strong {
   background: #171717;
   color: #d8d8d2;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  contain: layout paint style;
+}
+
+.command-console-pending {
+  padding: 8px;
 }
 
 .command-console-head,
@@ -3997,12 +4011,11 @@ h2 > strong {
   font-weight: 700;
 }
 
-.command-console pre {
+.command-console pre,
+.command-output {
   width: 100%;
   min-width: 0;
-  max-height: 260px;
   max-width: 100%;
-  overflow: auto;
   margin: 0;
   padding: 0;
   color: inherit;
@@ -4013,6 +4026,19 @@ h2 > strong {
   white-space: pre;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.38) transparent;
+}
+
+.command-console pre {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.command-output {
+  height: 220px;
+  resize: vertical;
+  overflow: auto;
+  border: 0;
+  outline: 0;
 }
 
 .command-console code {

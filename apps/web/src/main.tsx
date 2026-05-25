@@ -946,15 +946,31 @@ function messageRunDetails(message: ChatMessage, job: Job | undefined, collapsed
 }
 
 function parseCommandOutput(output: string) {
-  const normalized = normalizeDisplayText(output).trim();
+  const normalized = normalizeCommandOutputText(output).trim();
   const exitCode = normalized.match(/^Exit code:\s*([^\n]+)$/im)?.[1]?.trim();
   const wallTime = normalized.match(/^Wall time:\s*([^\n]+)$/im)?.[1]?.trim();
-  const body = normalized
-    .replace(/^Exit code:\s*[^\n]+\n?/im, "")
-    .replace(/^Wall time:\s*[^\n]+\n?/im, "")
-    .replace(/^Output:\s*\n?/im, "")
-    .trim();
+  const outputMatch = normalized.match(/^Output:\s*\n?/im);
+  const body = typeof outputMatch?.index === "number"
+    ? normalized.slice(outputMatch.index + outputMatch[0].length).trim()
+    : normalized
+      .replace(/^Exit code:\s*[^\n]+\n?/im, "")
+      .replace(/^Wall time:\s*[^\n]+\n?/im, "")
+      .replace(/^Output:\s*\n?/im, "")
+      .trim();
   return { exitCode, wallTime, body };
+}
+
+function normalizeCommandOutputText(output: string) {
+  return output.includes("\r") || output.includes("\\n") || output.includes("\\r") || output.includes("\\t")
+    ? normalizeDisplayText(output)
+    : output;
+}
+
+function parseCommandOutputSummary(output: string) {
+  const text = normalizeCommandOutputText(output).slice(0, 2048);
+  const exitCode = text.match(/^Exit code:\s*([^\n\r]+)$/im)?.[1]?.trim();
+  const wallTime = text.match(/^Wall time:\s*([^\n\r]+)$/im)?.[1]?.trim();
+  return { exitCode, wallTime };
 }
 
 function commandStatusLabel(action: CodexAction, exitCode?: string) {
@@ -970,8 +986,22 @@ function commandRunLabel(action: CodexAction, wallTime?: string) {
   return `${running ? "Running" : "Ran"} command${wallTime ? ` for ${wallTime}` : ""}`;
 }
 
+function trimmedCommandOutputBody(body: string) {
+  const maxLength = 80000;
+  if (body.length <= maxLength) return body;
+  const headLength = 22000;
+  const tailLength = 52000;
+  return [
+    body.slice(0, headLength).trimEnd(),
+    "",
+    `[Output trimmed: shown ${headLength + tailLength} of ${body.length} characters]`,
+    "",
+    body.slice(-tailLength).trimStart()
+  ].join("\n");
+}
+
 function codexActionHasLoadedOutput(action: Pick<CodexAction, "output" | "outputOmitted">) {
-  return typeof action.output === "string" && action.output.trim().length > 0 && action.outputOmitted !== true;
+  return typeof action.output === "string" && action.output.length > 0 && action.outputOmitted !== true;
 }
 
 function codexActionOutputOmitted(action: CodexAction, metadataOmitted: boolean) {
@@ -987,13 +1017,51 @@ type CommandCardProps = {
 };
 
 function sameCodexAction(left: CodexAction, right: CodexAction) {
+  const sameOutput = left.output === right.output
+    || (left.output.length === right.output.length
+      && left.output.slice(0, 32) === right.output.slice(0, 32)
+      && left.output.slice(-32) === right.output.slice(-32));
   return left.id === right.id
     && left.command === right.command
     && left.status === right.status
-    && left.output === right.output
+    && sameOutput
     && left.outputOmitted === right.outputOmitted
     && left.at === right.at;
 }
+
+type CommandConsoleProps = {
+  action: CodexAction;
+  outputOmitted: boolean;
+  status: string;
+};
+
+const CommandConsole = React.memo(function CommandConsole({ action, outputOmitted, status }: CommandConsoleProps) {
+  const parsed = useMemo(() => parseCommandOutput(action.output), [action.output]);
+  const body = parsed.body || (action.status.toLowerCase().includes("running") ? "Command is still running..." : "");
+  return (
+    <div className="command-console">
+      <div className="command-console-head">
+        <span>{commandRunLabel(action, parsed.wallTime)}</span>
+        {parsed.exitCode && <small>Exit {parsed.exitCode}</small>}
+      </div>
+      {outputOmitted ? (
+        <div className="command-empty">Вывод ещё не загружен. Детали команды догружаются...</div>
+      ) : body ? (
+        <textarea
+          className="command-output"
+          readOnly
+          spellCheck={false}
+          value={trimmedCommandOutputBody(body)}
+        />
+      ) : (
+        <div className="command-empty">Вывода нет.</div>
+      )}
+      <div className="command-console-status">
+        <span>{status}</span>
+      </div>
+    </div>
+  );
+});
 
 function sameCodexActions(left: CodexAction[], right: CodexAction[]) {
   if (left.length !== right.length) return false;
@@ -1007,24 +1075,38 @@ const CommandCard = React.memo(function CommandCard({
   metadataOmitted,
   onLoadMessageDetails
 }: CommandCardProps) {
-  const parsed = useMemo(() => parseCommandOutput(action.output), [action.output]);
-  const status = commandStatusLabel(action, parsed.exitCode);
+  const summary = useMemo(() => parseCommandOutputSummary(action.output), [action.output]);
+  const status = commandStatusLabel(action, summary.exitCode);
   const defaultOpen = status === "Failed" || status === "Running";
   const [open, setOpen] = useState(defaultOpen);
+  const [consoleVisible, setConsoleVisible] = useState(defaultOpen);
   const outputOmitted = codexActionOutputOmitted(action, metadataOmitted);
-  const body = parsed.body || (action.status.toLowerCase().includes("running") ? "Command is still running..." : "");
+  const hasOutput = codexActionHasLoadedOutput(action);
   const statusClass = status.toLowerCase();
   const detailsLabel = outputOmitted
     ? "Load output"
-    : parsed.wallTime
-    ? `Output · ${parsed.wallTime}`
-    : body
+    : summary.wallTime
+    ? `Output · ${summary.wallTime}`
+    : hasOutput
       ? "Output"
       : "No output";
 
   useEffect(() => {
     if (defaultOpen) setOpen(true);
   }, [defaultOpen]);
+
+  useEffect(() => {
+    if (!open) {
+      setConsoleVisible(false);
+      return;
+    }
+    if (defaultOpen) {
+      setConsoleVisible(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setConsoleVisible(true), 16);
+    return () => window.clearTimeout(timer);
+  }, [open, defaultOpen, action.id]);
 
   function toggleOpen() {
     setOpen((current) => {
@@ -1047,22 +1129,9 @@ const CommandCard = React.memo(function CommandCard({
         <ChevronDown className={open ? "open" : ""} size={15} />
       </button>
       {open && (
-        <div className="command-console">
-          <div className="command-console-head">
-            <span>{commandRunLabel(action, parsed.wallTime)}</span>
-            {parsed.exitCode && <small>Exit {parsed.exitCode}</small>}
-          </div>
-          {outputOmitted ? (
-            <div className="command-empty">Вывод ещё не загружен. Детали команды догружаются...</div>
-          ) : body ? (
-            <pre><code>{body}</code></pre>
-          ) : (
-            <div className="command-empty">Вывода нет.</div>
-          )}
-          <div className="command-console-status">
-            <span>{status}</span>
-          </div>
-        </div>
+        consoleVisible
+          ? <CommandConsole action={action} outputOmitted={outputOmitted} status={status} />
+          : <div className="command-console command-console-pending"><div className="command-empty">Открываю вывод...</div></div>
       )}
     </article>
   );
@@ -1094,7 +1163,7 @@ const CommandActions = React.memo(function CommandActions({
         <ChevronDown className={expanded ? "open" : ""} size={15} />
       </button>
       {expanded && (
-        <div className="message-action-details command-details">
+        <div className={`message-action-details command-details${actions.length > 4 ? " many" : ""}`}>
           {actions.map((action, index) => (
             <CommandCard
               action={action}
@@ -2188,7 +2257,7 @@ function actionMergeKeys(value: Record<string, unknown>, index: number) {
 }
 
 function actionRecordHasLoadedOutput(value: Record<string, unknown>) {
-  return typeof value.output === "string" && value.output.trim().length > 0 && value.outputOmitted !== true;
+  return typeof value.output === "string" && value.output.length > 0 && value.outputOmitted !== true;
 }
 
 function mergeLoadedCodexActionOutputs(existingActions: unknown, incomingActions: unknown) {
@@ -2625,6 +2694,7 @@ function App() {
   const wsMessageQueueRef = useRef<any[]>([]);
   const wsFlushRafRef = useRef<number | undefined>(undefined);
   const scrollStateRafRef = useRef<number | undefined>(undefined);
+  const layoutMeasureRafRef = useRef<number | undefined>(undefined);
   const localChatSyncRefreshRef = useRef(0);
   const syncAutoPingRef = useRef("");
   const vscodeRequestSeqRef = useRef(0);
@@ -2649,6 +2719,8 @@ function App() {
   const chatAtBottomRef = useRef(true);
   const chatStickToBottomRef = useRef(true);
   const autoScrollingUntilRef = useRef(0);
+  const composerPlacementRef = useRef({ height: 0, controlsBottom: 0 });
+  const chatScrollUiRef = useRef({ top: false, bottom: false, jump: false });
   const lastChatListLoadAtRef = useRef<Record<string, number>>({});
   const lastChatLoadAtRef = useRef<Record<string, number>>({});
   const scheduledChatLoadRef = useRef<{ chatId: string; dueAt: number } | null>(null);
@@ -2690,17 +2762,37 @@ function App() {
     return (document.scrollingElement || document.documentElement) as HTMLElement;
   }
 
+  function setChatScrollTopVisible(visible: boolean) {
+    if (chatScrollUiRef.current.top === visible) return;
+    chatScrollUiRef.current.top = visible;
+    setShowChatScrollTop(visible);
+  }
+
+  function setChatScrollBottomVisible(visible: boolean) {
+    if (chatScrollUiRef.current.bottom === visible) return;
+    chatScrollUiRef.current.bottom = visible;
+    setShowChatScrollBottom(visible);
+  }
+
+  function setJumpToLatestVisible(visible: boolean) {
+    if (chatScrollUiRef.current.jump === visible) return;
+    chatScrollUiRef.current.jump = visible;
+    setShowJumpToLatest(visible);
+  }
+
   function updateChatBottomState(source: "scroll" | "measure" = "measure") {
     const scroller = getChatScroller();
     const distanceToBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     const atBottom = distanceToBottom <= CHAT_BOTTOM_THRESHOLD_PX;
     const atTop = scroller.scrollTop <= CHAT_TOP_THRESHOLD_PX;
+    const nextShowTop = !atTop;
+    const nextShowBottom = !atBottom;
     chatAtBottomRef.current = atBottom;
     if (atBottom) chatStickToBottomRef.current = true;
     else if (source === "scroll" && Date.now() > autoScrollingUntilRef.current) chatStickToBottomRef.current = false;
-    setShowChatScrollTop(!atTop);
-    setShowChatScrollBottom(!atBottom);
-    if (atBottom) setShowJumpToLatest(false);
+    setChatScrollTopVisible(nextShowTop);
+    setChatScrollBottomVisible(nextShowBottom);
+    if (atBottom) setJumpToLatestVisible(false);
   }
 
   function scheduleChatBottomStateUpdate(source: "scroll" | "measure" = "measure") {
@@ -2850,8 +2942,8 @@ function App() {
     scroller.scrollTo({ top: scroller.scrollHeight, behavior });
     chatAtBottomRef.current = true;
     chatStickToBottomRef.current = true;
-    setShowJumpToLatest(false);
-    setShowChatScrollBottom(false);
+    setJumpToLatestVisible(false);
+    setChatScrollBottomVisible(false);
     window.setTimeout(updateChatBottomState, behavior === "smooth" ? 260 : 0);
   }
 
@@ -2861,24 +2953,33 @@ function App() {
     scroller.scrollTo({ top: 0, behavior });
     chatAtBottomRef.current = false;
     chatStickToBottomRef.current = false;
-    setShowChatScrollTop(false);
-    setShowChatScrollBottom(true);
+    setChatScrollTopVisible(false);
+    setChatScrollBottomVisible(true);
     window.setTimeout(updateChatBottomState, behavior === "smooth" ? 260 : 0);
   }
 
   function updateComposerPlacement() {
     const composer = composerRef.current;
     if (!composer) {
-      document.documentElement.style.setProperty("--scroll-controls-bottom", "18px");
+      if (composerPlacementRef.current.controlsBottom !== 18) {
+        composerPlacementRef.current.controlsBottom = 18;
+        document.documentElement.style.setProperty("--scroll-controls-bottom", "18px");
+      }
       return;
     }
-    const height = Math.ceil(composer.getBoundingClientRect().height);
-    document.documentElement.style.setProperty("--composer-space", `${height + 12}px`);
     const rect = composer.getBoundingClientRect();
+    const height = Math.ceil(rect.height);
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
     const visibleHeight = Math.max(0, Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0));
     const bottom = visibleHeight > 10 ? Math.ceil(visibleHeight + 12) : 18;
-    document.documentElement.style.setProperty("--scroll-controls-bottom", `${bottom}px`);
+    if (composerPlacementRef.current.height !== height) {
+      composerPlacementRef.current.height = height;
+      document.documentElement.style.setProperty("--composer-space", `${height + 12}px`);
+    }
+    if (composerPlacementRef.current.controlsBottom !== bottom) {
+      composerPlacementRef.current.controlsBottom = bottom;
+      document.documentElement.style.setProperty("--scroll-controls-bottom", `${bottom}px`);
+    }
   }
 
   function clearChatLoader(chatId: string, startedAt: number) {
@@ -3866,34 +3967,43 @@ function App() {
 
   useEffect(() => {
     if (!activeChat) {
-      setShowChatScrollTop(false);
-      setShowChatScrollBottom(false);
+      setChatScrollTopVisible(false);
+      setChatScrollBottomVisible(false);
       document.documentElement.style.removeProperty("--composer-space");
       document.documentElement.style.removeProperty("--scroll-controls-bottom");
       return;
     }
 
-    const update = () => {
+    const updateNow = () => {
+      layoutMeasureRafRef.current = undefined;
       updateComposerPlacement();
       updateChatBottomState();
     };
+    const scheduleUpdate = () => {
+      if (layoutMeasureRafRef.current) return;
+      layoutMeasureRafRef.current = window.requestAnimationFrame(updateNow);
+    };
     const timers = [
-      window.setTimeout(update, 80),
-      window.setTimeout(update, 260)
+      window.setTimeout(scheduleUpdate, 80),
+      window.setTimeout(scheduleUpdate, 260)
     ];
-    const raf = window.requestAnimationFrame(update);
-    const observer = new ResizeObserver(() => update());
+    const raf = window.requestAnimationFrame(updateNow);
+    const observer = new ResizeObserver(scheduleUpdate);
     const scroller = getChatScroller();
     [scroller, shellRef.current, chatThreadRef.current, composerRef.current]
       .filter((element, index, list): element is HTMLElement => Boolean(element) && list.indexOf(element) === index)
       .forEach((element) => observer.observe(element));
-    window.addEventListener("resize", update);
+    window.addEventListener("resize", scheduleUpdate);
 
     return () => {
       window.cancelAnimationFrame(raf);
+      if (layoutMeasureRafRef.current) {
+        window.cancelAnimationFrame(layoutMeasureRafRef.current);
+        layoutMeasureRafRef.current = undefined;
+      }
       timers.forEach((timer) => window.clearTimeout(timer));
       observer.disconnect();
-      window.removeEventListener("resize", update);
+      window.removeEventListener("resize", scheduleUpdate);
     };
   }, [activeChat, activeChatId, chatIsLoading, timelineItems.length, messages.length, jobs.length, view]);
 
@@ -3906,8 +4016,8 @@ function App() {
   useEffect(() => {
     if (!loadedChatAutoScroll || loadedChatAutoScroll.chatId !== activeChatId || chatIsLoading || !activeChat) return;
     chatStickToBottomRef.current = true;
-    setShowJumpToLatest(false);
-    setShowChatScrollBottom(false);
+    setJumpToLatestVisible(false);
+    setChatScrollBottomVisible(false);
 
     const { chatId, behavior, tick } = loadedChatAutoScroll;
     const timers: number[] = [];
@@ -3934,8 +4044,8 @@ function App() {
   useEffect(() => {
     if (!restoredChatScrollId || restoredChatScrollId !== activeChatId || chatIsLoading || !activeChat) return;
     chatStickToBottomRef.current = true;
-    setShowJumpToLatest(false);
-    setShowChatScrollBottom(false);
+    setJumpToLatestVisible(false);
+    setChatScrollBottomVisible(false);
 
     const timers: number[] = [];
     const scrollDown = () => {
@@ -4044,7 +4154,7 @@ function App() {
       previousMessageIdsRef.current = nextIds;
       previousMessageSignaturesRef.current = nextSignatures;
       setHighlightedMessageIds(new Set());
-      setShowJumpToLatest(false);
+      setJumpToLatestVisible(false);
       chatStickToBottomRef.current = true;
       window.requestAnimationFrame(() => scrollChatToLatest("auto"));
       return;
@@ -4078,8 +4188,8 @@ function App() {
         }, 180);
       }
       else {
-        setShowJumpToLatest(true);
-        setShowChatScrollBottom(true);
+        setJumpToLatestVisible(true);
+        setChatScrollBottomVisible(true);
       }
     });
   }, [activeChatId, messages]);
