@@ -813,6 +813,25 @@ textarea:focus {
   color: var(--accent-2);
 }
 
+.nav-chat-loading {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.nav-chat-loading svg {
+  flex: 0 0 auto;
+  color: var(--accent-2);
+}
+
 .nav-empty {
   padding: 6px 8px;
 }

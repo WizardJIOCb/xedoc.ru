@@ -2122,6 +2122,7 @@ function App() {
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [repoKey, setRepoKey] = useState("");
   const [activeChatId, setActiveChatId] = useState("");
+  const [chatListLoadingRepoKey, setChatListLoadingRepoKey] = useState("");
   const [chatLoadingId, setChatLoadingId] = useState("");
   const [chatLoadingProgress, setChatLoadingProgress] = useState<ChatLoadingProgress | null>(null);
   const [sandbox, setSandbox] = useState<Sandbox>("danger-full-access");
@@ -2426,6 +2427,7 @@ function App() {
   const loadJobTimerRef = useRef<number | undefined>(undefined);
   const loadAllJobsTimerRef = useRef<number | undefined>(undefined);
   const loadChatsAbortRef = useRef<AbortController | null>(null);
+  const chatListLoadingControllerRef = useRef<AbortController | null>(null);
   const loadChatAbortRef = useRef<AbortController | null>(null);
   const loadChatInFlightRef = useRef<{ chatId: string; controller: AbortController; foreground: boolean } | null>(null);
   const wsMessageQueueRef = useRef<any[]>([]);
@@ -2843,14 +2845,21 @@ function App() {
     setSearchOpenedChat({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
   }
 
-  async function loadChats(repo: Repo, selectFirst = false): Promise<Chat[] | undefined> {
+  async function loadChats(repo: Repo, selectFirst = false, options: { showLoading?: boolean } = {}): Promise<Chat[] | undefined> {
+    const loadingRepoKey = repoKeyFor(repo);
     const controller = new AbortController();
     loadChatsAbortRef.current = controller;
+    if (options.showLoading) {
+      chatListLoadingControllerRef.current = controller;
+      setChatListLoadingRepoKey(loadingRepoKey);
+      setChats([]);
+    }
     try {
       const response = await api(`/api/chats?agentId=${encodeURIComponent(repo.agentId)}&repoId=${encodeURIComponent(repo.id)}`);
       if (loadChatsAbortRef.current !== controller) return;
       if (!response.ok) {
         loadChatsAbortRef.current = null;
+        if (options.showLoading) setChats([]);
         return;
       }
       const nextChats = (await response.json()).chats as Chat[];
@@ -2870,8 +2879,17 @@ function App() {
       }
       return nextChats;
     } catch (error) {
-      if (!isAbortError(error)) throw error;
+      if (!isAbortError(error)) {
+        if (options.showLoading) setChats([]);
+        throw error;
+      }
       return undefined;
+    } finally {
+      if (loadChatsAbortRef.current === controller) loadChatsAbortRef.current = null;
+      if (options.showLoading && chatListLoadingControllerRef.current === controller) {
+        chatListLoadingControllerRef.current = null;
+        setChatListLoadingRepoKey((current) => (current === loadingRepoKey ? "" : current));
+      }
     }
   }
 
@@ -3179,7 +3197,7 @@ function App() {
     setChatMenuId("");
     setProjectActionsOpen(false);
     saveProjectState(repo);
-    loadChats(repo);
+    loadChats(repo, false, { showLoading: true });
     void syncLocalChats(repo);
   }
 
@@ -3187,6 +3205,7 @@ function App() {
     setMobileMenuOpen(false);
     setView("projects");
     setRepoKey("");
+    setChatListLoadingRepoKey("");
     setChats([]);
     resetActiveChatView();
     setProjectPanel(null);
@@ -3444,7 +3463,7 @@ function App() {
     setChatMenuId("");
     setProjectActionsOpen(false);
     void (async () => {
-      const nextChats = await loadChats(repo).catch(() => undefined);
+      const nextChats = await loadChats(repo, false, { showLoading: true }).catch(() => undefined);
       if (!stored.chatId) return;
       setRestoredChatScrollId(stored.chatId);
       if (nextChats && !nextChats.some((chat) => chat.id === stored.chatId)) {
@@ -6827,6 +6846,7 @@ function App() {
                 const selected = selectedRepo?.agentId === repo.agentId && selectedRepo.id === repo.id;
                 const currentRepoKey = `${repo.agentId}:${repo.id}`;
                 const busyProjectCount = busyCountByRepo.get(currentRepoKey) ?? 0;
+                const chatListLoading = chatListLoadingRepoKey === currentRepoKey;
                 return (
                   <div className={selected ? "nav-project open" : "nav-project"} key={currentRepoKey}>
                     <button className={selected ? "nav-leaf project active" : "nav-leaf project"} onClick={() => selectProject(repo)}>
@@ -6843,7 +6863,12 @@ function App() {
                     </button>
                     {selected && (
                       <div className="nav-project-chats">
-                        {chats.map((chat) => (
+                        {chatListLoading ? (
+                          <div className="nav-chat-loading" role="status" aria-live="polite">
+                            <RefreshCw className="spin" size={14} />
+                            <span>Загружаю чаты</span>
+                          </div>
+                        ) : chats.map((chat) => (
                           <div className={activeChatId === chat.id ? "nav-chat-row active" : "nav-chat-row"} key={chat.id}>
                             {renamingChatId === chat.id ? (
                               <form className="nav-chat-rename" onSubmit={(event) => renameChat(event, chat)}>
@@ -6909,7 +6934,7 @@ function App() {
                             )}
                           </div>
                         ))}
-                        {!chats.length && <span className="nav-empty inset">No chats</span>}
+                        {!chatListLoading && !chats.length && <span className="nav-empty inset">No chats</span>}
                       </div>
                     )}
                   </div>
