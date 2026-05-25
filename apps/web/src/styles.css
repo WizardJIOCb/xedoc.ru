@@ -51,21 +51,21 @@
   --text: #e7ece8;
   --muted: #a7b0aa;
   --soft: #7f8a84;
-  --accent: #4fd1b0;
-  --accent-hover: #7ee7ca;
-  --accent-text: #071413;
+  --accent: #2f7f6e;
+  --accent-hover: #3b927f;
+  --accent-text: #f3fffb;
   --accent-2: #c4b5fd;
   --danger: #f87171;
   --warn: #f4bf75;
   --shadow: 0 16px 38px rgba(0, 0, 0, 0.32);
-  --focus: rgba(79, 209, 176, 0.18);
+  --focus: rgba(47, 127, 110, 0.22);
   --notice: #202529;
   --notice-danger-bg: rgba(248, 113, 113, 0.13);
   --notice-danger-text: #fecaca;
   --notice-warning-bg: rgba(244, 191, 117, 0.14);
   --notice-warning-text: #fde68a;
-  --notice-success-bg: rgba(79, 209, 176, 0.14);
-  --notice-success-text: #99f6e4;
+  --notice-success-bg: rgba(47, 127, 110, 0.18);
+  --notice-success-text: #b6f2df;
 }
 
 :root[data-theme="lagoon"] {
