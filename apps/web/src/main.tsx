@@ -87,6 +87,7 @@ const PROJECT_DOMAIN_ROOT = "codex.rodion.pro";
 const DEFAULT_GITHUB_OWNER = "WizardJIOCb";
 const DEFAULT_DEPLOY_SSH_TARGET = "myserver";
 const DEFAULT_SERVER_ROOT = "/var/www";
+const LAST_PROJECT_STATE_STORAGE_PREFIX = "cmc.lastProjectState";
 const SPEED_OPTIONS: Array<{ value: CodexSpeed; label: string; note: string }> = [
   { value: "standard", label: "Standard", note: "Default speed, normal usage" },
   { value: "fast", label: "Fast", note: "Saved with run metadata" }
@@ -364,6 +365,12 @@ type ProjectFileEditor = {
   saving: boolean;
   notice: string;
   error: string;
+};
+
+type StoredProjectState = {
+  repoKey: string;
+  chatId?: string;
+  savedAt?: number;
 };
 
 type PendingAttachment = {
@@ -6232,6 +6239,19 @@ function App() {
     );
   }
 
+  function renderProjectActionNotices(className = "cockpit-notices") {
+    if (!(gitNotice || launchNotice || deployNotice || nginxNotice || sslNotice)) return null;
+    return (
+      <div className={className}>
+        {gitNotice && <pre>{gitNotice}</pre>}
+        {launchNotice && <pre>{launchNotice}</pre>}
+        {deployNotice && <pre>{deployNotice}</pre>}
+        {nginxNotice && <pre>{nginxNotice}</pre>}
+        {sslNotice && <pre>{sslNotice}</pre>}
+      </div>
+    );
+  }
+
   function renderProjectOverview() {
     if (!selectedRepo || activeChat) return null;
     const previewLabel = selectedRepo.domain || selectedRepo.githubUrl || selectedRepo.pathMasked;
@@ -6479,6 +6499,26 @@ function App() {
                   {selectedModelLabel} · {selectedReasoningLabel} · {selectedSpeedLabel}
                 </div>
                 {vscodeNotice && <div className="menu-summary">{vscodeNotice}</div>}
+                <div className="action-menu-fields" role="none">
+                  <input
+                    aria-label="Commit message"
+                    placeholder="Commit message"
+                    value={gitMessage}
+                    onChange={(event) => setGitMessage(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.preventDefault();
+                    }}
+                  />
+                  <input
+                    aria-label="Remote URL"
+                    placeholder="Remote URL, optional"
+                    value={gitRemoteUrl}
+                    onChange={(event) => setGitRemoteUrl(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.preventDefault();
+                    }}
+                  />
+                </div>
                 <div className="menu-divider" />
                 <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
                   <Rocket size={16} />
@@ -6922,106 +6962,101 @@ function App() {
               </div>
             )}
             {!activeChat && renderProjectOverview()}
-            <form className="project-cockpit" onSubmit={syncGit}>
-              <div className="cockpit-main">
-                <div className="cockpit-title">
-                  <strong>{selectedRepo.name}</strong>
-                  <span>
-                    <GitBranch size={14} /> {selectedRepo.currentBranch || "no branch"} · {selectedRepo.dirty ? "dirty" : "clean"}
-                    {selectedRepo.data?.path && <> · <Database size={14} /> {selectedRepo.data.path}</>}
-                  </span>
-                </div>
-                <button
-                  className="cockpit-launch"
-                  disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)}
-                  type="button"
-                  onClick={() => {
-                    setProjectActionsOpen(false);
-                    void launchProject();
-                  }}
-                >
-                  <Rocket size={16} />
-                  Launch
-                </button>
-                <div className="project-action-control">
+            {!activeChat && (
+              <form className="project-cockpit" onSubmit={syncGit}>
+                <div className="cockpit-main">
+                  <div className="cockpit-title">
+                    <strong>{selectedRepo.name}</strong>
+                    <span>
+                      <GitBranch size={14} /> {selectedRepo.currentBranch || "no branch"} · {selectedRepo.dirty ? "dirty" : "clean"}
+                      {selectedRepo.data?.path && <> · <Database size={14} /> {selectedRepo.data.path}</>}
+                    </span>
+                  </div>
                   <button
-                    aria-expanded={projectActionsOpen}
-                    className="secondary compact"
+                    className="cockpit-launch"
+                    disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)}
                     type="button"
-                    onClick={() => setProjectActionsOpen((value) => !value)}
+                    onClick={() => {
+                      setProjectActionsOpen(false);
+                      void launchProject();
+                    }}
                   >
-                    <MoreHorizontal size={16} /> Actions
+                    <Rocket size={16} />
+                    Launch
                   </button>
-                  {projectActionsOpen && (
-                    <div className="project-action-menu" role="menu">
-                      <button disabled={launchBusy || gitBusy || !gitMessage.trim()} role="menuitem" type="submit" onClick={() => setProjectActionsOpen(false)}>
-                        <UploadCloud size={16} />
-                        <span className="step-badge">1</span>
-                        <span>Commit & push</span>
-                      </button>
-                      <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
-                        setProjectActionsOpen(false);
-                        void deployProject();
-                      }}>
-                        <UploadCloud size={16} />
-                        <span className="step-badge">2</span>
-                        <span>Deploy</span>
-                      </button>
-                      <button disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
-                        setProjectActionsOpen(false);
-                        void configureNginx();
-                      }}>
-                        <Settings size={16} />
-                        <span className="step-badge">3</span>
-                        <span>Nginx</span>
-                      </button>
-                      <button disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
-                        setProjectActionsOpen(false);
-                        void configureSsl();
-                      }}>
-                        <Settings size={16} />
-                        <span className="step-badge">4</span>
-                        <span>SSL</span>
-                      </button>
-                      <button disabled={!selectedProjectUrl} role="menuitem" type="button" onClick={() => {
-                        if (!selectedProjectUrl) return;
-                        setProjectActionsOpen(false);
-                        window.open(selectedProjectUrl, "_blank", "noopener,noreferrer");
-                      }}>
-                        <ExternalLink size={16} />
-                        <span className="step-badge">5</span>
-                        <span>Open</span>
-                      </button>
-                      <div className="menu-divider" />
-                      <button role="menuitem" type="button" onClick={() => {
-                        setProjectActionsOpen(false);
-                        openProjectSettings(selectedRepo);
-                      }}>
-                        <Settings size={16} />
-                        <span>Project settings</span>
-                      </button>
-                    </div>
-                  )}
+                  <div className="project-action-control">
+                    <button
+                      aria-expanded={projectActionsOpen}
+                      className="secondary compact"
+                      type="button"
+                      onClick={() => setProjectActionsOpen((value) => !value)}
+                    >
+                      <MoreHorizontal size={16} /> Actions
+                    </button>
+                    {projectActionsOpen && (
+                      <div className="project-action-menu" role="menu">
+                        <button disabled={launchBusy || gitBusy || !gitMessage.trim()} role="menuitem" type="submit" onClick={() => setProjectActionsOpen(false)}>
+                          <UploadCloud size={16} />
+                          <span className="step-badge">1</span>
+                          <span>Commit & push</span>
+                        </button>
+                        <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
+                          setProjectActionsOpen(false);
+                          void deployProject();
+                        }}>
+                          <UploadCloud size={16} />
+                          <span className="step-badge">2</span>
+                          <span>Deploy</span>
+                        </button>
+                        <button disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
+                          setProjectActionsOpen(false);
+                          void configureNginx();
+                        }}>
+                          <Settings size={16} />
+                          <span className="step-badge">3</span>
+                          <span>Nginx</span>
+                        </button>
+                        <button disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
+                          setProjectActionsOpen(false);
+                          void configureSsl();
+                        }}>
+                          <Settings size={16} />
+                          <span className="step-badge">4</span>
+                          <span>SSL</span>
+                        </button>
+                        <button disabled={!selectedProjectUrl} role="menuitem" type="button" onClick={() => {
+                          if (!selectedProjectUrl) return;
+                          setProjectActionsOpen(false);
+                          window.open(selectedProjectUrl, "_blank", "noopener,noreferrer");
+                        }}>
+                          <ExternalLink size={16} />
+                          <span className="step-badge">5</span>
+                          <span>Open</span>
+                        </button>
+                        <div className="menu-divider" />
+                        <button role="menuitem" type="button" onClick={() => {
+                          setProjectActionsOpen(false);
+                          openProjectSettings(selectedRepo);
+                        }}>
+                          <Settings size={16} />
+                          <span>Project settings</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <div className="cockpit-fields">
-                <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
-                <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
-              </div>
-              {(gitNotice || launchNotice || deployNotice || nginxNotice || sslNotice) && (
-                <div className="cockpit-notices">
-                  {gitNotice && <pre>{gitNotice}</pre>}
-                  {launchNotice && <pre>{launchNotice}</pre>}
-                  {deployNotice && <pre>{deployNotice}</pre>}
-                  {nginxNotice && <pre>{nginxNotice}</pre>}
-                  {sslNotice && <pre>{sslNotice}</pre>}
+                <div className="cockpit-fields">
+                  <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
+                  <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
                 </div>
-              )}
-            </form>
+                {renderProjectActionNotices()}
+              </form>
+            )}
             {!activeChat && renderProjectRecentChats()}
             {activeChat ? (
               <>
                 {chatNotice && <div className={chatNoticeOk ? "notice success" : "notice danger"}>{chatNotice}</div>}
+                {renderProjectActionNotices("cockpit-notices active-chat-action-notices")}
                 <section className="workspace">
                   <section className="job-detail">
                     <section className="chat-thread" ref={chatThreadRef}>

@@ -2998,6 +2998,35 @@ a.secondary {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
+.action-menu-fields {
+  display: grid;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+
+.sticky-submit .action-menu .action-menu-fields input {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--field);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.sticky-submit .action-menu .action-menu-fields input:focus {
+  outline: 2px solid var(--focus);
+  border-color: var(--line-strong);
+}
+
+.active-chat-action-notices {
+  margin-top: -2px;
+}
+
 .sticky-submit .run-button {
   width: 100%;
 }
