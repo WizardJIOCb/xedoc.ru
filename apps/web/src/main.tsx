@@ -590,6 +590,10 @@ function projectUrl(domain?: string) {
   return normalized ? `https://${normalized}` : "";
 }
 
+function repoKeyFor(repo: Pick<Repo, "agentId" | "id">) {
+  return `${repo.agentId}:${repo.id}`;
+}
+
 function appendProjectPath(root: string, segment: string) {
   const trimmed = root.trim().replace(/[\\/]+$/g, "");
   if (!trimmed) return segment;
@@ -2431,6 +2435,7 @@ function App() {
   const projectActionBusyRef = useRef<Record<string, boolean>>({});
   const pendingVscodeThreadRefreshRef = useRef<Set<string>>(new Set());
   const chatLoadingStartedRef = useRef(0);
+  const projectStateRestoredRef = useRef(false);
   const shellRef = useRef<HTMLElement | null>(null);
   const chatThreadRef = useRef<HTMLElement | null>(null);
   const composerRef = useRef<HTMLFormElement | null>(null);
@@ -2701,6 +2706,46 @@ function App() {
     );
   }
 
+  function storedProjectStateKey() {
+    return currentUser?.id ? `${LAST_PROJECT_STATE_STORAGE_PREFIX}:${currentUser.id}` : LAST_PROJECT_STATE_STORAGE_PREFIX;
+  }
+
+  function readStoredProjectState(): StoredProjectState | null {
+    try {
+      const raw = localStorage.getItem(storedProjectStateKey());
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as StoredProjectState;
+      if (!parsed.repoKey || typeof parsed.repoKey !== "string" || !parsed.repoKey.includes(":")) return null;
+      return {
+        repoKey: parsed.repoKey,
+        chatId: typeof parsed.chatId === "string" && parsed.chatId ? parsed.chatId : undefined,
+        savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : undefined
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function saveProjectState(repo: Repo, chatId = "") {
+    try {
+      localStorage.setItem(storedProjectStateKey(), JSON.stringify({
+        repoKey: repoKeyFor(repo),
+        chatId: chatId || undefined,
+        savedAt: Date.now()
+      }));
+    } catch {
+      // Ignore blocked storage.
+    }
+  }
+
+  function clearStoredProjectState() {
+    try {
+      localStorage.removeItem(storedProjectStateKey());
+    } catch {
+      // Ignore blocked storage.
+    }
+  }
+
   async function refresh() {
     const [agentResponse, repoResponse, jobsResponse] = await Promise.all([api("/api/agents"), api("/api/repos"), api("/api/jobs")]);
     if (agentResponse.ok) setAgents((await agentResponse.json()).agents);
@@ -2796,7 +2841,7 @@ function App() {
     setSearchOpenedChat({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
   }
 
-  async function loadChats(repo: Repo, selectFirst = false) {
+  async function loadChats(repo: Repo, selectFirst = false): Promise<Chat[] | undefined> {
     const controller = new AbortController();
     loadChatsAbortRef.current = controller;
     try {
@@ -2806,7 +2851,7 @@ function App() {
         loadChatsAbortRef.current = null;
         return;
       }
-      const nextChats = (await response.json()).chats;
+      const nextChats = (await response.json()).chats as Chat[];
       if (loadChatsAbortRef.current !== controller) return;
       loadChatsAbortRef.current = null;
       const activeId = activeChatIdRef.current;
@@ -2819,10 +2864,12 @@ function App() {
       });
       if (selectFirst && nextChats[0]) {
         await loadChat(nextChats[0].id, undefined, true);
-        return;
+        return nextChats;
       }
+      return nextChats;
     } catch (error) {
       if (!isAbortError(error)) throw error;
+      return undefined;
     }
   }
 
@@ -2966,6 +3013,8 @@ function App() {
         return [data.chat, ...withoutLoaded].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
       });
       setActiveChatId(chatId);
+      const repo = selectedRepoRef.current;
+      if (repo) saveProjectState(repo, chatId);
       setJobs((current) => mergeJobs(current.filter((job) => job.chatId === chatId), data.jobs));
       setAllJobs((current) => mergeJobs(current, data.jobs));
       setProgressByJob((current) => ({ ...current, ...progressMapFromJobs(data.jobs) }));
@@ -3110,7 +3159,7 @@ function App() {
   }
 
   function selectProject(repo: Repo) {
-    const nextRepoKey = `${repo.agentId}:${repo.id}`;
+    const nextRepoKey = repoKeyFor(repo);
     setMobileMenuOpen(false);
     setView("projects");
     setRepoKey(nextRepoKey);
@@ -3127,6 +3176,7 @@ function App() {
     setChatProperties(null);
     setChatMenuId("");
     setProjectActionsOpen(false);
+    saveProjectState(repo);
     loadChats(repo);
     void syncLocalChats(repo);
   }
@@ -3146,6 +3196,7 @@ function App() {
     setNginxNotice("");
     setSslNotice("");
     setLaunchNotice("");
+    clearStoredProjectState();
   }
 
   function openSettingsView() {
@@ -3354,6 +3405,47 @@ function App() {
       refresh();
     });
   }, []);
+
+  useEffect(() => {
+    if (!csrf || !currentUser || isAdminRoute || projectStateRestoredRef.current || !repos.length) return;
+    projectStateRestoredRef.current = true;
+    const stored = readStoredProjectState();
+    if (!stored) return;
+    const repo = repos.find((item) => repoKeyFor(item) === stored.repoKey);
+    if (!repo) {
+      clearStoredProjectState();
+      return;
+    }
+    setMobileMenuOpen(false);
+    setView("projects");
+    setRepoKey(stored.repoKey);
+    setSandbox(repo.defaultSandbox);
+    setGitMessage(`Update ${repo.name}`);
+    setGitRemoteUrl(repo.githubUrl ?? "");
+    setGitNotice("");
+    setDeployNotice("");
+    setNginxNotice("");
+    setSslNotice("");
+    setLaunchNotice("");
+    resetActiveChatView();
+    setProjectPanel(null);
+    setChatProperties(null);
+    setChatMenuId("");
+    setProjectActionsOpen(false);
+    void (async () => {
+      const nextChats = await loadChats(repo).catch(() => undefined);
+      if (!stored.chatId) return;
+      if (nextChats && !nextChats.some((chat) => chat.id === stored.chatId)) {
+        resetActiveChatView();
+        saveProjectState(repo);
+        return;
+      }
+      await loadChat(stored.chatId, undefined, true).catch(() => {
+        resetActiveChatView();
+        saveProjectState(repo);
+      });
+    })();
+  }, [csrf, currentUser, isAdminRoute, repos]);
 
   useEffect(() => {
     const error = new URLSearchParams(window.location.search).get("oauth_error");
@@ -4022,6 +4114,7 @@ function App() {
     setChats(nextChats);
     if (activeChatId === chat.id) {
       resetActiveChatView();
+      saveProjectState(selectedRepo);
     }
     await loadChats(selectedRepo);
   }
