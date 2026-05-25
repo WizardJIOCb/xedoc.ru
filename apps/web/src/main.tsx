@@ -6086,12 +6086,17 @@ function App() {
           </div>
           {selectedProjectUrl ? (
             <div className="project-site-preview">
-              <span className="project-site-browser">
-                <i />
-                <i />
-                <i />
-                <strong>{selectedProjectUrl}</strong>
-              </span>
+              <div className="project-site-framebar">
+                <span className="project-site-browser">
+                  <i />
+                  <i />
+                  <i />
+                  <strong>{selectedProjectUrl}</strong>
+                </span>
+                <a className="project-site-open" href={selectedProjectUrl} target="_blank" rel="noreferrer">
+                  <ExternalLink size={14} /> Open
+                </a>
+              </div>
               <iframe
                 loading="lazy"
                 referrerPolicy="no-referrer"
@@ -6099,9 +6104,6 @@ function App() {
                 src={selectedProjectUrl}
                 title={`Preview ${selectedRepo.name}`}
               />
-              <a className="project-site-open" href={selectedProjectUrl} target="_blank" rel="noreferrer">
-                <ExternalLink size={14} /> Open
-              </a>
             </div>
           ) : (
             <div className="project-site-empty">
