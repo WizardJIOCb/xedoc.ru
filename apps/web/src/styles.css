@@ -773,7 +773,6 @@ textarea:focus {
 }
 
 .nav-chat-row.active .nav-leaf.chat-child {
-  padding-right: 58px;
   color: var(--text);
   border-color: color-mix(in srgb, var(--accent-2) 48%, var(--line));
   background:
@@ -788,23 +787,6 @@ textarea:focus {
   background: var(--panel);
 }
 
-.nav-chat-row.active .nav-leaf.chat-child::after {
-  content: "Открыт";
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  max-width: 46px;
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--accent-2) 38%, var(--line));
-  border-radius: 999px;
-  color: var(--accent-2);
-  background: var(--panel);
-  font-size: 9px;
-  font-weight: 900;
-  line-height: 1.2;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
 
 .nav-chat-row.active .nav-chat-title span {
   font-weight: 850;
