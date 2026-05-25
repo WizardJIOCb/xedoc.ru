@@ -6107,45 +6107,51 @@ function App() {
             </div>
           </article>
         )}
-        <article className="project-recent-card">
-          <div className="project-home-head">
-            <div>
-              <h3><MessageSquare size={16} /> Последние чаты</h3>
-              <small>{recentProjectChats.length ? `${recentProjectChats.length} последних` : "Нет истории"}</small>
-            </div>
-            <button className="secondary compact" type="button" onClick={openProjectNewChat}>
-              <Plus size={15} /> Новый чат
-            </button>
-          </div>
-          <div className="project-recent-list">
-            {recentProjectChats.map((chat) => (
-              <button
-                className="project-recent-chat"
-                key={chat.id}
-                type="button"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  setView("projects");
-                  loadChat(chat.id, undefined, true).catch(() => undefined);
-                }}
-              >
-                <span>
-                  <strong>{chat.title}</strong>
-                  <small>{chatIdentityText(chat)}</small>
-                </span>
-                <time dateTime={chat.updatedAt}>{formatDateTime(chat.updatedAt)}</time>
-              </button>
-            ))}
-            {!recentProjectChats.length && (
-              <div className="project-recent-empty">
-                <MessageSquare size={18} />
-                <strong>Чатов пока нет</strong>
-                <small>Первое сообщение создаст чат.</small>
-              </div>
-            )}
-          </div>
-        </article>
       </section>
+    );
+  }
+
+  function renderProjectRecentChats() {
+    if (!selectedRepo || activeChat) return null;
+    return (
+      <article className="project-recent-card">
+        <div className="project-home-head">
+          <div>
+            <h3><MessageSquare size={16} /> Последние чаты</h3>
+            <small>{recentProjectChats.length ? `${recentProjectChats.length} последних` : "Нет истории"}</small>
+          </div>
+          <button className="secondary compact" type="button" onClick={openProjectNewChat}>
+            <Plus size={15} /> Новый чат
+          </button>
+        </div>
+        <div className="project-recent-list">
+          {recentProjectChats.map((chat) => (
+            <button
+              className="project-recent-chat"
+              key={chat.id}
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                setView("projects");
+                loadChat(chat.id, undefined, true).catch(() => undefined);
+              }}
+            >
+              <span>
+                <strong>{chat.title}</strong>
+                <small>{chatIdentityText(chat)}</small>
+              </span>
+              <time dateTime={chat.updatedAt}>{formatDateTime(chat.updatedAt)}</time>
+            </button>
+          ))}
+          {!recentProjectChats.length && (
+            <div className="project-recent-empty">
+              <MessageSquare size={18} />
+              <strong>Чатов пока нет</strong>
+              <small>Первое сообщение создаст чат.</small>
+            </div>
+          )}
+        </div>
+      </article>
     );
   }
 
@@ -6837,6 +6843,7 @@ function App() {
                 </div>
               )}
             </form>
+            {!activeChat && renderProjectRecentChats()}
             {activeChat ? (
               <>
                 {chatNotice && <div className={chatNoticeOk ? "notice success" : "notice danger"}>{chatNotice}</div>}
@@ -6948,10 +6955,7 @@ function App() {
                 </section>
               </>
             ) : (
-              <>
-                <div className="empty">Нет выбранного чата. Первое сообщение создаст чат, следующие продолжат его.</div>
-                {renderComposer()}
-              </>
+              renderComposer()
             )}
           </section>
         </section>
