@@ -2223,6 +2223,7 @@ function App() {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [showChatScrollTop, setShowChatScrollTop] = useState(false);
   const [showChatScrollBottom, setShowChatScrollBottom] = useState(false);
+  const [restoredChatScrollId, setRestoredChatScrollId] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [adminTab, setAdminTab] = useState<"users" | "stats">("users");
@@ -3407,6 +3408,15 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!("scrollRestoration" in window.history)) return;
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+    return () => {
+      window.history.scrollRestoration = previous;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!csrf || !currentUser || isAdminRoute || projectStateRestoredRef.current || !repos.length) return;
     projectStateRestoredRef.current = true;
     const stored = readStoredProjectState();
@@ -3435,14 +3445,17 @@ function App() {
     void (async () => {
       const nextChats = await loadChats(repo).catch(() => undefined);
       if (!stored.chatId) return;
+      setRestoredChatScrollId(stored.chatId);
       if (nextChats && !nextChats.some((chat) => chat.id === stored.chatId)) {
         resetActiveChatView();
         saveProjectState(repo);
+        setRestoredChatScrollId("");
         return;
       }
       await loadChat(stored.chatId, undefined, true).catch(() => {
         resetActiveChatView();
         saveProjectState(repo);
+        setRestoredChatScrollId("");
       });
     })();
   }, [csrf, currentUser, isAdminRoute, repos]);
@@ -3640,6 +3653,33 @@ function App() {
     const raf = window.requestAnimationFrame(() => scrollChatToLatest("smooth"));
     return () => window.cancelAnimationFrame(raf);
   }, [showChatThinkingIndicator, activeChatId]);
+
+  useEffect(() => {
+    if (!restoredChatScrollId || restoredChatScrollId !== activeChatId || chatIsLoading || !activeChat) return;
+    chatStickToBottomRef.current = true;
+    setShowJumpToLatest(false);
+    setShowChatScrollBottom(false);
+
+    const timers: number[] = [];
+    const scrollDown = () => {
+      if (activeChatIdRef.current !== restoredChatScrollId) return;
+      scrollChatToLatest("smooth");
+    };
+    const raf = window.requestAnimationFrame(() => {
+      scrollDown();
+      timers.push(window.setTimeout(scrollDown, 120));
+      timers.push(window.setTimeout(scrollDown, 320));
+      timers.push(window.setTimeout(() => {
+        scrollDown();
+        if (activeChatIdRef.current === restoredChatScrollId) setRestoredChatScrollId("");
+      }, 560));
+    });
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [restoredChatScrollId, activeChatId, activeChat, chatIsLoading, messages.length, timelineItems.length]);
 
   useEffect(() => {
     if (!activeChat || chatIsLoading) return;
