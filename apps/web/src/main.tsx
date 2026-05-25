@@ -2148,6 +2148,7 @@ function App() {
   const [projectWizardStep, setProjectWizardStep] = useState<ProjectWizardStep>("project");
   const [sandboxMenuOpen, setSandboxMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [actionGitOptionsOpen, setActionGitOptionsOpen] = useState(false);
   const [projectActionsOpen, setProjectActionsOpen] = useState(false);
   const [codexModel, setCodexModel] = useState("gpt-5.5");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
@@ -3536,6 +3537,10 @@ function App() {
     document.addEventListener("pointerdown", closeComposerMenusOnOutsidePointer, true);
     return () => document.removeEventListener("pointerdown", closeComposerMenusOnOutsidePointer, true);
   }, [actionMenuOpen, sandboxMenuOpen]);
+
+  useEffect(() => {
+    if (!actionMenuOpen) setActionGitOptionsOpen(false);
+  }, [actionMenuOpen]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = uiTheme;
@@ -6632,26 +6637,45 @@ function App() {
                   {selectedModelLabel} · {selectedReasoningLabel} · {selectedSpeedLabel}
                 </div>
                 {vscodeNotice && <div className="menu-summary">{vscodeNotice}</div>}
-                <div className="action-menu-fields" role="none">
-                  <input
-                    aria-label="Commit message"
-                    placeholder="Commit message"
-                    value={gitMessage}
-                    onChange={(event) => setGitMessage(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") event.preventDefault();
-                    }}
-                  />
-                  <input
-                    aria-label="Remote URL"
-                    placeholder="Remote URL, optional"
-                    value={gitRemoteUrl}
-                    onChange={(event) => setGitRemoteUrl(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") event.preventDefault();
-                    }}
-                  />
-                </div>
+                <button
+                  aria-expanded={actionGitOptionsOpen}
+                  className="menu-disclosure"
+                  role="menuitem"
+                  type="button"
+                  onClick={() => setActionGitOptionsOpen((value) => !value)}
+                >
+                  <GitBranch size={16} />
+                  <span>Git options</span>
+                  <ChevronDown className={actionGitOptionsOpen ? "open" : ""} size={15} />
+                </button>
+                {actionGitOptionsOpen && (
+                  <div className="action-menu-fields" role="none">
+                    <label>
+                      <span>Commit message</span>
+                      <input
+                        aria-label="Commit message"
+                        placeholder="Commit message"
+                        value={gitMessage}
+                        onChange={(event) => setGitMessage(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.preventDefault();
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span>Remote URL</span>
+                      <input
+                        aria-label="Remote URL"
+                        placeholder="optional"
+                        value={gitRemoteUrl}
+                        onChange={(event) => setGitRemoteUrl(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.preventDefault();
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
                 <div className="menu-divider" />
                 <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
                   <Rocket size={16} />

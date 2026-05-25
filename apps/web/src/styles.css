@@ -3004,6 +3004,24 @@ a.secondary {
   padding: 4px 0 2px;
 }
 
+.sticky-submit .action-menu .menu-disclosure svg:last-child {
+  margin-left: auto;
+  transition: transform 0.16s ease;
+}
+
+.sticky-submit .action-menu .menu-disclosure .open {
+  transform: rotate(180deg);
+}
+
+.action-menu-fields label {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
 .sticky-submit .action-menu .action-menu-fields input {
   width: 100%;
   min-height: 32px;
