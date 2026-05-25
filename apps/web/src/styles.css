@@ -557,9 +557,9 @@ textarea:focus {
 
 .nav-project.open {
   gap: 7px;
-  padding: 6px;
-  border: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 62%, transparent);
+  padding: 0 0 0 6px;
+  border: 0;
+  background: transparent;
 }
 
 .nav-project.open > .nav-leaf.project {
