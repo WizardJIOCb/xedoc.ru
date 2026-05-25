@@ -2267,7 +2267,7 @@ a.secondary {
 
 .project-site-preview iframe {
   width: 100%;
-  height: 230px;
+  height: 460px;
   flex: 0 0 auto;
   display: block;
   border: 0;
@@ -4931,7 +4931,7 @@ button:disabled {
   }
 
   .project-site-preview iframe {
-    height: 190px;
+    height: 380px;
   }
 
   .project-recent-chat time {
