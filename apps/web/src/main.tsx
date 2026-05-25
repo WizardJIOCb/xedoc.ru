@@ -2105,6 +2105,31 @@ function App() {
   const projectFormAgent = agents.find((agent) => agent.id === projectAgentId) ?? selectedAgent;
   const online = Boolean(selectedAgent && selectedAgent.status === "online");
   const selectedAgentStatusLabel = selectedAgent ? `${selectedAgent.name} ${online ? "online" : "offline"}` : (online ? "Agent online" : "Agent offline");
+  const projectDraftDeployConfig = useMemo(() => (
+    buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null
+  ), [projectDeployBuildCommand, projectDeployCleanRemote, projectDeployMode, projectDeployRemoteSubdir, projectDeploySourceDir, projectDeploySshTarget]);
+  const projectSettingsNeedsAgent = useMemo(() => {
+    if (projectPanel !== "settings" || !selectedRepo) return false;
+    const normalizedDomain = normalizeProjectDomain(projectDomain);
+    return (
+      projectName.trim() !== selectedRepo.name
+      || projectPath.trim() !== originalProjectPath
+      || projectGithubUrl.trim() !== (selectedRepo.githubUrl ?? "")
+      || projectServerPath.trim() !== (selectedRepo.serverPath ?? "")
+      || normalizedDomain !== (selectedRepo.domain ?? "")
+      || JSON.stringify(projectDraftDeployConfig) !== JSON.stringify(selectedRepo.deploy ?? null)
+      || sandbox !== selectedRepo.defaultSandbox
+    );
+  }, [originalProjectPath, projectDraftDeployConfig, projectDomain, projectGithubUrl, projectName, projectPanel, projectPath, projectServerPath, sandbox, selectedRepo]);
+  const projectSaveAgentOnline = projectPanel === "new"
+    ? projectFormAgent?.status === "online"
+    : selectedRepoAgent?.status === "online";
+  const canSaveProject = Boolean(!busy && (
+    projectPanel === "new"
+      ? projectSaveAgentOnline
+      : selectedRepo && (!projectSettingsNeedsAgent || projectSaveAgentOnline)
+  ));
+  const canSaveAndRunProject = Boolean(canSaveProject && projectSaveAgentOnline && projectStartPrompt.trim());
   const repoAgentLabel = (repo: Repo) => agentNameById.get(repo.agentId) ?? repo.agentId;
   const selectedRepoAgentHost = selectedRepoAgent?.hostname?.trim().toLowerCase();
   const onlineAgentOnSameHost = selectedRepoAgent && selectedRepoAgent.status !== "online"
@@ -3532,9 +3557,15 @@ function App() {
     if (!csrf || !targetAgent || !projectName.trim() || !projectPath.trim()) return;
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const shouldRunPrompt = submitter?.value === "run-prompt" && Boolean(projectStartPrompt.trim());
+    if ((isNew || projectSettingsNeedsAgent) && !projectSaveAgentOnline) {
+      setProjectNotice(isNew
+        ? "Выбранный агент offline. Новый проект можно сохранить после подключения агента."
+        : "Агент проекта offline. Сейчас можно сохранить только Public/Private для Search; локальные поля сохранятся после подключения агента.");
+      return;
+    }
     setBusy(true);
     const normalizedDomain = normalizeProjectDomain(projectDomain);
-    const deployConfig = buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null;
+    const deployConfig = projectDraftDeployConfig;
     const body: Record<string, unknown> = isNew ? {
       agentId: targetAgent.id,
       name: projectName.trim(),
@@ -3566,7 +3597,11 @@ function App() {
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       setChatNoticeOk(false);
-      setChatNotice(data.error === "agent_local_busy" ? "Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web." : data.error || "Job start failed.");
+      setChatNotice(data.error === "agent_local_busy"
+        ? "Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web."
+        : data.error === "agent_offline"
+          ? "Агент проекта offline. Public/Private можно сохранить отдельно, а локальные поля проекта - после подключения агента."
+          : data.error || "Job start failed.");
       return;
     }
     const data = await response.json();
@@ -6119,9 +6154,16 @@ function App() {
             ))}
           </div>
           {projectNotice && <div className="notice danger">{projectNotice}</div>}
+          {projectPanel === "settings" && selectedRepoAgent?.status !== "online" && (
+            <div className="notice">
+              {projectSettingsNeedsAgent
+                ? "Агент проекта offline: сейчас можно сохранить только Public/Private для Search. Локальные поля сохранятся после подключения агента."
+                : "Агент проекта offline: Public/Private для Search можно сохранить прямо сейчас."}
+            </div>
+          )}
           <div className="project-form-actions">
-            <button disabled={busy || !(projectPanel === "new" ? projectFormAgent?.status === "online" : online)} type="submit" value="save"><Save size={16} /> Save project</button>
-            <button className="secondary" disabled={busy || !(projectPanel === "new" ? projectFormAgent?.status === "online" : online) || !projectStartPrompt.trim()} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
+            <button disabled={!canSaveProject} type="submit" value="save"><Save size={16} /> Save project</button>
+            <button className="secondary" disabled={!canSaveAndRunProject} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
           </div>
           {projectPanel === "settings" && (
             <button className="danger-button" disabled={busy || !selectedRepo} type="button" onClick={deleteProject}>Remove project from service</button>
