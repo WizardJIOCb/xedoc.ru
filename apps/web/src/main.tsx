@@ -6085,18 +6085,25 @@ function App() {
             )}
           </div>
           {selectedProjectUrl ? (
-            <div className="project-site-frame">
-              <iframe
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                sandbox="allow-forms allow-popups allow-scripts"
-                src={selectedProjectUrl}
-                title={`Preview ${selectedRepo.name}`}
-              />
-              <a className="project-site-open" href={selectedProjectUrl} target="_blank" rel="noreferrer">
-                <ExternalLink size={14} /> Open
-              </a>
-            </div>
+            <a className="project-site-preview" href={selectedProjectUrl} target="_blank" rel="noreferrer">
+              <span className="project-site-browser">
+                <i />
+                <i />
+                <i />
+                <strong>{selectedProjectUrl}</strong>
+              </span>
+              <span className="project-site-identity">
+                <ExternalLink size={22} />
+                <span>
+                  <strong>{selectedRepo.name}</strong>
+                  <small>{selectedRepo.domain}</small>
+                </span>
+              </span>
+              <span className="project-site-foot">
+                <small>{selectedRepo.githubUrl || selectedRepo.serverPath || selectedRepo.pathMasked}</small>
+                <em><ExternalLink size={14} /> Open</em>
+              </span>
+            </a>
           ) : (
             <div className="project-site-empty">
               <ExternalLink size={18} />
