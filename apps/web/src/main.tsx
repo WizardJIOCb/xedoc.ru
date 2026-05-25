@@ -356,6 +356,16 @@ type ImagePreview = {
   size: number;
 };
 
+type ProjectFileEditor = {
+  path: string;
+  content: string;
+  originalContent: string;
+  loading: boolean;
+  saving: boolean;
+  notice: string;
+  error: string;
+};
+
 type PendingAttachment = {
   id: string;
   name: string;
@@ -978,14 +988,85 @@ function safeMarkdownHref(value: string) {
   return "";
 }
 
-function renderInlineMarkdown(text: string, keyPrefix = "inline"): React.ReactNode[] {
+type RichTextOptions = {
+  onFileReference?: (path: string) => void;
+  projectRoot?: string | null;
+};
+
+function projectFilePathFromReference(value: string, options?: RichTextOptions): string | null {
+  if (!options?.onFileReference) return null;
+  const cleaned = value.trim().replace(/^['"`(<[{]+|['"`)>}\],.;:]+$/g, "");
+  if (!cleaned || cleaned.includes("\0")) return null;
+  let candidate = cleaned;
+  let fromUrl = false;
+  try {
+    if (/^https?:\/\//i.test(candidate)) {
+      const url = new URL(candidate);
+      candidate = decodeURIComponent(url.pathname);
+      fromUrl = true;
+    }
+  } catch {
+    return null;
+  }
+  candidate = candidate.replace(/\\/g, "/");
+  const projectRoot = options.projectRoot?.replace(/\\/g, "/").replace(/\/+$/g, "");
+  const absoluteCandidate = candidate.startsWith("/");
+  if (projectRoot && candidate.startsWith(`${projectRoot}/`)) {
+    candidate = candidate.slice(projectRoot.length + 1);
+  } else if (fromUrl || absoluteCandidate) {
+    return null;
+  }
+  candidate = candidate.replace(/^\/+/, "").replace(/^\.\/+/, "");
+  if (
+    !candidate
+    || candidate.startsWith("../")
+    || candidate.includes("/../")
+    || candidate === "."
+    || candidate.includes("://")
+    || /^[a-z]:\//i.test(candidate)
+    || candidate === ".git"
+    || candidate.startsWith(".git/")
+  ) {
+    return null;
+  }
+  if (!/^(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16}$/.test(candidate)) return null;
+  return candidate;
+}
+
+function fileReferenceButton(path: string, label: string, key: string, options: RichTextOptions) {
+  return (
+    <button className="inline-file-link" key={key} type="button" onClick={() => options.onFileReference?.(path)}>
+      {label}
+    </button>
+  );
+}
+
+function renderPlainWithFileReferences(text: string, keyPrefix: string, options?: RichTextOptions): React.ReactNode[] {
+  if (!options?.onFileReference) return [text];
+  const nodes: React.ReactNode[] = [];
+  const pattern = /(?:https?:\/\/[^\s<>()]+|(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16})/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    const raw = match[0];
+    const path = projectFilePathFromReference(raw, options);
+    if (!path) continue;
+    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
+    nodes.push(fileReferenceButton(path, raw, `${keyPrefix}:file:${nodes.length}`, options));
+    lastIndex = match.index + raw.length;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes.length ? nodes : [text];
+}
+
+function renderInlineMarkdown(text: string, keyPrefix = "inline", options?: RichTextOptions): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   let plain = "";
   let index = 0;
 
   const flushPlain = () => {
     if (!plain) return;
-    nodes.push(plain);
+    nodes.push(...renderPlainWithFileReferences(plain, `${keyPrefix}:plain:${nodes.length}`, options));
     plain = "";
   };
 
@@ -994,7 +1075,7 @@ function renderInlineMarkdown(text: string, keyPrefix = "inline"): React.ReactNo
     if (close <= index + token.length - 1) return false;
     const body = text.slice(index + token.length, close);
     flushPlain();
-    nodes.push(element(renderInlineMarkdown(body, `${keyPrefix}:${nodes.length}`)));
+    nodes.push(element(renderInlineMarkdown(body, `${keyPrefix}:${nodes.length}`, options)));
     index = close + token.length;
     return true;
   };
@@ -1021,12 +1102,21 @@ function renderInlineMarkdown(text: string, keyPrefix = "inline"): React.ReactNo
       if (hrefStart >= 0 && text[hrefStart] === "(") {
         const hrefEnd = findMarkdownToken(text, ")", hrefStart + 1);
         if (hrefEnd > hrefStart + 1) {
-          const href = safeMarkdownHref(text.slice(hrefStart + 1, hrefEnd));
+          const label = text.slice(index + 1, labelEnd);
+          const rawHref = text.slice(hrefStart + 1, hrefEnd);
+          const filePath = projectFilePathFromReference(rawHref, options) ?? projectFilePathFromReference(label, options);
+          const href = filePath ? "" : safeMarkdownHref(rawHref);
+          if (filePath && options?.onFileReference) {
+            flushPlain();
+            nodes.push(fileReferenceButton(filePath, label, `${keyPrefix}:file-link:${nodes.length}`, options));
+            index = hrefEnd + 1;
+            continue;
+          }
           if (href) {
             flushPlain();
             nodes.push(
               <a href={href} key={`${keyPrefix}:link:${nodes.length}`} rel="noreferrer" target={href.startsWith("#") || href.startsWith("/") ? undefined : "_blank"}>
-                {renderInlineMarkdown(text.slice(index + 1, labelEnd), `${keyPrefix}:link:${nodes.length}`)}
+                {renderInlineMarkdown(label, `${keyPrefix}:link:${nodes.length}`, options)}
               </a>
             );
             index = hrefEnd + 1;
@@ -1048,7 +1138,7 @@ function renderInlineMarkdown(text: string, keyPrefix = "inline"): React.ReactNo
   return nodes;
 }
 
-function renderRichText(value: string, className = "rich-text") {
+function renderRichText(value: string, className = "rich-text", options?: RichTextOptions) {
   const lines = normalizeDisplayText(value).trim().split("\n");
   const blocks: React.ReactNode[] = [];
   let index = 0;
@@ -1079,7 +1169,7 @@ function renderRichText(value: string, className = "rich-text") {
 
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading?.[2]) {
-      blocks.push(<h3 key={blocks.length}>{renderInlineMarkdown(heading[2])}</h3>);
+      blocks.push(<h3 key={blocks.length}>{renderInlineMarkdown(heading[2], `block:${blocks.length}:heading`, options)}</h3>);
       index += 1;
       continue;
     }
@@ -1093,7 +1183,7 @@ function renderRichText(value: string, className = "rich-text") {
         quoteLines.push(quoteLine[1] ?? "");
         index += 1;
       }
-      blocks.push(<blockquote key={blocks.length}>{renderInlineMarkdown(quoteLines.join(" "))}</blockquote>);
+      blocks.push(<blockquote key={blocks.length}>{renderInlineMarkdown(quoteLines.join(" "), `block:${blocks.length}:quote`, options)}</blockquote>);
       continue;
     }
 
@@ -1109,7 +1199,7 @@ function renderRichText(value: string, className = "rich-text") {
         items.push(item[1] ?? "");
         index += 1;
       }
-      const children = items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item)}</li>);
+      const children = items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `block:${blocks.length}:li:${itemIndex}`, options)}</li>);
       blocks.push(ordered ? <ol key={blocks.length}>{children}</ol> : <ul key={blocks.length}>{children}</ul>);
       continue;
     }
@@ -1127,7 +1217,7 @@ function renderRichText(value: string, className = "rich-text") {
       paragraph.push(lines[index] ?? "");
       index += 1;
     }
-    blocks.push(<p key={blocks.length}>{renderInlineMarkdown(paragraph.join("\n"))}</p>);
+    blocks.push(<p key={blocks.length}>{renderInlineMarkdown(paragraph.join("\n"), `block:${blocks.length}:p`, options)}</p>);
   }
 
   return <div className={className}>{blocks.length ? blocks : <p>{value}</p>}</div>;
@@ -2052,7 +2142,6 @@ function App() {
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
   const [codexSpeed, setCodexSpeed] = useState<CodexSpeed>("standard");
   const [originalProjectPath, setOriginalProjectPath] = useState("");
-  const [chatTitle, setChatTitle] = useState("");
   const [chatMenuId, setChatMenuId] = useState("");
   const [renamingChatId, setRenamingChatId] = useState("");
   const [renameTitle, setRenameTitle] = useState("");
@@ -2115,6 +2204,7 @@ function App() {
     return "paper";
   });
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
+  const [fileEditor, setFileEditor] = useState<ProjectFileEditor | null>(null);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [localBusyHold, setLocalBusyHold] = useState<{ until: number; since?: string; key?: string }>({ until: 0 });
@@ -3791,24 +3881,6 @@ function App() {
     await refresh();
   }
 
-  async function createChat(event: React.FormEvent) {
-    event.preventDefault();
-    if (!selectedRepo || !csrf || !chatTitle.trim()) return;
-    setBusy(true);
-    const response = await api("/api/chats", {
-      method: "POST",
-      headers: { "x-csrf-token": csrf },
-      body: JSON.stringify({ agentId: selectedRepo.agentId, repoId: selectedRepo.id, title: chatTitle.trim() })
-    });
-    setBusy(false);
-    if (!response.ok) return;
-    const { chatId } = await response.json();
-    setChatTitle("");
-    setMobileMenuOpen(false);
-    await loadChats(selectedRepo);
-    await loadChat(chatId);
-  }
-
   async function createJob(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedRepo || (!prompt.trim() && !attachments.length) || !csrf) return;
@@ -4143,6 +4215,94 @@ function App() {
       return;
     }
     setVscodeNotice(data.output || (options.auto ? "VS Code chat refreshed." : "VS Code bridge command completed."));
+  }
+
+  async function openProjectFile(path: string) {
+    if (!selectedRepo) return;
+    const filePath = projectFilePathFromReference(path, {
+      onFileReference: () => undefined,
+      projectRoot: selectedRepo.pathMasked
+    }) ?? path.replace(/\\/g, "/").replace(/^\.\/+/, "");
+    setFileEditor({
+      path: filePath,
+      content: "",
+      originalContent: "",
+      loading: true,
+      saving: false,
+      notice: "",
+      error: ""
+    });
+    try {
+      const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/read?path=${encodeURIComponent(filePath)}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setFileEditor((current) => current && current.path === filePath
+          ? { ...current, loading: false, error: data.error || "Не получилось открыть файл." }
+          : current);
+        return;
+      }
+      setFileEditor((current) => current && current.path === filePath
+        ? {
+            ...current,
+            path: data.path || filePath,
+            content: data.content ?? "",
+            originalContent: data.content ?? "",
+            loading: false,
+            notice: data.size !== undefined ? `${formatBytes(data.size)} loaded` : "Файл открыт.",
+            error: ""
+          }
+        : current);
+    } catch (error) {
+      setFileEditor((current) => current && current.path === filePath
+        ? { ...current, loading: false, error: error instanceof Error ? error.message : "Не получилось открыть файл." }
+        : current);
+    }
+  }
+
+  async function saveProjectFile() {
+    if (!selectedRepo || !fileEditor || fileEditor.loading || fileEditor.saving || !csrf) return;
+    const { path, content } = fileEditor;
+    setFileEditor((current) => current ? { ...current, saving: true, notice: "", error: "" } : current);
+    try {
+      const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/write`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ path, content })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setFileEditor((current) => current ? { ...current, saving: false, error: data.error || "Не получилось сохранить файл." } : current);
+        return;
+      }
+      setFileEditor((current) => current
+        ? {
+            ...current,
+            path: data.path || path,
+            originalContent: content,
+            saving: false,
+            notice: data.size !== undefined ? `Сохранено: ${formatBytes(data.size)}` : "Файл сохранён.",
+            error: ""
+          }
+        : current);
+      await refresh();
+    } catch (error) {
+      setFileEditor((current) => current
+        ? { ...current, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." }
+        : current);
+    }
+  }
+
+  function closeProjectFileEditor() {
+    if (!fileEditor) return;
+    if (
+      !fileEditor.loading
+      && !fileEditor.saving
+      && fileEditor.content !== fileEditor.originalContent
+      && !window.confirm("Закрыть редактор без сохранения?")
+    ) {
+      return;
+    }
+    setFileEditor(null);
   }
 
   async function syncGit(event: React.FormEvent) {
@@ -6050,19 +6210,6 @@ function App() {
     );
   }
 
-  function openProjectNewChat() {
-    if (!selectedRepo) return;
-    setChatProperties(null);
-    setChatMenuId("");
-    setChatNotice("");
-    setChatNoticeOk(false);
-    resetActiveChatView();
-    window.requestAnimationFrame(() => {
-      composerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      composerRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-    });
-  }
-
   function renderProjectOverview() {
     if (!selectedRepo || activeChat) return null;
     const previewLabel = selectedRepo.domain || selectedRepo.githubUrl || selectedRepo.pathMasked;
@@ -6120,9 +6267,6 @@ function App() {
             <h3><MessageSquare size={16} /> Последние чаты</h3>
             <small>{recentProjectChats.length ? `${recentProjectChats.length} последних` : "Нет истории"}</small>
           </div>
-          <button className="secondary compact" type="button" onClick={openProjectNewChat}>
-            <Plus size={15} /> Новый чат
-          </button>
         </div>
         <div className="project-recent-list">
           {recentProjectChats.map((chat) => (
@@ -6480,23 +6624,6 @@ function App() {
                     </button>
                     {selected && (
                       <div className="nav-project-chats">
-                        <form className="nav-new-chat" onSubmit={createChat}>
-                          <input placeholder="New chat title" value={chatTitle} onChange={(event) => setChatTitle(event.target.value)} />
-                          <button
-                            className="nav-sync-chat"
-                            disabled={localChatSyncing || !online}
-                            onClick={() => syncLocalChats(repo).catch(() => {
-                              setChatNoticeOk(false);
-                              setChatNotice("Не получилось синхронизировать локальные чаты.");
-                            })}
-                            title="Синхронизировать локальные чаты Codex/VS Code"
-                            type="button"
-                          >
-                            <RefreshCw className={localChatSyncing ? "spin" : ""} size={14} />
-                            <span>Sync</span>
-                          </button>
-                          <button disabled={busy || !chatTitle.trim()}><Plus size={14} /></button>
-                        </form>
                         {chats.map((chat) => (
                           <div className={activeChatId === chat.id ? "nav-chat-row active" : "nav-chat-row"} key={chat.id}>
                             {renamingChatId === chat.id ? (
@@ -6602,7 +6729,30 @@ function App() {
           </div>
           <div className="top-actions">
             {selectedRepo && <button className="icon" onClick={clearProjectSelection} title="Проекты"><ArrowLeft size={18} /></button>}
-            <button className="icon" onClick={refresh} title="Обновить"><RefreshCw size={18} /></button>
+            <button
+              aria-label="Обновить данные интерфейса"
+              className="icon"
+              onClick={refresh}
+              title="Обновить данные: заново загрузить агентов, проекты и текущий чат"
+              type="button"
+            >
+              <RefreshCw size={18} />
+            </button>
+            {selectedRepo && (
+              <button
+                aria-label="Синхронизировать локальные чаты проекта"
+                className="icon"
+                disabled={localChatSyncing || !online}
+                onClick={() => syncLocalChats(selectedRepo).catch(() => {
+                  setChatNoticeOk(false);
+                  setChatNotice("Не получилось синхронизировать локальные чаты.");
+                })}
+                title="Синхронизировать локальные чаты: подтянуть чаты Codex/VS Code для этого проекта"
+                type="button"
+              >
+                {localChatSyncing ? <RefreshCw className="spin" size={18} /> : <Download size={18} />}
+              </button>
+            )}
             <button className="icon" onClick={logout} title="Выйти"><LogOut size={18} /></button>
           </div>
         </div>
@@ -6710,9 +6860,6 @@ function App() {
                 )}
               </div>
               <div className="section-actions">
-                <button className="secondary compact" type="button" onClick={openProjectNewChat}>
-                  <Plus size={15} /> Новый чат
-                </button>
                 {activeChat && (
                   <button
                     aria-label="Скопировать ссылку на чат"
@@ -6889,6 +7036,10 @@ function App() {
                             const assistantDetails = message.role === "assistant" || message.role === "tool" || message.role === "system"
                               ? messageRunDetails(message, messageJob, collapsedRun)
                               : undefined;
+                            const richTextOptions: RichTextOptions = {
+                              onFileReference: openProjectFile,
+                              projectRoot: selectedRepo.pathMasked
+                            };
                             return (
                               <article
                                 className={`message ${message.role}${isProjectOperation ? " service-message" : ""}${isNew ? " new-message" : ""}`}
@@ -6930,13 +7081,13 @@ function App() {
                                 {collapsedRun && renderCollapsedRunTrace(message, collapsedRun)}
                                 {message.role === "system" ? (
                                   isProjectOperation
-                                    ? renderRichText(message.content, "rich-text message-body service-log-body")
+                                    ? renderRichText(message.content, "rich-text message-body service-log-body", richTextOptions)
                                     : (
                                       <div className="system-message-body" title={normalizeDisplayText(message.content).trim()}>
                                         {normalizeDisplayText(message.content).trim()}
                                       </div>
                                     )
-                                ) : renderRichText(message.content, "rich-text message-body")}
+                                ) : renderRichText(message.content, "rich-text message-body", richTextOptions)}
                                 {renderMessageAttachments(message.attachments, setImagePreview)}
                                 {renderCodexActions(message, messageJob)}
                                 {renderCodexChangeCard(message, messageJob, messageProgress)}
@@ -7022,6 +7173,44 @@ function App() {
           </div>
         </section>
       </aside>
+      {fileEditor && (
+        <div className="file-editor-modal" role="dialog" aria-modal="true" aria-label={fileEditor.path} onClick={closeProjectFileEditor}>
+          <section className="file-editor-panel" onClick={(event) => event.stopPropagation()}>
+            <header className="file-editor-head">
+              <div>
+                <strong title={fileEditor.path}>{fileEditor.path}</strong>
+                <small>{selectedRepo?.name ?? "Project file"}</small>
+              </div>
+              <div className="file-editor-actions">
+                <button
+                  className="secondary compact"
+                  disabled={!csrf || fileEditor.loading || fileEditor.saving || fileEditor.content === fileEditor.originalContent}
+                  onClick={saveProjectFile}
+                  type="button"
+                >
+                  <Save size={15} />
+                  {fileEditor.saving ? "Saving" : "Save"}
+                </button>
+                <button aria-label="Close file editor" className="icon tiny" onClick={closeProjectFileEditor} type="button">
+                  <X size={16} />
+                </button>
+              </div>
+            </header>
+            {fileEditor.error && <div className="notice danger">{fileEditor.error}</div>}
+            {fileEditor.notice && <div className="notice success">{fileEditor.notice}</div>}
+            {fileEditor.loading ? (
+              <div className="empty">Загружаю файл...</div>
+            ) : (
+              <textarea
+                className="file-editor-textarea"
+                onChange={(event) => setFileEditor((current) => current ? { ...current, content: event.target.value, notice: "" } : current)}
+                spellCheck={false}
+                value={fileEditor.content}
+              />
+            )}
+          </section>
+        </div>
+      )}
       {imagePreview && (
         <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={imagePreview.name} onClick={() => setImagePreview(null)}>
           <figure onClick={(event) => event.stopPropagation()}>

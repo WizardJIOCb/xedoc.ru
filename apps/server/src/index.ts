@@ -19,6 +19,8 @@ import {
   CreateUserSchema,
   NginxSchema,
   PasswordUpdateSchema,
+  ProjectFileReadQuerySchema,
+  ProjectFileWriteSchema,
   ProfileUpdateSchema,
   RegisterSchema,
   SslSchema,
@@ -153,6 +155,13 @@ const sslRequests = new Map<string, {
 }>();
 const vscodeRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "vscode.result" }>) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+  agentId: string;
+  connectionId: string;
+}>();
+const fileRequests = new Map<string, {
+  resolve: (value: Extract<AgentToServer, { type: "file.result" }>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   agentId: string;
@@ -675,6 +684,28 @@ function requestAgentVscode(
   });
 }
 
+function requestAgentFile(
+  agentId: string,
+  message: Extract<ServerToAgent, { type: "file.read" | "file.write" }>
+): Promise<Extract<AgentToServer, { type: "file.result" }>> {
+  const agent = agents.get(agentId);
+  if (!agent) return Promise.reject(new Error("agent_offline"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      fileRequests.delete(message.requestId);
+      reject(new Error("agent_timeout"));
+    }, 30000);
+    fileRequests.set(message.requestId, { resolve, reject, timer, agentId, connectionId: agent.connectionId });
+    try {
+      agent.send(message);
+    } catch (error) {
+      clearTimeout(timer);
+      fileRequests.delete(message.requestId);
+      reject(error instanceof Error ? error : new Error("agent_send_failed"));
+    }
+  });
+}
+
 function rejectAgentRequestMap(
   requests: Map<string, { reject: (error: Error) => void; timer: NodeJS.Timeout; agentId: string; connectionId: string }>,
   agentId: string,
@@ -695,6 +726,7 @@ function rejectAgentRequestsForConnection(agentId: string, connectionId: string,
   rejectAgentRequestMap(deployRequests, agentId, connectionId, reason);
   rejectAgentRequestMap(nginxRequests, agentId, connectionId, reason);
   rejectAgentRequestMap(sslRequests, agentId, connectionId, reason);
+  rejectAgentRequestMap(fileRequests, agentId, connectionId, reason);
   for (const [requestId, pending] of vscodeRequests) {
     if (pending.agentId !== agentId || pending.connectionId !== connectionId) continue;
     clearTimeout(pending.timer);
@@ -3303,6 +3335,49 @@ async function createApp(): Promise<FastifyInstance> {
     }
   });
 
+  app.get("/api/projects/:agentId/:repoId/files/read", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth) return;
+    const params = request.params as { agentId: string; repoId: string };
+    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const parsed = ProjectFileReadQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_file", details: parsed.error.flatten() });
+    try {
+      const result = await requestAgentFile(params.agentId, {
+        type: "file.read",
+        requestId: id("req"),
+        repoId: params.repoId,
+        path: parsed.data.path
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error ?? "file_read_failed" });
+      return { ok: true, path: result.path ?? parsed.data.path, content: result.content ?? "", size: result.size, mtimeMs: result.mtimeMs };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
+  app.put("/api/projects/:agentId/:repoId/files/write", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const params = request.params as { agentId: string; repoId: string };
+    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const parsed = ProjectFileWriteSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_file", details: parsed.error.flatten() });
+    try {
+      const result = await requestAgentFile(params.agentId, {
+        type: "file.write",
+        requestId: id("req"),
+        repoId: params.repoId,
+        path: parsed.data.path,
+        content: parsed.data.content
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error ?? "file_write_failed" });
+      return { ok: true, path: result.path ?? parsed.data.path, size: result.size, mtimeMs: result.mtimeMs };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
   app.post("/api/agents/:agentId/sync-local-chats", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
@@ -3858,6 +3933,14 @@ async function createApp(): Promise<FastifyInstance> {
         if (pending) {
           clearTimeout(pending.timer);
           vscodeRequests.delete(parsed.requestId);
+          pending.resolve(parsed);
+        }
+      }
+      if (parsed.type === "file.result") {
+        const pending = fileRequests.get(parsed.requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          fileRequests.delete(parsed.requestId);
           pending.resolve(parsed);
         }
       }

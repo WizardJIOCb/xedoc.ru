@@ -227,6 +227,17 @@ export const AgentVscodeResultSchema = z.object({
   output: z.string().optional()
 });
 
+export const AgentFileResultSchema = z.object({
+  type: z.literal("file.result"),
+  requestId: z.string().min(1),
+  ok: z.boolean(),
+  error: z.string().optional(),
+  path: z.string().optional(),
+  content: z.string().optional(),
+  size: z.number().int().nonnegative().optional(),
+  mtimeMs: z.number().nonnegative().optional()
+});
+
 export const AgentChatSyncResultSchema = z.object({
   type: z.literal("chat.sync.result"),
   requestId: z.string().min(1),
@@ -270,6 +281,7 @@ export const AgentToServerSchema = z.discriminatedUnion("type", [
   AgentNginxResultSchema,
   AgentSslResultSchema,
   AgentVscodeResultSchema,
+  AgentFileResultSchema,
   AgentChatSyncResultSchema,
   AgentChatSyncSchema
 ]);
@@ -380,6 +392,26 @@ export const ServerVscodeCommandSchema = z.object({
   threadId: z.string().min(1).max(300).optional()
 });
 
+export const ProjectFilePathSchema = z.string().min(1).max(500).refine((value) => {
+  const normalized = value.replace(/\\/g, "/");
+  return !normalized.includes("\0") && !normalized.startsWith("/") && !/^[a-z]:\//i.test(normalized);
+}, "relative_file_path_required");
+
+export const ServerFileReadSchema = z.object({
+  type: z.literal("file.read"),
+  requestId: z.string().min(1),
+  repoId: z.string().min(1),
+  path: ProjectFilePathSchema
+});
+
+export const ServerFileWriteSchema = z.object({
+  type: z.literal("file.write"),
+  requestId: z.string().min(1),
+  repoId: z.string().min(1),
+  path: ProjectFilePathSchema,
+  content: z.string().max(2 * 1024 * 1024)
+});
+
 export const ServerChatSyncRequestSchema = z.object({
   type: z.literal("chat.sync.request"),
   requestId: z.string().min(1)
@@ -396,6 +428,8 @@ export const ServerToAgentSchema = z.discriminatedUnion("type", [
   ServerNginxSchema,
   ServerSslSchema,
   ServerVscodeCommandSchema,
+  ServerFileReadSchema,
+  ServerFileWriteSchema,
   ServerChatSyncRequestSchema,
   z.object({ type: z.literal("repo.scan") })
 ]);
@@ -485,6 +519,17 @@ export const VscodeCommandRequestSchema = z.object({
   threadId: z.string().min(1).max(300).optional()
 });
 export type VscodeCommandRequest = z.infer<typeof VscodeCommandRequestSchema>;
+
+export const ProjectFileReadQuerySchema = z.object({
+  path: ProjectFilePathSchema
+});
+export type ProjectFileReadQuery = z.infer<typeof ProjectFileReadQuerySchema>;
+
+export const ProjectFileWriteSchema = z.object({
+  path: ProjectFilePathSchema,
+  content: z.string().max(2 * 1024 * 1024)
+});
+export type ProjectFileWrite = z.infer<typeof ProjectFileWriteSchema>;
 
 export const CreateUserSchema = z.object({
   email: z.string().email().max(200),

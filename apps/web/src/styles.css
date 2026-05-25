@@ -775,46 +775,6 @@ textarea:focus {
   padding-left: 10px;
 }
 
-.nav-new-chat {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 32px;
-  gap: 5px;
-  min-width: 0;
-}
-
-.nav-project-chats .nav-new-chat::before {
-  content: "";
-  position: absolute;
-  left: -10px;
-  top: 16px;
-  width: 7px;
-  border-top: 1px solid var(--line-strong);
-}
-
-.nav-new-chat input {
-  min-height: 32px;
-  padding: 6px 8px;
-  font-size: 12px;
-}
-
-.nav-new-chat button {
-  min-height: 32px;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  color: var(--accent-text);
-  background: var(--accent);
-}
-
-.nav-new-chat .nav-sync-chat {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 9px;
-  white-space: nowrap;
-}
-
 .nav-agent {
   display: grid;
   gap: 6px;
@@ -983,6 +943,11 @@ textarea:focus {
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line);
+}
+
+.icon.tiny {
+  width: 31px;
+  height: 31px;
 }
 
 .icon:hover,
@@ -3125,6 +3090,88 @@ button.message-attachment.image:hover {
   color: rgba(255, 255, 255, 0.76);
 }
 
+.file-editor-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  background: rgba(24, 24, 22, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.file-editor-panel {
+  width: min(1100px, 96vw);
+  height: min(780px, 92vh);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+.file-editor-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.file-editor-head > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.file-editor-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-editor-head small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.file-editor-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-editor-actions .secondary.compact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.file-editor-textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  overflow: auto;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  tab-size: 2;
+}
+
+.file-editor-panel > .empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+}
+
 .attachment-remove {
   width: 26px;
   height: 26px;
@@ -3804,6 +3851,27 @@ h2 > strong {
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
+}
+
+.inline-file-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--accent-2);
+  background: transparent;
+  font: inherit;
+  font-weight: 750;
+  text-align: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.inline-file-link:hover {
+  color: var(--accent);
+  background: transparent;
 }
 
 .rich-text blockquote {

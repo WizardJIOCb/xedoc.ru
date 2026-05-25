@@ -1,6 +1,6 @@
 import os from "node:os";
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import WebSocket from "ws";
 import { ServerToAgentSchema, type AgentToServer, type CodexUsage, type LocalCodexActivity, type ServerToAgent } from "@cmc/protocol";
 import { loadAgentConfig, saveAgentConfig } from "./config.js";
@@ -17,6 +17,7 @@ const LOCAL_ACTIVITY_INTERVAL_MS = 1000;
 const LOCAL_CHAT_SYNC_SETTLE_DELAYS_MS = [3000, 10000];
 const LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS = 30000;
 const LOCAL_CHAT_SYNC_BACKPRESSURE_BYTES = 16 * 1024 * 1024;
+const MAX_EDITOR_FILE_BYTES = 2 * 1024 * 1024;
 const config = loadAgentConfig();
 const redact = makeRedactor(config.redactPatterns);
 const token = process.env[config.tokenEnv];
@@ -79,6 +80,64 @@ async function ensureGitRepo(path: string): Promise<void> {
     const init = await runCapture("git", ["-C", path, "init"], undefined, 30000);
     if (init.exitCode !== 0) throw new Error(init.stderr || "git init failed");
   }
+}
+
+function repoFileTarget(repoId: string, rawPath: string): { repoPath: string; filePath: string; targetPath: string } {
+  const repo = config.repos.find((item) => item.id === repoId);
+  if (!repo) throw new Error("Project not found in agent config.");
+  const filePath = rawPath.replace(/\\/g, "/").replace(/^\.\/+/, "").trim();
+  if (
+    !filePath
+    || filePath.includes("\0")
+    || filePath.startsWith("/")
+    || /^[a-z]:\//i.test(filePath)
+    || filePath.split("/").some((part) => !part || part === "." || part === "..")
+    || filePath === ".git"
+    || filePath.startsWith(".git/")
+  ) {
+    throw new Error("Unsafe file path.");
+  }
+  const repoPath = resolve(repo.path);
+  const targetPath = resolve(repoPath, ...filePath.split("/"));
+  const compareRoot = repoPath.endsWith(sep) ? repoPath : `${repoPath}${sep}`;
+  const compareTarget = targetPath.endsWith(sep) ? targetPath : `${targetPath}${sep}`;
+  const normalizeCase = process.platform === "win32"
+    ? (value: string) => value.toLowerCase()
+    : (value: string) => value;
+  if (!normalizeCase(compareTarget).startsWith(normalizeCase(compareRoot))) {
+    throw new Error("Unsafe file path.");
+  }
+  return { repoPath, filePath, targetPath };
+}
+
+function readProjectFile(repoId: string, rawPath: string) {
+  const target = repoFileTarget(repoId, rawPath);
+  if (!existsSync(target.targetPath) || !statSync(target.targetPath).isFile()) throw new Error("File not found.");
+  const stat = statSync(target.targetPath);
+  if (stat.size > MAX_EDITOR_FILE_BYTES) throw new Error("File is too large for the web editor.");
+  const bytes = readFileSync(target.targetPath);
+  if (bytes.includes(0)) throw new Error("Binary files cannot be opened in the web editor.");
+  return {
+    path: target.filePath,
+    content: bytes.toString("utf8"),
+    size: bytes.length,
+    mtimeMs: stat.mtimeMs
+  };
+}
+
+function writeProjectFile(repoId: string, rawPath: string, content: string) {
+  const target = repoFileTarget(repoId, rawPath);
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > MAX_EDITOR_FILE_BYTES) throw new Error("File is too large for the web editor.");
+  if (existsSync(target.targetPath) && statSync(target.targetPath).isDirectory()) throw new Error("Path points to a directory.");
+  mkdirSync(dirname(target.targetPath), { recursive: true });
+  writeFileSync(target.targetPath, content, "utf8");
+  const stat = statSync(target.targetPath);
+  return {
+    path: target.filePath,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs
+  };
 }
 
 async function sendProjectResult(
@@ -1029,6 +1088,46 @@ function connect() {
       } catch (error) {
         await sendSslResult(send, message.requestId, false, "", error instanceof Error ? error.message : String(error));
         console.error(`[progress] ssl: Configure failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
+
+    if (message.type === "file.read") {
+      try {
+        const file = readProjectFile(message.repoId, message.path);
+        send({
+          type: "file.result",
+          requestId: message.requestId,
+          ok: true,
+          ...file
+        });
+      } catch (error) {
+        send({
+          type: "file.result",
+          requestId: message.requestId,
+          ok: false,
+          error: error instanceof Error ? redact(error.message) : redact(String(error))
+        });
+      }
+      return;
+    }
+
+    if (message.type === "file.write") {
+      try {
+        const file = writeProjectFile(message.repoId, message.path, message.content);
+        send({
+          type: "file.result",
+          requestId: message.requestId,
+          ok: true,
+          ...file
+        });
+      } catch (error) {
+        send({
+          type: "file.result",
+          requestId: message.requestId,
+          ok: false,
+          error: error instanceof Error ? redact(error.message) : redact(String(error))
+        });
       }
       return;
     }
