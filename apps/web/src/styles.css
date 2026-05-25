@@ -3776,12 +3776,13 @@ h2 > strong {
 .rich-text ul,
 .rich-text ol {
   display: grid;
-  gap: 4px;
-  padding-left: 20px;
+  gap: 2px;
+  padding-left: 18px;
+  line-height: 1.36;
 }
 
 .rich-text li {
-  padding-left: 2px;
+  padding-left: 1px;
 }
 
 .rich-text strong {
@@ -5147,7 +5148,7 @@ button:disabled {
 
   .rich-text ul,
   .rich-text ol {
-    gap: 3px;
+    gap: 2px;
     padding-left: 17px;
   }
 
