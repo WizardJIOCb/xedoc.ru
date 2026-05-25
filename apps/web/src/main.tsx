@@ -2429,6 +2429,8 @@ function App() {
   const composerRef = useRef<HTMLFormElement | null>(null);
   const firstMessageRef = useRef<HTMLElement | null>(null);
   const lastMessageRef = useRef<HTMLElement | null>(null);
+  const sandboxControlRef = useRef<HTMLDivElement | null>(null);
+  const actionControlRef = useRef<HTMLDivElement | null>(null);
   const currentScrollChatRef = useRef("");
   const chatCacheRef = useRef<Map<string, { etag: string; data: ChatPayload }>>(new Map());
   const missingChangeDetailsRequestedRef = useRef<Set<string>>(new Set());
@@ -3402,6 +3404,26 @@ function App() {
       // The settings are just a UI convenience; a blocked storage write should not break chat.
     }
   }, [codexModel, reasoningEffort, codexSpeed]);
+
+  useEffect(() => {
+    if (!sandboxMenuOpen && !actionMenuOpen) return;
+
+    const closeComposerMenusOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+
+      if (sandboxMenuOpen && !sandboxControlRef.current?.contains(target)) {
+        setSandboxMenuOpen(false);
+      }
+
+      if (actionMenuOpen && !actionControlRef.current?.contains(target)) {
+        setActionMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeComposerMenusOnOutsidePointer, true);
+    return () => document.removeEventListener("pointerdown", closeComposerMenusOnOutsidePointer, true);
+  }, [actionMenuOpen, sandboxMenuOpen]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = uiTheme;
@@ -6351,7 +6373,7 @@ function App() {
           <label className="attachment-picker" htmlFor="composer-attachment-input" title="Attach files">
             <Paperclip size={18} />
           </label>
-          <div className="sandbox-control">
+          <div className="sandbox-control" ref={sandboxControlRef}>
             <button
               aria-expanded={sandboxMenuOpen}
               aria-label={`Sandbox mode: ${SANDBOX_LABELS[sandbox]}`}
@@ -6386,7 +6408,7 @@ function App() {
               </div>
             )}
           </div>
-          <div className="action-control">
+          <div className="action-control" ref={actionControlRef}>
             <button
               aria-expanded={actionMenuOpen}
               aria-label="Message actions"
