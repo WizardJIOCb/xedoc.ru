@@ -4715,13 +4715,13 @@ function App() {
     });
   }
 
-  function addLocalProjectOperationMessage(operation: ProjectOperationKind, label: string, details: string[] = []) {
-    if (!activeChatId || !selectedRepo) return "";
+  function addLocalProjectOperationMessage(operation: ProjectOperationKind, label: string, details: string[] = [], chatId = activeChatId) {
+    if (!chatId || !selectedRepo) return "";
     const stamp = new Date().toISOString();
     const id = `local-project-operation:${operation}:${stamp}:${Math.random().toString(36).slice(2)}`;
     const message: ChatMessage = {
       id,
-      chatId: activeChatId,
+      chatId,
       role: "system",
       source: "web",
       externalId: id,
@@ -4749,7 +4749,7 @@ function App() {
     projectActionBusyRef.current.gitSync = true;
     const targetChatId = activeChatId || activeChat?.id || "";
     const operationDetails = [`Сообщение коммита: \`${safeMarkdownInlineCode(gitMessage.trim())}\`.`];
-    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("git-sync", "Commit & push", operationDetails) : "";
+    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("git-sync", "Commit & push", operationDetails, targetChatId) : "";
     setGitBusy(true);
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
@@ -4911,7 +4911,7 @@ function App() {
     if (!selectedRepo || !csrf || projectActionBusyRef.current.deploy) return;
     projectActionBusyRef.current.deploy = true;
     const targetChatId = activeChatId || activeChat?.id || "";
-    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("deploy", "Deploy") : "";
+    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("deploy", "Deploy", [], targetChatId) : "";
     setDeployBusy(true);
     setActionMenuOpen(false);
     setDeployNotice(targetChatId ? "" : "Deploy started...");
@@ -4942,7 +4942,7 @@ function App() {
   async function configureNginx() {
     if (!selectedRepo || !csrf) return;
     const targetChatId = activeChatId || activeChat?.id || "";
-    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("nginx", "Nginx") : "";
+    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("nginx", "Nginx", [], targetChatId) : "";
     setNginxBusy(true);
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
@@ -4973,7 +4973,7 @@ function App() {
   async function configureSsl() {
     if (!selectedRepo || !csrf) return;
     const targetChatId = activeChatId || activeChat?.id || "";
-    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("ssl", "SSL") : "";
+    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("ssl", "SSL", [], targetChatId) : "";
     setSslBusy(true);
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
@@ -6790,6 +6790,7 @@ function App() {
   }
 
   function renderProjectActionNotices(className = "cockpit-notices") {
+    if (activeChat) return null;
     if (!(gitNotice || launchNotice || deployNotice || nginxNotice || sslNotice)) return null;
     return (
       <div className={className}>

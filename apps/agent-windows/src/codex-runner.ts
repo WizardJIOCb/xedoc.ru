@@ -408,6 +408,7 @@ function grokPathMapper(): (value: string) => string {
 
 function grokSandboxProfile(sandbox: "read-only" | "workspace-write" | "danger-full-access"): string {
   if (sandbox === "read-only") return "read-only";
+  if (sandbox === "danger-full-access") return "off";
   return "workspace";
 }
 
