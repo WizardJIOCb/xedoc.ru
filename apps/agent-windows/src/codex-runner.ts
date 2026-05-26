@@ -170,7 +170,7 @@ export class Runner {
       "--cwd",
       repoPath,
       "--sandbox",
-      context.job.sandbox,
+      grokSandboxProfile(context.job.sandbox),
       "--always-approve",
       "--output-format",
       "streaming-json",
@@ -404,6 +404,11 @@ function shellQuoteSegment(value: string): string {
 function grokPathMapper(): (value: string) => string {
   if (process.env.CMC_GROK_BIN || process.platform !== "win32") return (value) => value;
   return windowsPathToWslPath;
+}
+
+function grokSandboxProfile(sandbox: "read-only" | "workspace-write" | "danger-full-access"): string {
+  if (sandbox === "read-only") return "read-only";
+  return "workspace";
 }
 
 function windowsPathToWslPath(value: string): string {

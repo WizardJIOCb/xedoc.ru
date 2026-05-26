@@ -1582,16 +1582,19 @@ function tombstoneDeletedChat(chat: ChatRow, jobRows: Array<{ id: string; codex_
   }
 }
 
-function latestCodexThreadIdForChat(chatId: string | null, currentJobId: string): string | undefined {
+function latestThreadIdForChat(chatId: string | null, currentJobId: string, kind: JobRow["kind"]): string | undefined {
   if (!chatId) return undefined;
-  const chat = db.prepare("SELECT source, external_id FROM chats WHERE id = ?").get(chatId) as Pick<ChatRow, "source" | "external_id"> | undefined;
-  if (chat?.source === "codex" && chat.external_id) return chat.external_id;
+  if (kind === "test") return undefined;
+  if (kind === "codex") {
+    const chat = db.prepare("SELECT source, external_id FROM chats WHERE id = ?").get(chatId) as Pick<ChatRow, "source" | "external_id"> | undefined;
+    if (chat?.source === "codex" && chat.external_id) return chat.external_id;
+  }
   const row = db.prepare(`
     SELECT codex_thread_id FROM jobs
-    WHERE chat_id = ? AND id != ? AND codex_thread_id IS NOT NULL AND codex_thread_id != ''
+    WHERE chat_id = ? AND id != ? AND kind = ? AND codex_thread_id IS NOT NULL AND codex_thread_id != ''
     ORDER BY COALESCE(finished_at, started_at, created_at) DESC
     LIMIT 1
-  `).get(chatId, currentJobId) as { codex_thread_id: string } | undefined;
+  `).get(chatId, currentJobId, kind) as { codex_thread_id: string } | undefined;
   return row?.codex_thread_id;
 }
 
@@ -1657,7 +1660,7 @@ async function dispatchQueue(agentId: string): Promise<void> {
             id: job.id,
             repoId: job.repo_id,
             chatId: job.chat_id ?? undefined,
-            codexThreadId: latestCodexThreadIdForChat(job.chat_id, job.id),
+            codexThreadId: latestThreadIdForChat(job.chat_id, job.id, job.kind),
             prompt: job.prompt,
             sandbox: job.sandbox,
             branchMode: job.branch_mode,
@@ -3820,7 +3823,7 @@ async function createApp(): Promise<FastifyInstance> {
           .run(progressAt, JSON.stringify(parsed), parsed.codexThreadId ?? null, parsed.jobId);
         if (parsed.codexThreadId) {
           const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(parsed.jobId) as JobRow | undefined;
-          if (job?.chat_id) {
+          if (job?.chat_id && job.kind === "codex") {
             db.prepare("UPDATE chats SET external_id = COALESCE(external_id, ?), updated_at = ? WHERE id = ?")
               .run(parsed.codexThreadId, progressAt, job.chat_id);
             const mergedDuplicates = mergeLinkedSyncedChatDuplicates(agent.id, job.repo_id, parsed.codexThreadId, job.chat_id);
@@ -3852,7 +3855,7 @@ async function createApp(): Promise<FastifyInstance> {
           parsed.jobId
         );
         const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(parsed.jobId) as JobRow | undefined;
-        if (job?.chat_id && parsed.codexThreadId) {
+        if (job?.chat_id && job.kind === "codex" && parsed.codexThreadId) {
           db.prepare("UPDATE chats SET external_id = COALESCE(external_id, ?), updated_at = ? WHERE id = ?")
             .run(parsed.codexThreadId, finishedAt, job.chat_id);
         }
@@ -3886,7 +3889,7 @@ async function createApp(): Promise<FastifyInstance> {
             created_at: finishedAt
           });
         }
-        if (job?.chat_id && parsed.codexThreadId) {
+        if (job?.chat_id && job.kind === "codex" && parsed.codexThreadId) {
           const mergedDuplicates = mergeLinkedSyncedChatDuplicates(agent.id, job.repo_id, parsed.codexThreadId, job.chat_id);
           if (mergedDuplicates) {
             db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?").run(finishedAt, job.chat_id);
