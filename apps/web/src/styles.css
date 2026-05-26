@@ -2688,6 +2688,10 @@ a.secondary {
   grid-template-columns: minmax(110px, auto) minmax(0, 1fr) minmax(180px, auto);
 }
 
+.project-form-actions.wizard-actions .wizard-next {
+  grid-column: 3;
+}
+
 .project-form-actions .secondary {
   color: var(--muted);
   background: var(--field);
@@ -2774,6 +2778,7 @@ a.secondary {
 .segments button,
 .secondary,
 .new-chat button,
+.project-form-actions .primary,
 .project-form button[type="submit"],
 .danger-button,
 .git-panel button,
@@ -2801,6 +2806,7 @@ a.secondary {
 
 .segments .active,
 .new-chat button,
+.project-form-actions .primary,
 .project-form button[type="submit"],
 .git-panel button,
 .sticky-submit button,
@@ -2824,6 +2830,7 @@ a.secondary {
 
 .segments .active:hover:not(:disabled),
 .new-chat button:hover:not(:disabled),
+.project-form-actions .primary:hover:not(:disabled),
 .project-form button[type="submit"]:hover:not(:disabled),
 .git-panel button:hover:not(:disabled),
 .sticky-submit .run-button:hover:not(:disabled),
@@ -5326,6 +5333,10 @@ button:disabled {
   .agent-settings-row,
   .oauth-row {
     grid-template-columns: 1fr;
+  }
+
+  .project-form-actions.wizard-actions .wizard-next {
+    grid-column: auto;
   }
 
   .wizard-steps,

@@ -6001,7 +6001,7 @@ function App() {
             <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Cancel</button>
           )}
           {canGoNext ? (
-            <button disabled={!projectWizardCanContinue} type="button" onClick={nextStep}>Next <ArrowRight size={16} /></button>
+            <button className="primary wizard-next" disabled={!projectWizardCanContinue} type="button" onClick={nextStep}>Next <ArrowRight size={16} /></button>
           ) : (
             <>
               <button disabled={!canSaveProject} type="submit" value="save"><Save size={16} /> Create project</button>
