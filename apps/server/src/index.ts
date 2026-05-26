@@ -874,7 +874,7 @@ function appendChatMessage(message: Omit<ChatMessageRow, "id"> & { id?: string }
   broadcast({ type: "chats.updated", agentId: chatAgentId(message.chat_id), repoId: chatRepoId(message.chat_id), chatId: message.chat_id });
 }
 
-type ProjectOperationKind = "git-sync" | "deploy";
+type ProjectOperationKind = "git-sync" | "deploy" | "nginx" | "ssl";
 type ProjectOperationStatus = "running" | "completed" | "failed";
 
 function projectOperationChat(user: AuthUser, agentId: string, repoId: string, chatId: string): ChatRow | undefined {
@@ -3276,17 +3276,70 @@ async function createApp(): Promise<FastifyInstance> {
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    const operationChat = parsed.data.chatId ? projectOperationChat(auth.user, params.agentId, params.repoId, parsed.data.chatId) : undefined;
+    if (parsed.data.chatId && !operationChat) return reply.code(404).send({ error: "chat_not_found" });
+    const requestId = id("req");
+    const operationMessageId = operationChat ? id("msg") : "";
+    if (operationChat) {
+      appendProjectOperationMessage({
+        chat: operationChat,
+        messageId: operationMessageId,
+        requestId,
+        operation: "nginx",
+        label: "Nginx",
+        status: "running",
+        repoName: repo.name
+      });
+    }
     try {
       await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentNginx(params.agentId, {
         type: "project.nginx",
-        requestId: id("req"),
+        requestId,
         repoId: params.repoId
       });
-      if (!result.ok) return reply.code(400).send({ error: result.error ?? "nginx_failed", output: result.output });
+      if (!result.ok) {
+        if (operationChat) {
+          appendProjectOperationMessage({
+            chat: operationChat,
+            messageId: operationMessageId,
+            requestId,
+            operation: "nginx",
+            label: "Nginx",
+            status: "failed",
+            repoName: repo.name,
+            output: result.output || result.error || "Nginx setup failed."
+          });
+        }
+        return reply.code(400).send({ error: result.error ?? "nginx_failed", output: result.output });
+      }
       if (result.repos) upsertRepos(params.agentId, result.repos);
-      return { ok: true, output: result.output };
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "nginx",
+          label: "Nginx",
+          status: "completed",
+          repoName: repo.name,
+          output: result.output || "Nginx configured."
+        });
+      }
+      return { ok: true, output: result.output, chatMessageId: operationMessageId || undefined };
     } catch (error) {
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "nginx",
+          label: "Nginx",
+          status: "failed",
+          repoName: repo.name,
+          output: error instanceof Error ? error.message : "agent_error"
+        });
+      }
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }
   });
@@ -3301,17 +3354,70 @@ async function createApp(): Promise<FastifyInstance> {
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    const operationChat = parsed.data.chatId ? projectOperationChat(auth.user, params.agentId, params.repoId, parsed.data.chatId) : undefined;
+    if (parsed.data.chatId && !operationChat) return reply.code(404).send({ error: "chat_not_found" });
+    const requestId = id("req");
+    const operationMessageId = operationChat ? id("msg") : "";
+    if (operationChat) {
+      appendProjectOperationMessage({
+        chat: operationChat,
+        messageId: operationMessageId,
+        requestId,
+        operation: "ssl",
+        label: "SSL",
+        status: "running",
+        repoName: repo.name
+      });
+    }
     try {
       await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentSsl(params.agentId, {
         type: "project.ssl",
-        requestId: id("req"),
+        requestId,
         repoId: params.repoId
       });
-      if (!result.ok) return reply.code(400).send({ error: result.error ?? "ssl_failed", output: result.output });
+      if (!result.ok) {
+        if (operationChat) {
+          appendProjectOperationMessage({
+            chat: operationChat,
+            messageId: operationMessageId,
+            requestId,
+            operation: "ssl",
+            label: "SSL",
+            status: "failed",
+            repoName: repo.name,
+            output: result.output || result.error || "SSL setup failed."
+          });
+        }
+        return reply.code(400).send({ error: result.error ?? "ssl_failed", output: result.output });
+      }
       if (result.repos) upsertRepos(params.agentId, result.repos);
-      return { ok: true, output: result.output };
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "ssl",
+          label: "SSL",
+          status: "completed",
+          repoName: repo.name,
+          output: result.output || "SSL configured."
+        });
+      }
+      return { ok: true, output: result.output, chatMessageId: operationMessageId || undefined };
     } catch (error) {
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "ssl",
+          label: "SSL",
+          status: "failed",
+          repoName: repo.name,
+          output: error instanceof Error ? error.message : "agent_error"
+        });
+      }
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }
   });

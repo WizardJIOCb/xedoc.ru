@@ -2370,7 +2370,7 @@ function messageUpdateSignature(message: ChatMessage) {
   ].join(":");
 }
 
-type ProjectOperationKind = "git-sync" | "deploy";
+type ProjectOperationKind = "git-sync" | "deploy" | "nginx" | "ssl";
 
 function isProjectOperationMessage(message: ChatMessage) {
   return message.role === "system" && message.metadata?.kind === "project-operation";
@@ -4941,65 +4941,95 @@ function App() {
 
   async function configureNginx() {
     if (!selectedRepo || !csrf) return;
+    const targetChatId = activeChatId || activeChat?.id || "";
+    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("nginx", "Nginx") : "";
     setNginxBusy(true);
-    setNginxNotice("Nginx setup started...");
-    const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`, {
-      method: "POST",
-      headers: { "x-csrf-token": csrf },
-      body: "{}"
-    });
-    const data = await response.json().catch(() => ({}));
-    setNginxBusy(false);
-    if (!response.ok) {
-      setNginxNotice(data.output || data.error || "Nginx setup failed.");
-      return;
+    setActionMenuOpen(false);
+    setProjectActionsOpen(false);
+    setNginxNotice(targetChatId ? "" : "Nginx setup started...");
+    try {
+      const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({ chatId: targetChatId || undefined })
+      });
+      const data = await response.json().catch(() => ({}));
+      removeLocalProjectOperationMessage(pendingMessageId);
+      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      if (!response.ok) {
+        if (!targetChatId) setNginxNotice(data.output || data.error || "Nginx setup failed.");
+        return;
+      }
+      if (!targetChatId) setNginxNotice(data.output || "Nginx configured.");
+      await refresh();
+    } catch (error) {
+      removeLocalProjectOperationMessage(pendingMessageId);
+      if (!targetChatId) setNginxNotice(error instanceof Error ? error.message : "Nginx setup failed.");
+    } finally {
+      setNginxBusy(false);
     }
-    setNginxNotice(data.output || "Nginx configured.");
-    await refresh();
   }
 
   async function configureSsl() {
     if (!selectedRepo || !csrf) return;
+    const targetChatId = activeChatId || activeChat?.id || "";
+    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("ssl", "SSL") : "";
     setSslBusy(true);
-    setSslNotice("SSL setup started...");
-    const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/ssl`, {
-      method: "POST",
-      headers: { "x-csrf-token": csrf },
-      body: "{}"
-    });
-    const data = await response.json().catch(() => ({}));
-    setSslBusy(false);
-    if (!response.ok) {
-      setSslNotice(data.output || data.error || "SSL setup failed.");
-      return;
+    setActionMenuOpen(false);
+    setProjectActionsOpen(false);
+    setSslNotice(targetChatId ? "" : "SSL setup started...");
+    try {
+      const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/ssl`, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({ chatId: targetChatId || undefined })
+      });
+      const data = await response.json().catch(() => ({}));
+      removeLocalProjectOperationMessage(pendingMessageId);
+      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      if (!response.ok) {
+        if (!targetChatId) setSslNotice(data.output || data.error || "SSL setup failed.");
+        return;
+      }
+      if (!targetChatId) setSslNotice(data.output || "SSL configured.");
+      await refresh();
+    } catch (error) {
+      removeLocalProjectOperationMessage(pendingMessageId);
+      if (!targetChatId) setSslNotice(error instanceof Error ? error.message : "SSL setup failed.");
+    } finally {
+      setSslBusy(false);
     }
-    setSslNotice(data.output || "SSL configured.");
-    await refresh();
   }
 
   async function launchProject() {
     if (!selectedRepo || !csrf) return;
+    const targetChatId = activeChatId || activeChat?.id || "";
     const output: string[] = [];
     const append = (label: string, text: string) => {
       output.push(`== ${label} ==\n${text}`);
-      setLaunchNotice(output.join("\n\n"));
+      if (!targetChatId) setLaunchNotice(output.join("\n\n"));
     };
     const callProjectAction = async (label: string, path: string, body: Record<string, unknown> = {}) => {
-      setLaunchNotice([...output, `== ${label} ==\nRunning...`].join("\n\n"));
+      if (!targetChatId) setLaunchNotice([...output, `== ${label} ==\nRunning...`].join("\n\n"));
       const response = await api(path, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
-        body: JSON.stringify(body)
+        body: JSON.stringify({ ...body, chatId: targetChatId || undefined })
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.output || data.error || `${label} failed.`);
+      if (!response.ok) {
+        if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+        throw new Error(data.output || data.error || `${label} failed.`);
+      }
       append(label, data.output || "Done.");
+      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
       return data;
     };
 
     setLaunchBusy(true);
     setActionMenuOpen(false);
-    setLaunchNotice("Launch started...");
+    setProjectActionsOpen(false);
+    setLaunchNotice(targetChatId ? "" : "Launch started...");
     try {
       const remoteUrl = gitRemoteUrl.trim() || selectedRepo.githubUrl || "";
       if (remoteUrl) {
@@ -5014,11 +5044,11 @@ function App() {
               remoteVisibility: "private"
             }
           );
-          setGitNotice(data.output || "GitHub sync completed.");
+          if (!targetChatId) setGitNotice(data.output || "GitHub sync completed.");
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           append("GitHub + push", `Failed, continuing local launch.\n${message}`);
-          setGitNotice(message);
+          if (!targetChatId) setGitNotice(message);
         }
       } else {
         append("GitHub + push", "Skipped: GitHub repository is not configured.");
@@ -5026,21 +5056,21 @@ function App() {
 
       if (hasDeployConfig(selectedRepo)) {
         const data = await callProjectAction("Deploy", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`);
-        setDeployNotice(data.output || "Deploy completed.");
+        if (!targetChatId) setDeployNotice(data.output || "Deploy completed.");
       } else {
         append("Deploy", "Skipped: server folder or deploy mode is not configured.");
       }
 
       if (selectedRepo.domain) {
         const data = await callProjectAction("Nginx", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`);
-        setNginxNotice(data.output || "Nginx configured.");
+        if (!targetChatId) setNginxNotice(data.output || "Nginx configured.");
       } else {
         append("Nginx", "Skipped: domain is not configured.");
       }
 
       if (selectedRepo.domain) {
         const data = await callProjectAction("SSL", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/ssl`);
-        setSslNotice(data.output || "SSL configured.");
+        if (!targetChatId) setSslNotice(data.output || "SSL configured.");
       }
 
       const url = projectUrl(selectedRepo.domain);
@@ -7625,7 +7655,6 @@ function App() {
             {activeChat ? (
               <>
                 {chatNotice && <div className={chatNoticeOk ? "notice success" : "notice danger"}>{chatNotice}</div>}
-                {renderProjectActionNotices("cockpit-notices active-chat-action-notices")}
                 <section className="workspace">
                   <section className="job-detail">
                     <section className="chat-thread" ref={chatThreadRef}>

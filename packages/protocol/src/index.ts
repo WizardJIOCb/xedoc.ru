@@ -510,10 +510,14 @@ export const DeploySchema = z.object({
 });
 export type Deploy = z.infer<typeof DeploySchema>;
 
-export const NginxSchema = z.object({});
+export const NginxSchema = z.object({
+  chatId: z.string().min(1).max(120).optional()
+});
 export type Nginx = z.infer<typeof NginxSchema>;
 
-export const SslSchema = z.object({});
+export const SslSchema = z.object({
+  chatId: z.string().min(1).max(120).optional()
+});
 export type Ssl = z.infer<typeof SslSchema>;
 
 export const VscodeCommandRequestSchema = z.object({
