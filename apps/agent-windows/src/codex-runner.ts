@@ -15,7 +15,7 @@ type RunContext = {
     prompt: string;
     sandbox: "read-only" | "workspace-write" | "danger-full-access";
     branchMode: "current" | "create-per-job";
-    kind: "codex" | "test";
+    kind: "codex" | "grok" | "test";
     testCommandId?: string;
     model?: string;
     reasoningEffort?: "low" | "medium" | "high" | "xhigh";
@@ -29,6 +29,13 @@ type RunContext = {
   };
   sendLog: (log: AgentJobLog) => void;
   sendProgress: (progress: AgentJobProgress) => void;
+};
+
+type JsonLineHandlerResult = { handled: boolean; threadId?: string; messageText?: string };
+type JsonLineHandler = (context: RunContext, line: string) => JsonLineHandlerResult;
+type SpawnCollectOptions = {
+  toolName?: string;
+  handleJsonLine?: JsonLineHandler;
 };
 
 export class Runner {
@@ -51,6 +58,7 @@ export class Runner {
     if (!repo.allowedSandboxes.includes(context.job.sandbox)) throw new Error(`Sandbox not allowed: ${context.job.sandbox}`);
     if (context.config.fakeRunner || process.env.CMC_FAKE_RUNNER === "1") return this.runFake(context, repo);
     if (context.job.kind === "test") return this.runTest(context, repo);
+    if (context.job.kind === "grok") return this.runGrok(context, repo);
     return this.runCodex(context, repo);
   }
 
@@ -138,8 +146,56 @@ export class Runner {
     return this.spawnAndCollect(context, repo, codexCommand.command, args, context.config.maxJobDurationMs, prompt);
   }
 
-  private spawnAndCollect(context: RunContext, repo: RepoConfig, command: string, args: string[], timeoutMs: number, stdinInput?: string): Promise<AgentJobDone> {
+  private async runGrok(context: RunContext, repo: RepoConfig): Promise<AgentJobDone> {
+    const attachments = prepareAttachments(context, repo);
+    const promptPathMapper = grokPathMapper();
+    const repoPath = promptPathMapper(repo.path);
+    const userPrompt = attachments.length
+      ? [
+        context.job.prompt,
+        "",
+        "Attached files saved locally for this task:",
+        ...attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType}, ${attachment.size} bytes): ${promptPathMapper(attachment.path)}`),
+        "",
+        "Use these file paths as the attached user-provided context."
+      ].join("\n")
+      : context.job.prompt;
+    const prompt = context.job.codexThreadId
+      ? userPrompt
+      : [grokEnvironmentPrompt(repo, repoPath), userPrompt].join("\n\n");
+    const promptFilePath = writePromptFile(repo, context.job.id, prompt);
+    const grokArgs = [
+      ...(context.job.model ? ["-m", context.job.model] : []),
+      ...(context.job.reasoningEffort ? ["--effort", context.job.reasoningEffort] : []),
+      "--cwd",
+      repoPath,
+      "--sandbox",
+      context.job.sandbox,
+      "--always-approve",
+      "--output-format",
+      "streaming-json",
+      ...(context.job.codexThreadId ? ["--resume", context.job.codexThreadId] : []),
+      "--prompt-file",
+      promptPathMapper(promptFilePath)
+    ];
+    const grokCommand = grokExecutable(grokArgs);
+    return this.spawnAndCollect(context, repo, grokCommand.command, grokCommand.args, context.config.maxJobDurationMs, undefined, {
+      toolName: "Grok",
+      handleJsonLine: createGrokJsonLineHandler()
+    });
+  }
+
+  private spawnAndCollect(
+    context: RunContext,
+    repo: RepoConfig,
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    stdinInput?: string,
+    options: SpawnCollectOptions = {}
+  ): Promise<AgentJobDone> {
     return new Promise((resolve) => {
+      const toolName = options.toolName ?? "Codex";
       context.sendLog(log(context.job.id, "system", `Starting ${command} ${args.slice(0, 4).join(" ")} ...`));
       context.sendProgress(progress(context.job.id, "starting", `Starting ${command}.`));
       this.child = spawn(command, args, {
@@ -176,8 +232,7 @@ export class Runner {
               ? "completed"
               : "failed";
         const resultMessage = failureMessage
-          ?? codexNetworkFailureMessage
-          ?? (this.cancelled ? "Job cancelled." : exitCode === 0 ? "Codex finished." : "Codex process failed.");
+          ?? (codexNetworkFailureMessage || (this.cancelled ? "Job cancelled." : exitCode === 0 ? `${toolName} finished.` : `${toolName} process failed.`));
         context.sendProgress(progress(
           context.job.id,
           "finalizing",
@@ -199,8 +254,7 @@ export class Runner {
           status,
           exitCode,
           finalMessage: failureMessage
-            ?? codexNetworkFailureMessage
-            ?? (this.cancelled ? "Job cancelled." : finalMessage || rawOutputTail.trim() || (exitCode === 0 ? "Completed." : "Process failed.")),
+            ?? (codexNetworkFailureMessage || (this.cancelled ? "Job cancelled." : finalMessage || rawOutputTail.trim() || (exitCode === 0 ? "Completed." : "Process failed."))),
           gitStatus: gitStatus.stdout,
           gitDiffStat: gitDiffStat.stdout,
           gitDiff: truncate(gitDiff.stdout, 120000),
@@ -233,15 +287,17 @@ export class Runner {
         const text = chunk.toString();
         for (const line of text.split(/\r?\n/).filter(Boolean)) {
           if (stream === "stdout") {
-            const handled = handleCodexJsonLine(context, line);
+            const handled = options.handleJsonLine
+              ? options.handleJsonLine(context, line)
+              : handleCodexJsonLine(context, line);
             if (handled.handled) {
               if (handled.threadId) codexThreadId = handled.threadId;
               if (handled.messageText) finalMessage = handled.messageText.slice(-4000);
               continue;
             }
           }
-          if (stream === "stderr" && isIgnorableCodexWarning(line)) continue;
-          const normalizedFailure = normalizeCodexNetworkFailure(line, codexNetworkFailureMessage);
+          if (stream === "stderr" && (toolName === "Grok" ? isIgnorableGrokWarning(line) : isIgnorableCodexWarning(line))) continue;
+          const normalizedFailure = toolName === "Codex" ? normalizeCodexNetworkFailure(line, codexNetworkFailureMessage) : null;
           if (normalizedFailure) {
             rawOutputTail = normalizedFailure;
             if (!codexNetworkFailureMessage) {
@@ -320,6 +376,72 @@ function codexExecutable(): { command: string; prefixArgs: string[] } {
   return { command: process.env.CMC_CODEX_BIN || "codex", prefixArgs: [] };
 }
 
+function grokExecutable(args: string[]): { command: string; args: string[] } {
+  if (process.env.CMC_GROK_BIN) {
+    return { command: process.env.CMC_GROK_BIN, args };
+  }
+  if (process.platform === "win32") {
+    const grokBin = grokWslBinCommand();
+    return {
+      command: process.env.CMC_WSL_BASH_BIN || "bash.exe",
+      args: ["-lc", `exec ${grokBin} ${args.map(shellQuote).join(" ")}`]
+    };
+  }
+  return { command: "grok", args };
+}
+
+function grokWslBinCommand(): string {
+  const configured = process.env.CMC_GROK_WSL_BIN;
+  if (!configured) return "$HOME/.grok/bin/grok";
+  if (configured.startsWith("~/")) return `$HOME/${configured.slice(2).split("/").map(shellQuoteSegment).join("/")}`;
+  return shellQuote(configured);
+}
+
+function shellQuoteSegment(value: string): string {
+  return value.replaceAll("'", "'\\''");
+}
+
+function grokPathMapper(): (value: string) => string {
+  if (process.env.CMC_GROK_BIN || process.platform !== "win32") return (value) => value;
+  return windowsPathToWslPath;
+}
+
+function windowsPathToWslPath(value: string): string {
+  const driveMatch = value.match(/^([A-Za-z]):[\\/](.*)$/);
+  if (!driveMatch) return value.replace(/\\/g, "/");
+  const [, driveLetter, pathRest] = driveMatch;
+  if (!driveLetter || pathRest === undefined) return value.replace(/\\/g, "/");
+  const drive = driveLetter.toLowerCase();
+  const rest = pathRest.replace(/\\/g, "/");
+  return `/mnt/${drive}/${rest}`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function writePromptFile(repo: RepoConfig, jobId: string, prompt: string): string {
+  const root = join(repo.path, ".codex-web-attachments", safePathSegment(jobId));
+  mkdirSync(root, { recursive: true });
+  ensureGitExclude(repo.path);
+  const path = join(root, "grok-prompt.md");
+  writeFileSync(path, prompt, "utf8");
+  return path;
+}
+
+function grokEnvironmentPrompt(repo: RepoConfig, grokRepoPath: string): string {
+  return [
+    "Grok Build web agent environment:",
+    `- Project: ${repo.name}.`,
+    `- Windows path: ${repo.path}.`,
+    `- Grok working directory: ${grokRepoPath}.`,
+    "- You are running through codex.rodion.pro's Windows agent via Grok Build CLI.",
+    "- Prefer finite commands and avoid long-lived dev servers unless the user explicitly asks for them.",
+    "- The project is on the Windows filesystem. If a Linux tool is unavailable in WSL, use Windows interop commands such as cmd.exe /c or powershell.exe after one direct attempt.",
+    "- Report environment limitations clearly when a required local dependency is not installed."
+  ].join("\n");
+}
+
 function environmentPrompt(config: AgentConfig, repo: RepoConfig): string {
   const toolbelt = JSON.stringify(join(dirname(fileURLToPath(import.meta.url)), "codex-toolbelt.js"));
   const platform = config.platform ?? (process.platform === "win32" ? "windows" : "linux");
@@ -348,6 +470,10 @@ function environmentPrompt(config: AgentConfig, repo: RepoConfig): string {
 
 function isIgnorableCodexWarning(line: string): boolean {
   return /ERROR\s+codex_core::session:\s+failed to record rollout items:\s+thread .* not found/i.test(line);
+}
+
+function isIgnorableGrokWarning(line: string): boolean {
+  return /BatchSpanProcessor\.ExportError|git_cli: Command::output\(\) FAILED/i.test(line);
 }
 
 function normalizeCodexNetworkFailure(line: string, activeFailure: string): string | null {
@@ -521,6 +647,54 @@ function handleCodexJsonLine(context: RunContext, line: string): { handled: bool
   }
 
   return { handled: true };
+}
+
+function createGrokJsonLineHandler(): JsonLineHandler {
+  let messageText = "";
+  let thoughtSeen = false;
+  return (context, line) => {
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return { handled: false };
+    }
+    if (!event || typeof event !== "object") return { handled: false };
+    const record = event as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+    const data = typeof record.data === "string" ? record.data : "";
+    if (type === "thought") {
+      if (!thoughtSeen) {
+        thoughtSeen = true;
+        context.sendProgress(progress(context.job.id, "thinking", "Grok is thinking."));
+      }
+      return { handled: true };
+    }
+    if (type === "text") {
+      messageText = `${messageText}${data}`.slice(-4000);
+      if (data.includes("\n")) {
+        const text = messageText.trim();
+        if (text) {
+          context.sendProgress(progress(context.job.id, "message", text.slice(-500)));
+          context.sendLog(log(context.job.id, "stdout", text));
+        }
+      }
+      return { handled: true, messageText };
+    }
+    if (type === "end") {
+      const sessionId = typeof record.sessionId === "string" ? record.sessionId : undefined;
+      const text = messageText.trim();
+      if (text) {
+        context.sendProgress(progress(context.job.id, "message", text.slice(-500), sessionId ? { codexThreadId: sessionId } : undefined));
+        context.sendLog(log(context.job.id, "stdout", text));
+      }
+      if (sessionId) {
+        context.sendProgress(progress(context.job.id, "started", "Grok session updated.", { codexThreadId: sessionId }));
+      }
+      return { handled: true, threadId: sessionId, messageText: text };
+    }
+    return { handled: true };
+  };
 }
 
 function summarizeCommand(command: string): string {

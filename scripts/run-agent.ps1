@@ -11,7 +11,7 @@ if ($UserAgentToken) {
   $env:CMC_AGENT_TOKEN = $UserAgentToken
 }
 
-foreach ($Name in @("GH_TOKEN", "GITHUB_TOKEN")) {
+foreach ($Name in @("GH_TOKEN", "GITHUB_TOKEN", "XAI_API_KEY", "CMC_GROK_BIN", "CMC_GROK_WSL_BIN", "CMC_WSL_BASH_BIN")) {
   if (-not (Get-Item -Path "Env:$Name" -ErrorAction SilentlyContinue)) {
     $UserValue = [Environment]::GetEnvironmentVariable($Name, "User")
     if ($UserValue) {
@@ -42,6 +42,23 @@ if (-not $env:CMC_CODEX_BIN) {
 
 if (-not $env:CMC_CODEX_BIN -and -not ($env:CMC_CODEX_NODE -and $env:CMC_CODEX_JS)) {
   throw "codex.cmd is not available in PATH. Install or expose Codex CLI for the Windows agent."
+}
+
+if (-not $env:CMC_GROK_BIN) {
+  $GrokCmd = Get-Command grok.cmd -ErrorAction SilentlyContinue
+  if ($GrokCmd) {
+    $env:CMC_GROK_BIN = $GrokCmd.Source
+  }
+}
+
+if (-not $env:CMC_GROK_BIN -and -not $env:CMC_GROK_WSL_BIN) {
+  $BashCmd = Get-Command bash.exe -ErrorAction SilentlyContinue
+  if ($BashCmd) {
+    $Probe = & $BashCmd.Source -lc "test -x ~/.grok/bin/grok" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      $env:CMC_WSL_BASH_BIN = $BashCmd.Source
+    }
+  }
 }
 
 node apps/agent-windows/dist/index.js --config $Config

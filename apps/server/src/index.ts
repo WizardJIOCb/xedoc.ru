@@ -2960,7 +2960,7 @@ async function createApp(): Promise<FastifyInstance> {
   app.get("/api/agents", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth) return;
-    const rows = db.prepare(`SELECT id,user_id,name,hostname,os,agent_version,codex_version,git_version,codex_usage_json,local_activity_json,status,current_job_id,last_seen_at,created_at FROM agents ${agentAccessWhere(auth.user)} ORDER BY created_at`)
+    const rows = db.prepare(`SELECT id,user_id,name,hostname,os,agent_version,codex_version,grok_version,git_version,codex_usage_json,grok_usage_json,local_activity_json,status,current_job_id,last_seen_at,created_at FROM agents ${agentAccessWhere(auth.user)} ORDER BY created_at`)
       .all(...agentAccessArgs(auth.user)) as AgentRow[];
     return {
       agents: rows.map((row) => {
@@ -2970,6 +2970,7 @@ async function createApp(): Promise<FastifyInstance> {
           status: online ? "online" : "offline",
           current_job_id: online ? row.current_job_id : null,
           codexUsage: parseCodexUsage(row.codex_usage_json),
+          grokUsage: parseCodexUsage(row.grok_usage_json),
           localActivity: freshLocalActivity(parseLocalActivity(row.local_activity_json), row.id)
         };
       })
@@ -3658,7 +3659,7 @@ async function createApp(): Promise<FastifyInstance> {
       parsed.data.model ?? null,
       parsed.data.reasoningEffort ?? null,
       parsed.data.speed ?? null,
-      "codex",
+      parsed.data.kind,
       "queued",
       createdAt
     );
@@ -3673,7 +3674,8 @@ async function createApp(): Promise<FastifyInstance> {
         jobId,
         model: parsed.data.model,
         reasoningEffort: parsed.data.reasoningEffort,
-        speed: parsed.data.speed
+        speed: parsed.data.speed,
+        kind: parsed.data.kind
       }),
       created_at: createdAt
     });
@@ -3767,15 +3769,17 @@ async function createApp(): Promise<FastifyInstance> {
           return;
         }
         db.prepare(`
-          UPDATE agents SET hostname=?, os=?, agent_version=?, codex_version=?, git_version=?, codex_usage_json=?, local_activity_json=?, last_seen_at=?, status='online'
+          UPDATE agents SET hostname=?, os=?, agent_version=?, codex_version=?, grok_version=?, git_version=?, codex_usage_json=?, grok_usage_json=?, local_activity_json=?, last_seen_at=?, status='online'
           WHERE id=?
         `).run(
           parsed.hostname,
           parsed.os,
           parsed.agentVersion,
           parsed.codexVersion ?? null,
+          parsed.grokVersion ?? null,
           parsed.gitVersion ?? null,
           parsed.codexUsage ? JSON.stringify(parsed.codexUsage) : null,
+          parsed.grokUsage ? JSON.stringify(parsed.grokUsage) : null,
           parsed.localActivity ? JSON.stringify(parsed.localActivity) : null,
           nowIso(),
           agent.id
@@ -3786,9 +3790,16 @@ async function createApp(): Promise<FastifyInstance> {
       }
       if (parsed.type === "agent.heartbeat") {
         const localActivityJson = parsed.localActivity ? JSON.stringify(parsed.localActivity) : null;
-        if (parsed.codexUsage) {
-          db.prepare("UPDATE agents SET last_seen_at=?, current_job_id=?, codex_usage_json=?, local_activity_json=COALESCE(?, local_activity_json) WHERE id=?")
-            .run(nowIso(), parsed.currentJobId ?? null, JSON.stringify(parsed.codexUsage), localActivityJson, agent.id);
+        if (parsed.codexUsage || parsed.grokUsage) {
+          db.prepare("UPDATE agents SET last_seen_at=?, current_job_id=?, codex_usage_json=COALESCE(?, codex_usage_json), grok_usage_json=COALESCE(?, grok_usage_json), local_activity_json=COALESCE(?, local_activity_json) WHERE id=?")
+            .run(
+              nowIso(),
+              parsed.currentJobId ?? null,
+              parsed.codexUsage ? JSON.stringify(parsed.codexUsage) : null,
+              parsed.grokUsage ? JSON.stringify(parsed.grokUsage) : null,
+              localActivityJson,
+              agent.id
+            );
         } else {
           db.prepare("UPDATE agents SET last_seen_at=?, current_job_id=?, local_activity_json=COALESCE(?, local_activity_json) WHERE id=?").run(nowIso(), parsed.currentJobId ?? null, localActivityJson, agent.id);
         }
@@ -3856,11 +3867,12 @@ async function createApp(): Promise<FastifyInstance> {
             chat_id: job.chat_id,
             role: "assistant",
             content: finalMessage,
-            source: "codex",
+            source: job.kind === "grok" ? "grok" : "codex",
             external_id: `job:${parsed.jobId}:final`,
             metadata_json: JSON.stringify({
               jobId: parsed.jobId,
               status: parsed.status,
+              kind: job.kind,
               codexThreadId: parsed.codexThreadId,
               gitStatus: parsed.gitStatus,
               gitDiffStat: parsed.gitDiffStat,

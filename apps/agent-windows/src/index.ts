@@ -27,6 +27,8 @@ let currentRunner: Runner | null = null;
 let currentJobId: string | undefined;
 let cachedCodexUsage: CodexUsage | undefined;
 let cachedCodexUsageAt = 0;
+let cachedGrokUsage: CodexUsage | undefined;
+let cachedGrokUsageAt = 0;
 let lastLocalActivitySyncKey = "";
 let lastLocalActivityStatus: LocalCodexActivity["status"] = "idle";
 let lastBusyLocalChatSyncOnly: LocalChatSyncOptions["only"];
@@ -739,7 +741,11 @@ function shellQuote(value: string): string {
 
 async function toolVersion(command: string, args = ["--version"]): Promise<string | undefined> {
   const executable = command === "codex" ? codexExecutable() : { command, args: [] };
-  const result = await runCapture(executable.command, [...executable.args, ...args], undefined, 15000);
+  const grokCommand = command === "grok" ? grokExecutable(args) : undefined;
+  const result = grokCommand
+    ? await runCapture(grokCommand.command, grokCommand.args, undefined, 15000)
+    : await runCapture(executable.command, [...executable.args, ...args], undefined, 15000);
+  if (result.exitCode !== 0) return undefined;
   return (result.stdout || result.stderr).trim().split(/\r?\n/)[0];
 }
 
@@ -773,11 +779,67 @@ async function probeCodexUsage(force = false): Promise<CodexUsage> {
   return cachedCodexUsage;
 }
 
+async function probeGrokUsage(force = false): Promise<CodexUsage> {
+  const cacheTtlMs = 10 * 60 * 1000;
+  if (!force && cachedGrokUsage && Date.now() - cachedGrokUsageAt < cacheTtlMs) return cachedGrokUsage;
+
+  const checkedAt = new Date().toISOString();
+  try {
+    const executable = grokExecutable(["models"]);
+    const result = await runCapture(executable.command, executable.args, undefined, 30000);
+    const rawStatus = (result.stdout || result.stderr).trim();
+    const signedIn = result.exitCode === 0 && /logged in with grok\.com/i.test(rawStatus);
+    const authMissing = /not logged in|log in|login|auth|unauthori[sz]ed/i.test(rawStatus);
+    cachedGrokUsage = {
+      status: signedIn ? "signed-in" : authMissing ? "signed-out" : result.exitCode === 0 ? "signed-out" : "unavailable",
+      summary: signedIn
+        ? "Signed in. Exact remaining Grok Build limit is not exposed by the local CLI yet."
+        : rawStatus || "Grok account is not signed in.",
+      source: "grok models",
+      checkedAt
+    };
+  } catch (error) {
+    cachedGrokUsage = {
+      status: "unavailable",
+      summary: error instanceof Error ? error.message : "Could not read Grok account status.",
+      source: "grok models",
+      checkedAt
+    };
+  }
+  cachedGrokUsageAt = Date.now();
+  return cachedGrokUsage;
+}
+
 function codexExecutable(): { command: string; args: string[] } {
   if (process.env.CMC_CODEX_NODE && process.env.CMC_CODEX_JS) {
     return { command: process.env.CMC_CODEX_NODE, args: [process.env.CMC_CODEX_JS] };
   }
   return { command: process.env.CMC_CODEX_BIN || "codex", args: [] };
+}
+
+function grokExecutable(args: string[]): { command: string; args: string[] } {
+  if (process.env.CMC_GROK_BIN) {
+    return { command: process.env.CMC_GROK_BIN, args };
+  }
+  if (process.platform === "win32") {
+    const grokBin = grokWslBinCommand();
+    return {
+      command: process.env.CMC_WSL_BASH_BIN || "bash.exe",
+      args: ["-lc", `exec ${grokBin} ${args.map(shellQuote).join(" ")}`]
+    };
+  }
+  return { command: "grok", args };
+}
+
+function grokWslBinCommand(): string {
+  const configured = process.env.CMC_GROK_WSL_BIN;
+  if (!configured) return "$HOME/.grok/bin/grok";
+  if (configured.startsWith("~/")) return `$HOME/${configured.slice(2).split("/").map(shellQuoteSegment).join("/")}`;
+  return shellQuote(configured);
+}
+
+function shellQuoteSegment(value: string): string {
+  return value.replaceAll("'", "'\\''");
 }
 
 function optionalText(value: string | undefined): string | undefined {
@@ -786,11 +848,13 @@ function optionalText(value: string | undefined): string | undefined {
 }
 
 async function hello(): Promise<AgentToServer> {
-  const [repos, codexVersion, gitVersion, codexUsage] = await Promise.all([
+  const [repos, codexVersion, grokVersion, gitVersion, codexUsage, grokUsage] = await Promise.all([
     scanRepos(config),
     toolVersion("codex"),
+    toolVersion("grok"),
     toolVersion("git", ["--version"]),
-    probeCodexUsage(true)
+    probeCodexUsage(true),
+    probeGrokUsage(true)
   ]);
   return {
     type: "agent.hello",
@@ -799,8 +863,10 @@ async function hello(): Promise<AgentToServer> {
     os: `${os.type()} ${os.release()}`,
     agentVersion: "0.1.0",
     codexVersion,
+    grokVersion,
     gitVersion,
     codexUsage,
+    grokUsage,
     localActivity: detectLocalCodexActivity(config, currentJobId),
     repos
   };
@@ -936,6 +1002,7 @@ function connect() {
         currentJobId,
         localActivity: detectLocalCodexActivity(config, currentJobId),
         codexUsage: await probeCodexUsage(),
+        grokUsage: await probeGrokUsage(),
         repos: await scanRepos(config)
       });
       logProgress("scan: Project scan sent.");
@@ -1250,6 +1317,7 @@ function connect() {
       currentJobId,
       localActivity,
       codexUsage: await probeCodexUsage(),
+      grokUsage: await probeGrokUsage(),
       repos: await scanRepos(config)
     });
     scheduleLocalChatSyncAfterActivity(localActivity, send);

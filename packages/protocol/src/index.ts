@@ -107,8 +107,10 @@ export const AgentHelloSchema = z.object({
   os: z.string().min(1),
   agentVersion: z.string().min(1),
   codexVersion: z.string().optional(),
+  grokVersion: z.string().optional(),
   gitVersion: z.string().optional(),
   codexUsage: CodexUsageSchema.optional(),
+  grokUsage: CodexUsageSchema.optional(),
   localActivity: LocalCodexActivitySchema.optional(),
   repos: z.array(RepoInfoSchema)
 });
@@ -117,6 +119,7 @@ export const AgentHeartbeatSchema = z.object({
   type: z.literal("agent.heartbeat"),
   currentJobId: z.string().optional(),
   codexUsage: CodexUsageSchema.optional(),
+  grokUsage: CodexUsageSchema.optional(),
   localActivity: LocalCodexActivitySchema.optional(),
   repos: z.array(RepoInfoSchema).optional()
 });
@@ -301,7 +304,7 @@ export const ServerJobRunSchema = z.object({
     prompt: z.string().min(1),
     sandbox: SandboxSchema,
     branchMode: z.enum(["current", "create-per-job"]).default("current"),
-    kind: z.enum(["codex", "test"]).default("codex"),
+    kind: z.enum(["codex", "grok", "test"]).default("codex"),
     testCommandId: z.string().optional(),
     model: CodexModelSchema.optional(),
     reasoningEffort: ReasoningEffortSchema.optional(),
@@ -442,6 +445,7 @@ export const CreateJobSchema = z.object({
   prompt: z.string().min(3).max(16000),
   sandbox: SandboxSchema,
   branchMode: z.enum(["current", "create-per-job"]).default("current"),
+  kind: z.enum(["codex", "grok"]).default("codex"),
   model: CodexModelSchema.optional(),
   reasoningEffort: ReasoningEffortSchema.optional(),
   speed: CodexSpeedSchema.optional(),

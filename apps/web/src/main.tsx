@@ -57,6 +57,7 @@ import "./styles.css";
 type Sandbox = "read-only" | "workspace-write" | "danger-full-access";
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "standard" | "fast";
+type JobKind = "codex" | "grok";
 type ProjectVisibility = "private" | "public";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
@@ -83,6 +84,14 @@ const CODEX_MODEL_OPTIONS = [
   { value: "gpt-5.4", label: "GPT-5.4" },
   { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
   { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" }
+];
+const GROK_MODEL_OPTIONS = [
+  { value: "grok-build", label: "Grok Build" },
+  { value: "grok-build-latest", label: "Grok Build Latest" }
+];
+const RUNNER_OPTIONS: Array<{ value: JobKind; label: string; note: string }> = [
+  { value: "codex", label: "Codex", note: "OpenAI Codex CLI" },
+  { value: "grok", label: "Grok", note: "Grok Build CLI" }
 ];
 const PROJECT_DOMAIN_ROOT = "codex.rodion.pro";
 const DEFAULT_GITHUB_OWNER = "WizardJIOCb";
@@ -124,6 +133,7 @@ type Agent = {
   status: "online" | "offline";
   current_job_id?: string | null;
   codex_version?: string;
+  grok_version?: string;
   git_version?: string;
   last_seen_at?: string;
   localActivity?: {
@@ -139,6 +149,16 @@ type Agent = {
     updatedAt?: string;
   };
   codexUsage?: {
+    status: "signed-in" | "signed-out" | "unavailable";
+    summary: string;
+    source: string;
+    checkedAt: string;
+    resetAt?: string;
+    limit?: number;
+    remaining?: number;
+    usedPercent?: number;
+  };
+  grokUsage?: {
     status: "signed-in" | "signed-out" | "unavailable";
     summary: string;
     source: string;
@@ -401,6 +421,7 @@ type Job = {
   model?: string | null;
   reasoningEffort?: ReasoningEffort | null;
   speed?: CodexSpeed | null;
+  kind?: JobKind | "test" | null;
   status: string;
   exitCode: number | null;
   finalMessage: string | null;
@@ -696,8 +717,17 @@ function formatDateTime(value?: string | null) {
 
 function chatSourceLabel(source?: string | null) {
   if (source === "codex") return "Codex";
+  if (source === "grok") return "Grok";
   if (source === "vscode") return "VS Code";
   return "Web";
+}
+
+function modelOptionsForKind(kind?: string | null) {
+  return kind === "grok" ? GROK_MODEL_OPTIONS : CODEX_MODEL_OPTIONS;
+}
+
+function modelLabelForKind(kind: string | null | undefined, model: string) {
+  return modelOptionsForKind(kind).find((option) => option.value === model)?.label ?? model;
 }
 
 function shortChatExternalId(chat?: Pick<Chat, "externalId"> | null) {
@@ -929,12 +959,15 @@ function messageRunDetails(message: ChatMessage, job: Job | undefined, collapsed
   const metadataModel = typeof message.metadata?.model === "string" ? message.metadata.model : "";
   const metadataReasoning = typeof message.metadata?.reasoningEffort === "string" ? message.metadata.reasoningEffort : "";
   const metadataSpeed = typeof message.metadata?.speed === "string" ? message.metadata.speed : "";
+  const metadataKind = typeof message.metadata?.kind === "string" ? message.metadata.kind : "";
+  const kind = runJob?.kind || metadataKind || message.source;
   const model = runJob?.model || metadataModel;
   const reasoning = runJob?.reasoningEffort || metadataReasoning;
-  const speed = runJob?.speed || metadataSpeed;
+  const speed = kind === "grok" ? "" : runJob?.speed || metadataSpeed;
   const durationSeconds = collapsedRun?.durationSeconds ?? (runJob?.finishedAt ? jobDurationSeconds(runJob) : messageDurationSeconds(message));
   const settings = [
-    model ? CODEX_MODEL_OPTIONS.find((option) => option.value === model)?.label ?? model : "",
+    kind === "grok" ? "Grok" : "",
+    model ? modelLabelForKind(kind, model) : "",
     reasoning ? `Intelligence ${REASONING_OPTIONS.find((option) => option.value === reasoning)?.label ?? reasoning}` : "",
     speed ? `Speed ${SPEED_OPTIONS.find((option) => option.value === speed)?.label ?? speed}` : ""
   ].filter(Boolean);
@@ -2411,7 +2444,9 @@ function App() {
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [actionGitOptionsOpen, setActionGitOptionsOpen] = useState(false);
   const [projectActionsOpen, setProjectActionsOpen] = useState(false);
+  const [jobKind, setJobKind] = useState<JobKind>("codex");
   const [codexModel, setCodexModel] = useState("gpt-5.5");
+  const [grokModel, setGrokModel] = useState("grok-build");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
   const [codexSpeed, setCodexSpeed] = useState<CodexSpeed>("standard");
   const [originalProjectPath, setOriginalProjectPath] = useState("");
@@ -3838,8 +3873,11 @@ function App() {
     try {
       const raw = localStorage.getItem("cmc.codexRunSettings");
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { model?: string; reasoningEffort?: ReasoningEffort; speed?: CodexSpeed };
+      const parsed = JSON.parse(raw) as { kind?: JobKind; model?: string; codexModel?: string; grokModel?: string; reasoningEffort?: ReasoningEffort; speed?: CodexSpeed };
+      if (parsed.kind && RUNNER_OPTIONS.some((option) => option.value === parsed.kind)) setJobKind(parsed.kind);
       if (parsed.model && CODEX_MODEL_OPTIONS.some((option) => option.value === parsed.model)) setCodexModel(parsed.model);
+      if (parsed.codexModel && CODEX_MODEL_OPTIONS.some((option) => option.value === parsed.codexModel)) setCodexModel(parsed.codexModel);
+      if (parsed.grokModel && GROK_MODEL_OPTIONS.some((option) => option.value === parsed.grokModel)) setGrokModel(parsed.grokModel);
       if (parsed.reasoningEffort && REASONING_OPTIONS.some((option) => option.value === parsed.reasoningEffort)) setReasoningEffort(parsed.reasoningEffort);
       if (parsed.speed && SPEED_OPTIONS.some((option) => option.value === parsed.speed)) setCodexSpeed(parsed.speed);
     } catch {
@@ -3854,14 +3892,17 @@ function App() {
   useEffect(() => {
     try {
       localStorage.setItem("cmc.codexRunSettings", JSON.stringify({
-        model: codexModel,
+        kind: jobKind,
+        model: jobKind === "grok" ? grokModel : codexModel,
+        codexModel,
+        grokModel,
         reasoningEffort,
         speed: codexSpeed
       }));
     } catch {
       // The settings are just a UI convenience; a blocked storage write should not break chat.
     }
-  }, [codexModel, reasoningEffort, codexSpeed]);
+  }, [jobKind, codexModel, grokModel, reasoningEffort, codexSpeed]);
 
   useEffect(() => {
     if (!sandboxMenuOpen && !actionMenuOpen) return;
@@ -4309,9 +4350,10 @@ function App() {
         prompt: promptWithSetup,
         sandbox,
         branchMode: "current",
-        model: codexModel,
+        kind: jobKind,
+        model: jobKind === "grok" ? grokModel : codexModel,
         reasoningEffort,
-        speed: codexSpeed,
+        speed: jobKind === "codex" ? codexSpeed : undefined,
         attachments: []
       })
     });
@@ -4467,9 +4509,10 @@ function App() {
         prompt: promptText,
         sandbox,
         branchMode: "current",
-        model: codexModel,
+        kind: jobKind,
+        model: jobKind === "grok" ? grokModel : codexModel,
         reasoningEffort,
-        speed: codexSpeed,
+        speed: jobKind === "codex" ? codexSpeed : undefined,
         attachments: attachments.map((attachment) => ({
           name: attachment.name,
           mimeType: attachment.mimeType,
@@ -6815,10 +6858,14 @@ function App() {
     if (!selectedRepo) return null;
     const canSubmit = Boolean(prompt.trim() || attachments.length);
     const runDisabled = busy || !canSubmit || localCodexBusy || activeRunBusy;
-    const selectedModelLabel = CODEX_MODEL_OPTIONS.find((option) => option.value === codexModel)?.label ?? codexModel;
+    const currentModelOptions = modelOptionsForKind(jobKind);
+    const selectedModel = jobKind === "grok" ? grokModel : codexModel;
+    const selectedRunnerLabel = RUNNER_OPTIONS.find((option) => option.value === jobKind)?.label ?? jobKind;
+    const selectedModelLabel = currentModelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel;
     const selectedReasoningLabel = REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label ?? reasoningEffort;
     const selectedSpeedLabel = SPEED_OPTIONS.find((option) => option.value === codexSpeed)?.label ?? codexSpeed;
     const showCodexBusy = localCodexBusy || activeRunBusy;
+    const busyLabel = activeRunBusy ? `${activeJob?.kind === "grok" ? "Grok" : "Codex"} занят` : "Codex занят";
     return (
       <form className="composer" ref={composerRef} onSubmit={createJob}>
         {attachments.length > 0 && (
@@ -6858,7 +6905,7 @@ function App() {
           />
           <button className="run-button" disabled={runDisabled} type="submit">
             {showCodexBusy ? <RefreshCw className="spin" size={18} /> : <Play size={18} />}
-            {showCodexBusy ? `${activeRunBusy ? jobProgressLabel(activeProgress) : "Codex занят"} ${formatDuration(thinkingSeconds)}` : "Отправить"}
+            {showCodexBusy ? `${activeRunBusy ? jobProgressLabel(activeProgress) : busyLabel} ${formatDuration(thinkingSeconds)}` : "Отправить"}
           </button>
           <label className="attachment-picker" htmlFor="composer-attachment-input" title="Attach files">
             <Paperclip size={18} />
@@ -6915,6 +6962,25 @@ function App() {
             {actionMenuOpen && (
               <div className="action-menu" role="menu">
                 <div className="menu-section">
+                  <span className="menu-section-title">Agent</span>
+                  {RUNNER_OPTIONS.map((option) => (
+                    <button
+                      className={`runner-option ${jobKind === option.value ? "selected" : ""}`}
+                      key={option.value}
+                      role="menuitemcheckbox"
+                      aria-checked={jobKind === option.value}
+                      type="button"
+                      onClick={() => setJobKind(option.value)}
+                    >
+                      <span>
+                        <strong>{option.label}</strong>
+                        <small>{option.note}</small>
+                      </span>
+                      {jobKind === option.value && <Check size={15} />}
+                    </button>
+                  ))}
+                </div>
+                <div className="menu-section">
                   <span className="menu-section-title">Intelligence</span>
                   {REASONING_OPTIONS.map((option) => (
                     <button
@@ -6932,21 +6998,21 @@ function App() {
                 </div>
                 <div className="menu-section">
                   <span className="menu-section-title">Model</span>
-                  {CODEX_MODEL_OPTIONS.map((option) => (
+                  {currentModelOptions.map((option) => (
                     <button
-                      className={codexModel === option.value ? "selected" : ""}
+                      className={selectedModel === option.value ? "selected" : ""}
                       key={option.value}
                       role="menuitemcheckbox"
-                      aria-checked={codexModel === option.value}
+                      aria-checked={selectedModel === option.value}
                       type="button"
-                      onClick={() => setCodexModel(option.value)}
+                      onClick={() => jobKind === "grok" ? setGrokModel(option.value) : setCodexModel(option.value)}
                     >
                       <span>{option.label}</span>
-                      {codexModel === option.value && <Check size={15} />}
+                      {selectedModel === option.value && <Check size={15} />}
                     </button>
                   ))}
                 </div>
-                <div className="menu-section">
+                {jobKind === "codex" && <div className="menu-section">
                   <span className="menu-section-title">Speed</span>
                   {SPEED_OPTIONS.map((option) => (
                     <button
@@ -6964,9 +7030,9 @@ function App() {
                       {codexSpeed === option.value && <Check size={15} />}
                     </button>
                   ))}
-                </div>
+                </div>}
                 <div className="menu-summary current-mode">
-                  {selectedModelLabel} · {selectedReasoningLabel} · {selectedSpeedLabel}
+                  {[selectedRunnerLabel, selectedModelLabel, selectedReasoningLabel, jobKind === "codex" ? selectedSpeedLabel : ""].filter(Boolean).join(" · ")}
                 </div>
                 {vscodeNotice && <div className="menu-summary">{vscodeNotice}</div>}
                 <button
@@ -7590,6 +7656,8 @@ function App() {
                                 ? currentUser?.nickname || currentUser?.email || "You"
                                 : message.source === "vscode"
                                   ? "VS Code"
+                                  : message.source === "grok"
+                                    ? "Grok"
                                   : "Codex";
                             const assistantDetails = message.role === "assistant" || message.role === "tool" || message.role === "system"
                               ? messageRunDetails(message, messageJob, collapsedRun)
@@ -7713,6 +7781,15 @@ function App() {
                 : "Exact remaining limit is not exposed by Codex CLI."}
             </small>
             {selectedAgent?.codexUsage?.checkedAt && <small>Checked {formatDateTime(selectedAgent.codexUsage.checkedAt)}</small>}
+          </div>
+          <div className="codex-limit">
+            <div>
+              <span>Grok Build</span>
+              <strong>{selectedAgent?.grokUsage?.status === "signed-in" ? "Signed in" : selectedAgent?.grokUsage?.status === "signed-out" ? "Signed out" : "Unknown"}</strong>
+            </div>
+            <p>{selectedAgent?.grokUsage?.summary ?? "Waiting for agent Grok probe."}</p>
+            <small>{selectedAgent?.grok_version ?? "Grok CLI version not reported yet."}</small>
+            {selectedAgent?.grokUsage?.checkedAt && <small>Checked {formatDateTime(selectedAgent.grokUsage.checkedAt)}</small>}
           </div>
         </section>
 

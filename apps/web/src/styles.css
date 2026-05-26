@@ -2998,17 +2998,20 @@ a.secondary {
   letter-spacing: 0;
 }
 
-.sticky-submit .action-menu .speed-option {
+.sticky-submit .action-menu .speed-option,
+.sticky-submit .action-menu .runner-option {
   align-items: flex-start;
 }
 
-.sticky-submit .action-menu .speed-option span {
+.sticky-submit .action-menu .speed-option span,
+.sticky-submit .action-menu .runner-option span {
   display: grid;
   gap: 2px;
   text-align: left;
 }
 
-.sticky-submit .action-menu .speed-option small {
+.sticky-submit .action-menu .speed-option small,
+.sticky-submit .action-menu .runner-option small {
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 500;

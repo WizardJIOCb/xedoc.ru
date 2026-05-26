@@ -50,8 +50,10 @@ export type AgentRow = {
   os: string | null;
   agent_version: string | null;
   codex_version: string | null;
+  grok_version: string | null;
   git_version: string | null;
   codex_usage_json: string | null;
+  grok_usage_json: string | null;
   local_activity_json: string | null;
   status: "online" | "offline";
   current_job_id: string | null;
@@ -89,7 +91,7 @@ export type JobRow = {
   model: string | null;
   reasoning_effort: "low" | "medium" | "high" | "xhigh" | null;
   speed: "standard" | "fast" | null;
-  kind: "codex" | "test";
+  kind: "codex" | "grok" | "test";
   test_command_id: string | null;
   status: JobStatus;
   exit_code: number | null;
@@ -206,8 +208,10 @@ export function openDb(path: string): DatabaseSync {
       os TEXT,
       agent_version TEXT,
       codex_version TEXT,
+      grok_version TEXT,
       git_version TEXT,
       codex_usage_json TEXT,
+      grok_usage_json TEXT,
       local_activity_json TEXT,
       status TEXT NOT NULL DEFAULT 'offline',
       current_job_id TEXT,
@@ -443,6 +447,12 @@ export function openDb(path: string): DatabaseSync {
   }
   if (!agentColumns.some((column) => column.name === "codex_usage_json")) {
     db.exec("ALTER TABLE agents ADD COLUMN codex_usage_json TEXT");
+  }
+  if (!agentColumns.some((column) => column.name === "grok_version")) {
+    db.exec("ALTER TABLE agents ADD COLUMN grok_version TEXT");
+  }
+  if (!agentColumns.some((column) => column.name === "grok_usage_json")) {
+    db.exec("ALTER TABLE agents ADD COLUMN grok_usage_json TEXT");
   }
   if (!agentColumns.some((column) => column.name === "local_activity_json")) {
     db.exec("ALTER TABLE agents ADD COLUMN local_activity_json TEXT");
