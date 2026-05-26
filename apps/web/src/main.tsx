@@ -1889,22 +1889,26 @@ function isTerminalJobStatus(status: string) {
   return !["queued", "assigned", "running"].includes(status);
 }
 
-function jobProgressLabel(progress: JobProgress | null | undefined, fallback = "Выполняется") {
+function jobRunnerLabel(job?: Pick<Job, "kind"> | null) {
+  return job?.kind === "grok" ? "Grok" : "Codex";
+}
+
+function jobProgressLabel(progress: JobProgress | null | undefined, fallback = "Выполняется", runnerLabel = "Codex") {
   switch ((progress?.phase ?? "").toLowerCase()) {
     case "queued":
       return "В очереди";
     case "assigned":
       return "Назначено";
     case "starting":
-      return "Запускаю Codex";
+      return `Запускаю ${runnerLabel}`;
     case "started":
-      return "Открываю thread";
+      return "Открываю сессию";
     case "thinking":
-      return "Codex пишет";
+      return `${runnerLabel} пишет`;
     case "command":
       return "Выполняю команду";
     case "working":
-      return "Codex работает";
+      return `${runnerLabel} работает`;
     case "message":
       return "Ответ";
     case "finalizing":
@@ -1920,11 +1924,11 @@ function jobProgressLabel(progress: JobProgress | null | undefined, fallback = "
   }
 }
 
-function jobProgressMessage(progress: JobProgress | null | undefined) {
+function jobProgressMessage(progress: JobProgress | null | undefined, runnerLabel = "Codex") {
   const phase = (progress?.phase ?? "").toLowerCase();
   const message = progress?.message?.trim() ?? "";
-  if (phase === "thinking") return "Жду ответ локального Codex";
-  if (phase === "working") return hasProgressChanges(progress) ? "Проверяю изменения в рабочей папке" : "Жду следующего события от локального Codex";
+  if (phase === "thinking") return `Жду ответ локального ${runnerLabel}`;
+  if (phase === "working") return hasProgressChanges(progress) ? "Проверяю изменения в рабочей папке" : `Жду следующего события от локального ${runnerLabel}`;
   if (phase === "finalizing") return "Собираю git diff и сохраняю ответ в web";
   if (phase === "completed") return "Финальный ответ получен, обновляю чат";
   if (message) return message;
@@ -3026,8 +3030,9 @@ function App() {
 
   function renderChatThinkingIndicator() {
     if (!showChatThinkingIndicator) return null;
-    const label = activeRunBusy ? jobProgressLabel(activeProgress) : "Локальный Codex";
-    const message = activeRunBusy ? jobProgressMessage(activeProgress) : localActivity?.summary ?? "Локальный Codex сейчас занят";
+    const runnerLabel = jobRunnerLabel(activeJob);
+    const label = activeRunBusy ? jobProgressLabel(activeProgress, "Выполняется", runnerLabel) : "Локальный Codex";
+    const message = activeRunBusy ? jobProgressMessage(activeProgress, runnerLabel) : localActivity?.summary ?? "Локальный Codex сейчас занят";
     return (
       <article className="thinking-message" aria-live="polite">
         <div className="thinking-chip">
@@ -6594,6 +6599,7 @@ function App() {
     const expanded = expandedActions[actionKey] !== false;
     const commandCount = entries.filter((entry) => entry.kind === "command").length;
     const updateCount = entries.filter((entry) => entry.kind !== "command").length;
+    const runnerLabel = jobRunnerLabel(activeJob);
     return (
       <section className="live-activity-card" aria-live="polite">
         <button
@@ -6604,7 +6610,7 @@ function App() {
           <Activity size={16} />
           <span>
             <strong>Ход работы</strong>
-            <small>{activeProgress ? jobProgressMessage(activeProgress) : "Жду события от локального Codex"}</small>
+            <small>{activeProgress ? jobProgressMessage(activeProgress, runnerLabel) : `Жду события от локального ${runnerLabel}`}</small>
           </span>
           <em>{[updateCount ? `ответов: ${updateCount}` : "", commandCount ? `команд: ${commandCount}` : ""].filter(Boolean).join(" · ") || "ожидание"}</em>
           <ChevronDown className={expanded ? "open" : ""} size={15} />
@@ -6612,7 +6618,7 @@ function App() {
         {expanded && (
           <div className="live-activity-timeline">
             {entries.length ? entries.map(renderLiveActivityEntry) : (
-              <div className="live-activity-empty">Жду события от Codex...</div>
+              <div className="live-activity-empty">Жду события от {runnerLabel}...</div>
             )}
           </div>
         )}
@@ -6628,7 +6634,7 @@ function App() {
         <span className="live-activity-marker">{isError ? <X size={13} /> : <Bot size={13} />}</span>
         <div className="live-activity-content">
           <div className="live-activity-meta">
-            <strong>{isError ? "Ошибка" : "Codex"}</strong>
+            <strong>{isError ? "Ошибка" : jobRunnerLabel(activeJob)}</strong>
             <small>{new Date(entry.at).toLocaleTimeString()}</small>
           </div>
           {renderRichText(entry.text ?? "", "rich-text compact live-activity-text")}
@@ -6711,6 +6717,7 @@ function App() {
     if (!activeJob || !activeRunBusy) return null;
     const promptAlreadyVisible = messages.some((message) => isJobPromptMessage(message, activeJob.id));
     const showActiveDiff = hasProgressChanges(activeProgress);
+    const runnerLabel = jobRunnerLabel(activeJob);
     return (
       <>
         {!promptAlreadyVisible && (
@@ -6724,8 +6731,8 @@ function App() {
           <div className="progress-wrap">
             <div className="progress-panel">
               <div>
-                <span className="progress-label">{jobProgressLabel(activeProgress)}</span>
-                <strong>{jobProgressMessage(activeProgress)}</strong>
+                <span className="progress-label">{jobProgressLabel(activeProgress, "Выполняется", runnerLabel)}</span>
+                <strong>{jobProgressMessage(activeProgress, runnerLabel)}</strong>
               </div>
               <div className="progress-stats">
                 <span>{activeProgress.filesChanged ?? 0} files</span>
@@ -6865,7 +6872,8 @@ function App() {
     const selectedReasoningLabel = REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label ?? reasoningEffort;
     const selectedSpeedLabel = SPEED_OPTIONS.find((option) => option.value === codexSpeed)?.label ?? codexSpeed;
     const showCodexBusy = localCodexBusy || activeRunBusy;
-    const busyLabel = activeRunBusy ? `${activeJob?.kind === "grok" ? "Grok" : "Codex"} занят` : "Codex занят";
+    const activeRunnerLabel = jobRunnerLabel(activeJob);
+    const busyLabel = activeRunBusy ? `${activeRunnerLabel} занят` : "Codex занят";
     return (
       <form className="composer" ref={composerRef} onSubmit={createJob}>
         {attachments.length > 0 && (
@@ -6905,7 +6913,7 @@ function App() {
           />
           <button className="run-button" disabled={runDisabled} type="submit">
             {showCodexBusy ? <RefreshCw className="spin" size={18} /> : <Play size={18} />}
-            {showCodexBusy ? `${activeRunBusy ? jobProgressLabel(activeProgress) : busyLabel} ${formatDuration(thinkingSeconds)}` : "Отправить"}
+            {showCodexBusy ? `${activeRunBusy ? jobProgressLabel(activeProgress, "Выполняется", activeRunnerLabel) : busyLabel} ${formatDuration(thinkingSeconds)}` : "Отправить"}
           </button>
           <label className="attachment-picker" htmlFor="composer-attachment-input" title="Attach files">
             <Paperclip size={18} />
