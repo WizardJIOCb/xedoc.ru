@@ -2865,7 +2865,8 @@ function App() {
   activeJobIdRef.current = activeJob?.id ?? "";
   activeRunBusyRef.current = activeRunBusy;
   selectedRepoRef.current = selectedRepo;
-  const activeProgress = activeJob ? progressByJob[activeJob.id] ?? activeJob.progress ?? {
+  const actualActiveProgress = activeJob ? progressByJob[activeJob.id] ?? activeJob.progress ?? null : null;
+  const activeProgress = activeJob ? actualActiveProgress ?? {
     jobId: activeJob.id,
     phase: activeJob.status,
     message: activeJob.status === "running" ? "Codex is running." : `Job is ${activeJob.status}.`,
@@ -2877,6 +2878,20 @@ function App() {
   } : null;
   const timelineItems = useMemo(() => buildChatTimeline(messages, jobs, activeChatLocalBusy || activeRunBusy), [messages, jobs, activeChatLocalBusy, activeRunBusy]);
   const showChatThinkingIndicator = Boolean(activeChat && !chatIsLoading && (activeChatLocalBusy || activeRunBusy));
+  const activeLiveScrollSignature = activeJob ? [
+    activeJob.id,
+    activeJob.status,
+    logs.length,
+    logs.at(-1)?.at ?? "",
+    logs.at(-1)?.message.length ?? 0,
+    actualActiveProgress?.at ?? "",
+    actualActiveProgress?.phase ?? "",
+    actualActiveProgress?.message ?? "",
+    actualActiveProgress?.filesChanged ?? 0,
+    actualActiveProgress?.added ?? 0,
+    actualActiveProgress?.deleted ?? 0,
+    actualActiveProgress?.files?.length ?? 0
+  ].join("|") : "";
 
   function isScrollableElement(element: HTMLElement | null | undefined): element is HTMLElement {
     if (!element || element.scrollHeight <= element.clientHeight + 1) return false;
@@ -3082,6 +3097,11 @@ function App() {
     setJumpToLatestVisible(false);
     setChatScrollBottomVisible(false);
     window.setTimeout(updateChatBottomState, behavior === "smooth" ? 260 : 0);
+  }
+
+  function nudgeChatToLatest(behavior: ScrollBehavior = "auto") {
+    if (!chatStickToBottomRef.current) return;
+    scrollChatToLatest(behavior);
   }
 
   function scrollChatToTop(behavior: ScrollBehavior = "smooth") {
@@ -4120,8 +4140,10 @@ function App() {
 
     const updateNow = () => {
       layoutMeasureRafRef.current = undefined;
+      const shouldStickToBottom = chatStickToBottomRef.current;
       updateComposerPlacement();
-      updateChatBottomState();
+      if (shouldStickToBottom) nudgeChatToLatest("auto");
+      else updateChatBottomState();
     };
     const scheduleUpdate = () => {
       if (layoutMeasureRafRef.current) return;
@@ -4156,6 +4178,25 @@ function App() {
     const raf = window.requestAnimationFrame(() => scrollChatToLatest("smooth"));
     return () => window.cancelAnimationFrame(raf);
   }, [showChatThinkingIndicator, activeChatId]);
+
+  useEffect(() => {
+    if (!activeChat || chatIsLoading || !activeRunBusy || !chatStickToBottomRef.current) return;
+    const chatId = activeChatId;
+    const timers: number[] = [];
+    const scrollDown = () => {
+      if (activeChatIdRef.current !== chatId || !chatStickToBottomRef.current) return;
+      scrollChatToLatest("auto");
+    };
+    const raf = window.requestAnimationFrame(() => {
+      scrollDown();
+      timers.push(window.setTimeout(scrollDown, 50));
+      timers.push(window.setTimeout(scrollDown, 180));
+    });
+    return () => {
+      window.cancelAnimationFrame(raf);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [activeChat, activeChatId, activeRunBusy, chatIsLoading, activeLiveScrollSignature]);
 
   useEffect(() => {
     if (!loadedChatAutoScroll || loadedChatAutoScroll.chatId !== activeChatId || chatIsLoading || !activeChat) return;
