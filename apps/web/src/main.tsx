@@ -90,10 +90,10 @@ const GROK_MODEL_OPTIONS = [
   { value: "grok-build-latest", label: "Grok Build Latest" }
 ];
 const GEMINI_CLI_MODEL_OPTIONS = [
+  { value: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview" },
   { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
   { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-  { value: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview" },
-  { value: "gemini-3-flash", label: "Gemini 3 Flash" }
+  { value: "gemini-flash-latest", label: "Gemini Flash Latest" }
 ];
 const GEMINI_MODEL_OPTIONS = [
   { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview" },
@@ -2579,7 +2579,7 @@ function App() {
   const [jobKind, setJobKind] = useState<JobKind>("codex");
   const [codexModel, setCodexModel] = useState("gpt-5.5");
   const [grokModel, setGrokModel] = useState("grok-build");
-  const [geminiCliModel, setGeminiCliModel] = useState("gemini-2.5-pro");
+  const [geminiCliModel, setGeminiCliModel] = useState("gemini-2.5-flash");
   const [geminiModel, setGeminiModel] = useState("gemini-3.1-pro-preview");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
   const [codexSpeed, setCodexSpeed] = useState<CodexSpeed>("standard");
