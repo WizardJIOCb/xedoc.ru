@@ -34,6 +34,9 @@
     "OPENAI_API_KEY=\\S+",
     "OPENAI_ADMIN_KEY=\\S+",
     "XAI_API_KEY=\\S+",
+    "GEMINI_API_KEY=\\S+",
+    "GOOGLE_API_KEY=\\S+",
+    "AIza[0-9A-Za-z_-]+",
     "cmc_agent_[A-Za-z0-9_-]+"
   ]
 }

@@ -77,6 +77,8 @@ export function minimalEnv(): NodeJS.ProcessEnv {
     "OPENAI_PROJECT_ID",
     "OPENAI_RATE_LIMIT_MODEL",
     "XAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
     "CODEX_HOME",
     "GROK_HOME",
     "GROK_SANDBOX",

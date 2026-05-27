@@ -1598,6 +1598,37 @@ function latestThreadIdForChat(chatId: string | null, currentJobId: string, kind
   return row?.codex_thread_id;
 }
 
+function assistantSourceForJob(kind: JobRow["kind"]): string {
+  if (kind === "grok") return "grok";
+  if (kind === "gemini") return "gemini";
+  return "codex";
+}
+
+function promptForAgentJob(job: JobRow): string {
+  if (job.kind !== "gemini" || !job.chat_id) return job.prompt;
+  const rows = db.prepare(`
+    SELECT role, content, source, external_id FROM chat_messages
+    WHERE chat_id = ? AND external_id != ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT 12
+  `).all(job.chat_id, `job:${job.id}:prompt`) as Array<{ role: string; content: string; source: string; external_id: string | null }>;
+  if (!rows.length) return job.prompt;
+  const history = rows.reverse()
+    .filter((message) => message.content.trim())
+    .map((message) => {
+      const role = message.role === "assistant" ? assistantSourceForJob(job.kind) : message.role;
+      return `${role}: ${message.content.trim()}`;
+    })
+    .join("\n\n");
+  return [
+    "Conversation history for context:",
+    history,
+    "",
+    "Current user request:",
+    job.prompt
+  ].join("\n");
+}
+
 function failJobBeforeRun(job: JobRow, finalMessage: string): void {
   const finishedAt = nowIso();
   db.prepare("UPDATE jobs SET status='failed', exit_code=1, final_message=?, finished_at=? WHERE id=?")
@@ -1607,7 +1638,7 @@ function failJobBeforeRun(job: JobRow, finalMessage: string): void {
       chat_id: job.chat_id,
       role: "assistant",
       content: finalMessage,
-      source: "codex",
+      source: assistantSourceForJob(job.kind),
       external_id: `job:${job.id}:final`,
       metadata_json: JSON.stringify({ jobId: job.id, status: "failed" }),
       created_at: finishedAt
@@ -1661,7 +1692,7 @@ async function dispatchQueue(agentId: string): Promise<void> {
             repoId: job.repo_id,
             chatId: job.chat_id ?? undefined,
             codexThreadId: latestThreadIdForChat(job.chat_id, job.id, job.kind),
-            prompt: job.prompt,
+            prompt: promptForAgentJob(job),
             sandbox: job.sandbox,
             branchMode: job.branch_mode,
             kind: job.kind,
@@ -2133,6 +2164,9 @@ function agentSetupPayload(request: { protocol: string; hostname: string }, agen
       "OPENAI_API_KEY=\\S+",
       "OPENAI_ADMIN_KEY=\\S+",
       "XAI_API_KEY=\\S+",
+      "GEMINI_API_KEY=\\S+",
+      "GOOGLE_API_KEY=\\S+",
+      "AIza[0-9A-Za-z_-]+",
       "cmc_agent_[A-Za-z0-9_-]+"
     ]
   }, null, 2);
@@ -3978,7 +4012,7 @@ async function createApp(): Promise<FastifyInstance> {
             chat_id: job.chat_id,
             role: "assistant",
             content: finalMessage,
-            source: job.kind === "grok" ? "grok" : "codex",
+            source: assistantSourceForJob(job.kind),
             external_id: `job:${parsed.jobId}:final`,
             metadata_json: JSON.stringify({
               jobId: parsed.jobId,

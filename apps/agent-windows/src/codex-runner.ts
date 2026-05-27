@@ -15,7 +15,7 @@ type RunContext = {
     prompt: string;
     sandbox: "read-only" | "workspace-write" | "danger-full-access";
     branchMode: "current" | "create-per-job";
-    kind: "codex" | "grok" | "test";
+    kind: "codex" | "grok" | "gemini" | "test";
     testCommandId?: string;
     model?: string;
     reasoningEffort?: "low" | "medium" | "high" | "xhigh";
@@ -59,6 +59,7 @@ export class Runner {
     if (context.config.fakeRunner || process.env.CMC_FAKE_RUNNER === "1") return this.runFake(context, repo);
     if (context.job.kind === "test") return this.runTest(context, repo);
     if (context.job.kind === "grok") return this.runGrok(context, repo);
+    if (context.job.kind === "gemini") return this.runGemini(context, repo);
     return this.runCodex(context, repo);
   }
 
@@ -185,6 +186,45 @@ export class Runner {
     });
   }
 
+  private async runGemini(context: RunContext, repo: RepoConfig): Promise<AgentJobDone> {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!apiKey) throw new Error("GEMINI_API_KEY is not set. Create a Gemini API key in Google AI Studio and add it to the agent environment.");
+    const attachments = prepareAttachments(context, repo);
+    const userPrompt = attachments.length
+      ? [
+        context.job.prompt,
+        "",
+        "Attached files were saved locally for this web task, but Gemini API cannot read local paths directly:",
+        ...attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType}, ${attachment.size} bytes): ${attachment.path}`),
+        "",
+        "If you need exact attachment contents, ask the user to paste text or use Codex/Grok for local file access."
+      ].join("\n")
+      : context.job.prompt;
+    const prompt = [
+      geminiEnvironmentPrompt(repo),
+      userPrompt
+    ].join("\n\n");
+    const model = context.job.model || "gemini-3.1-pro-preview";
+    const payloadPath = writeGeminiPayloadFile(repo, context.job.id, prompt, model, context.job.reasoningEffort);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
+    const curlConfig = [
+      `url = ${curlConfigQuote(url)}`,
+      `header = ${curlConfigQuote(`x-goog-api-key: ${apiKey}`)}`,
+      `header = ${curlConfigQuote("Content-Type: application/json")}`,
+      "request = POST",
+      "silent",
+      "show-error",
+      "location",
+      "fail",
+      "no-buffer",
+      `data-binary = ${curlConfigQuote(`@${payloadPath.replace(/\\/g, "/")}`)}`
+    ].join("\n");
+    return this.spawnAndCollect(context, repo, curlExecutable(), ["--config", "-"], context.config.maxJobDurationMs, `${curlConfig}\n`, {
+      toolName: "Gemini",
+      handleJsonLine: createGeminiSseLineHandler()
+    });
+  }
+
   private spawnAndCollect(
     context: RunContext,
     repo: RepoConfig,
@@ -283,34 +323,44 @@ export class Runner {
           progressBusy = false;
         }
       }, 4000);
-      const emit = (stream: "stdout" | "stderr", chunk: Buffer) => {
-        const text = chunk.toString();
-        for (const line of text.split(/\r?\n/).filter(Boolean)) {
-          if (stream === "stdout") {
-            const handled = options.handleJsonLine
-              ? options.handleJsonLine(context, line)
-              : handleCodexJsonLine(context, line);
-            if (handled.handled) {
-              if (handled.threadId) codexThreadId = handled.threadId;
-              if (handled.messageText) finalMessage = handled.messageText.slice(-4000);
-              continue;
-            }
+      const streamBuffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+      const emitLine = (stream: "stdout" | "stderr", line: string) => {
+        if (!line) return;
+        if (stream === "stdout") {
+          const handled = options.handleJsonLine
+            ? options.handleJsonLine(context, line)
+            : handleCodexJsonLine(context, line);
+          if (handled.handled) {
+            if (handled.threadId) codexThreadId = handled.threadId;
+            if (handled.messageText) finalMessage = handled.messageText.slice(-4000);
+            return;
           }
-          if (stream === "stderr" && (toolName === "Grok" ? isIgnorableGrokWarning(line) : isIgnorableCodexWarning(line))) continue;
-          const normalizedFailure = toolName === "Codex" ? normalizeCodexNetworkFailure(line, codexNetworkFailureMessage) : null;
-          if (normalizedFailure) {
-            rawOutputTail = normalizedFailure;
-            if (!codexNetworkFailureMessage) {
-              codexNetworkFailureMessage = normalizedFailure;
-              context.sendLog(log(context.job.id, "stderr", normalizedFailure));
-              context.sendProgress(progress(context.job.id, "message", normalizedFailure));
-            }
-            continue;
-          }
-          rawOutputTail = `${rawOutputTail}\n${line}`.slice(-4000);
-          context.sendLog(log(context.job.id, stream, line));
-          if (stream === "stderr") context.sendProgress(progress(context.job.id, "message", line.slice(0, 500)));
         }
+        if (stream === "stderr" && (toolName === "Grok" ? isIgnorableGrokWarning(line) : isIgnorableCodexWarning(line))) return;
+        const normalizedFailure = toolName === "Codex" ? normalizeCodexNetworkFailure(line, codexNetworkFailureMessage) : null;
+        if (normalizedFailure) {
+          rawOutputTail = normalizedFailure;
+          if (!codexNetworkFailureMessage) {
+            codexNetworkFailureMessage = normalizedFailure;
+            context.sendLog(log(context.job.id, "stderr", normalizedFailure));
+            context.sendProgress(progress(context.job.id, "message", normalizedFailure));
+          }
+          return;
+        }
+        rawOutputTail = `${rawOutputTail}\n${line}`.slice(-4000);
+        context.sendLog(log(context.job.id, stream, line));
+        if (stream === "stderr") context.sendProgress(progress(context.job.id, "message", line.slice(0, 500)));
+      };
+      const flushStream = (stream: "stdout" | "stderr") => {
+        const line = streamBuffers[stream].trim();
+        streamBuffers[stream] = "";
+        if (line) emitLine(stream, line);
+      };
+      const emit = (stream: "stdout" | "stderr", chunk: Buffer) => {
+        streamBuffers[stream] += chunk.toString();
+        const lines = streamBuffers[stream].split(/\r?\n/);
+        streamBuffers[stream] = lines.pop() ?? "";
+        for (const line of lines) emitLine(stream, line);
       };
       this.child.stdout.on("data", (chunk: Buffer) => emit("stdout", chunk));
       this.child.stderr.on("data", (chunk: Buffer) => emit("stderr", chunk));
@@ -318,6 +368,8 @@ export class Runner {
         void finish(127, error.message);
       });
       this.child.on("close", async (exitCode) => {
+        flushStream("stdout");
+        flushStream("stderr");
         await finish(exitCode);
       });
     });
@@ -391,6 +443,14 @@ function grokExecutable(args: string[]): { command: string; args: string[] } {
   return { command: "grok", args };
 }
 
+function curlExecutable(): string {
+  return process.platform === "win32" ? "curl.exe" : "curl";
+}
+
+function curlConfigQuote(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\r?\n/g, " ")}"`;
+}
+
 function grokWslBinCommand(): string {
   const configured = process.env.CMC_GROK_WSL_BIN;
   if (!configured) return "$HOME/.grok/bin/grok";
@@ -456,6 +516,45 @@ function writePromptFile(repo: RepoConfig, jobId: string, prompt: string): strin
   const path = join(root, "grok-prompt.md");
   writeFileSync(path, prompt, "utf8");
   return path;
+}
+
+function writeGeminiPayloadFile(repo: RepoConfig, jobId: string, prompt: string, model: string, reasoningEffort?: "low" | "medium" | "high" | "xhigh"): string {
+  const root = join(repo.path, ".codex-web-attachments", safePathSegment(jobId));
+  mkdirSync(root, { recursive: true });
+  ensureGitExclude(repo.path);
+  const path = join(root, "gemini-payload.json");
+  const payload: Record<string, unknown> = {
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }]
+      }
+    ]
+  };
+  if (model.startsWith("gemini-3")) {
+    payload.generationConfig = {
+      thinkingConfig: {
+        thinkingLevel: geminiThinkingLevel(reasoningEffort)
+      }
+    };
+  }
+  writeFileSync(path, JSON.stringify(payload), "utf8");
+  return path;
+}
+
+function geminiThinkingLevel(reasoningEffort?: "low" | "medium" | "high" | "xhigh"): "low" | "high" {
+  return reasoningEffort === "low" || reasoningEffort === "medium" ? "low" : "high";
+}
+
+function geminiEnvironmentPrompt(repo: RepoConfig): string {
+  return [
+    "Gemini API web agent environment:",
+    `- Project: ${repo.name} at ${repo.path}.`,
+    "- You are answering through codex.rodion.pro's Gemini API integration.",
+    "- You do not have direct local tool access in this runner: you cannot execute shell commands, inspect files, or modify the working tree yourself.",
+    "- Help with architecture, debugging, code review, planning, and patch suggestions. If the task requires actual file edits or commands, say that Codex or Grok should run it locally.",
+    "- Keep answers practical and concise unless the user asks for depth."
+  ].join("\n");
 }
 
 function grokEnvironmentPrompt(repo: RepoConfig, grokRepoPath: string): string {
@@ -724,6 +823,50 @@ function createGrokJsonLineHandler(): JsonLineHandler {
     }
     return { handled: true };
   };
+}
+
+function createGeminiSseLineHandler(): JsonLineHandler {
+  let messageText = "";
+  return (context, line) => {
+    const raw = line.trim();
+    if (!raw || raw.startsWith(":")) return { handled: true };
+    if (!raw.startsWith("data:")) return { handled: false };
+    const data = raw.slice("data:".length).trim();
+    if (!data || data === "[DONE]") return { handled: true, messageText };
+    let event: unknown;
+    try {
+      event = JSON.parse(data);
+    } catch {
+      return { handled: false };
+    }
+    const delta = geminiTextFromResponse(event);
+    if (!delta) return { handled: true, messageText };
+    messageText = `${messageText}${delta}`.slice(-8000);
+    const text = messageText.trim();
+    if (text) {
+      context.sendProgress(progress(context.job.id, "message", text.slice(-500)));
+      context.sendLog(log(context.job.id, "stdout", text));
+    }
+    return { handled: true, messageText: text };
+  };
+}
+
+function geminiTextFromResponse(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const candidates = (value as Record<string, unknown>).candidates;
+  if (!Array.isArray(candidates)) return "";
+  return candidates.map((candidate) => {
+    if (!candidate || typeof candidate !== "object") return "";
+    const content = (candidate as Record<string, unknown>).content;
+    if (!content || typeof content !== "object") return "";
+    const parts = (content as Record<string, unknown>).parts;
+    if (!Array.isArray(parts)) return "";
+    return parts.map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const text = (part as Record<string, unknown>).text;
+      return typeof text === "string" ? text : "";
+    }).join("");
+  }).join("");
 }
 
 function summarizeCommand(command: string): string {
