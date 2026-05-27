@@ -515,6 +515,54 @@ type ChatTimelineItem = {
   collapsedRun?: CollapsedRunSummary;
 };
 
+function commonPrefixLength(left: string, right: string) {
+  const maxLength = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < maxLength && left[index] === right[index]) index += 1;
+  return index;
+}
+
+function AnimatedStreamingText({ text, className }: { text: string; className: string }) {
+  const normalized = normalizeDisplayText(text).trim();
+  const [streamState, setStreamState] = useState(() => ({
+    animatedFrom: 0,
+    text: normalized
+  }));
+
+  useEffect(() => {
+    setStreamState((current) => {
+      if (current.text === normalized) return current;
+      return {
+        animatedFrom: commonPrefixLength(current.text, normalized),
+        text: normalized
+      };
+    });
+  }, [normalized]);
+
+  const tail = streamState.text.slice(streamState.animatedFrom);
+  const shouldAnimateTail = tail.length > 0 && tail.length <= 700;
+  const stableText = shouldAnimateTail ? streamState.text.slice(0, streamState.animatedFrom) : streamState.text;
+
+  return (
+    <div className={className}>
+      {stableText}
+      {shouldAnimateTail && Array.from(tail).map((char, index) => {
+        if (char === "\n") return <br key={`br:${index}`} />;
+        return (
+          <span
+            className={`stream-letter${char === " " ? " stream-space" : ""}`}
+            key={`${index}:${char}`}
+            style={{ animationDelay: `${Math.min(index * 10, 220)}ms` }}
+          >
+            {char === " " ? "\u00A0" : char}
+          </span>
+        );
+      })}
+      <span className="stream-caret" aria-hidden="true" />
+    </div>
+  );
+}
+
 function api(path: string, options: RequestInit = {}) {
   return fetch(path, {
     ...options,
@@ -2083,6 +2131,43 @@ function codexActionEntries(logs: Log[]): CodexAction[] {
   return [...byId.values()];
 }
 
+function liveMessageKey(text: string) {
+  return normalizeDisplayText(text).trim().replace(/\s+/g, " ").slice(0, 900);
+}
+
+function textOverlapLength(left: string, right: string) {
+  const maxLength = Math.min(left.length, right.length, 1600);
+  for (let length = maxLength; length >= 80; length -= 1) {
+    if (left.slice(-length) === right.slice(0, length)) return length;
+  }
+  return 0;
+}
+
+function mergeLiveMessageText(previous: string, next: string) {
+  const previousText = normalizeDisplayText(previous).trim();
+  const nextText = normalizeDisplayText(next).trim();
+  if (!previousText) return nextText;
+  if (!nextText) return previousText;
+  if (nextText === previousText) return previousText;
+  if (nextText.startsWith(previousText)) return nextText;
+  if (previousText.startsWith(nextText)) return previousText;
+  if (nextText.includes(previousText)) return nextText;
+  if (previousText.includes(nextText)) return previousText;
+  const overlap = textOverlapLength(previousText, nextText);
+  if (overlap > 0) return `${previousText}${nextText.slice(overlap)}`.slice(-7000);
+  return nextText;
+}
+
+function canMergeLiveMessage(previous: string, next: string) {
+  const previousKey = liveMessageKey(previous);
+  const nextKey = liveMessageKey(next);
+  if (!previousKey || !nextKey) return false;
+  if (previousKey === nextKey) return true;
+  if (nextKey.startsWith(previousKey) || previousKey.startsWith(nextKey)) return true;
+  if (nextKey.includes(previousKey) || previousKey.includes(nextKey)) return true;
+  return textOverlapLength(normalizeDisplayText(previous).trim(), normalizeDisplayText(next).trim()) > 0;
+}
+
 function liveActivityEntries(logs: Log[]): LiveActivityEntry[] {
   const entries: LiveActivityEntry[] = [];
   const commandEntries = new Map<string, LiveActivityEntry>();
@@ -2148,6 +2233,7 @@ function liveActivityEntries(logs: Log[]): LiveActivityEntry[] {
         commandIds.push(id);
         outputTargetId = "";
         outputTargetUntil = 0;
+        seenMessages.clear();
         return;
       }
       return;
@@ -2168,7 +2254,15 @@ function liveActivityEntries(logs: Log[]): LiveActivityEntry[] {
     }
 
     const normalized = normalizeDisplayText(display).trim();
-    const messageKey = normalized.replace(/\s+/g, " ").slice(0, 700);
+    const lastEntry = entries.at(-1);
+    if (lastEntry?.kind === "message" && canMergeLiveMessage(lastEntry.text ?? "", normalized)) {
+      lastEntry.text = mergeLiveMessageText(lastEntry.text ?? "", normalized);
+      lastEntry.at = log.at;
+      seenMessages.add(liveMessageKey(lastEntry.text));
+      return;
+    }
+
+    const messageKey = liveMessageKey(normalized);
     if (!messageKey || seenMessages.has(messageKey)) return;
     seenMessages.add(messageKey);
     entries.push({
@@ -6673,7 +6767,9 @@ function App() {
             <strong>{isError ? "Ошибка" : jobRunnerLabel(activeJob)}</strong>
             <small>{new Date(entry.at).toLocaleTimeString()}</small>
           </div>
-          {renderRichText(entry.text ?? "", "rich-text compact live-activity-text")}
+          {isError
+            ? renderRichText(entry.text ?? "", "rich-text compact live-activity-text")
+            : <AnimatedStreamingText className="live-activity-text streaming-text" text={entry.text ?? ""} />}
         </div>
       </article>
     );
