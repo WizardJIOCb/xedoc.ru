@@ -91,7 +91,7 @@ export type JobRow = {
   model: string | null;
   reasoning_effort: "low" | "medium" | "high" | "xhigh" | null;
   speed: "standard" | "fast" | null;
-  kind: "codex" | "grok" | "gemini" | "test";
+  kind: "codex" | "grok" | "gemini-cli" | "gemini" | "test";
   test_command_id: string | null;
   status: JobStatus;
   exit_code: number | null;

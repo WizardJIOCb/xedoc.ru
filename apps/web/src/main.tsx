@@ -57,7 +57,7 @@ import "./styles.css";
 type Sandbox = "read-only" | "workspace-write" | "danger-full-access";
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "standard" | "fast";
-type JobKind = "codex" | "grok" | "gemini";
+type JobKind = "codex" | "grok" | "gemini-cli" | "gemini";
 type ProjectVisibility = "private" | "public";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
@@ -89,6 +89,12 @@ const GROK_MODEL_OPTIONS = [
   { value: "grok-build", label: "Grok Build" },
   { value: "grok-build-latest", label: "Grok Build Latest" }
 ];
+const GEMINI_CLI_MODEL_OPTIONS = [
+  { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { value: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview" },
+  { value: "gemini-3-flash", label: "Gemini 3 Flash" }
+];
 const GEMINI_MODEL_OPTIONS = [
   { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview" },
   { value: "gemini-3.1-pro-preview-customtools", label: "Gemini 3.1 Pro Custom Tools" },
@@ -101,7 +107,8 @@ const GEMINI_MODEL_OPTIONS = [
 const RUNNER_OPTIONS: Array<{ value: JobKind; label: string; note: string }> = [
   { value: "codex", label: "Codex", note: "OpenAI Codex CLI" },
   { value: "grok", label: "Grok", note: "Grok Build CLI" },
-  { value: "gemini", label: "Gemini", note: "Google Gemini API" }
+  { value: "gemini-cli", label: "Gemini CLI", note: "Google account agent" },
+  { value: "gemini", label: "Gemini API", note: "Google AI Studio key" }
 ];
 const PROJECT_DOMAIN_ROOT = "codex.rodion.pro";
 const DEFAULT_GITHUB_OWNER = "WizardJIOCb";
@@ -782,6 +789,7 @@ function chatSourceLabel(source?: string | null) {
 }
 
 function modelOptionsForKind(kind?: string | null) {
+  if (kind === "gemini-cli") return GEMINI_CLI_MODEL_OPTIONS;
   if (kind === "gemini") return GEMINI_MODEL_OPTIONS;
   return kind === "grok" ? GROK_MODEL_OPTIONS : CODEX_MODEL_OPTIONS;
 }
@@ -790,8 +798,16 @@ function modelLabelForKind(kind: string | null | undefined, model: string) {
   return modelOptionsForKind(kind).find((option) => option.value === model)?.label ?? model;
 }
 
+function modelValueForKind(kind: JobKind, codexModel: string, grokModel: string, geminiCliModel: string, geminiModel: string) {
+  if (kind === "grok") return grokModel;
+  if (kind === "gemini-cli") return geminiCliModel;
+  if (kind === "gemini") return geminiModel;
+  return codexModel;
+}
+
 function runnerSettingsSummary(kind: JobKind, modelLabel: string, reasoningLabel: string, speedLabel: string) {
   if (kind === "grok") return [modelLabel, reasoningLabel].filter(Boolean).join(" · ");
+  if (kind === "gemini-cli") return ["Gemini CLI", modelLabel, reasoningLabel].filter(Boolean).join(" · ");
   if (kind === "gemini") return ["Gemini", modelLabel, reasoningLabel].filter(Boolean).join(" · ");
   return ["Codex", modelLabel, reasoningLabel, speedLabel].filter(Boolean).join(" · ");
 }
@@ -1029,7 +1045,7 @@ function messageRunDetails(message: ChatMessage, job: Job | undefined, collapsed
   const kind = runJob?.kind || metadataKind || message.source;
   const model = runJob?.model || metadataModel;
   const reasoning = runJob?.reasoningEffort || metadataReasoning;
-  const speed = kind === "grok" || kind === "gemini" ? "" : runJob?.speed || metadataSpeed;
+  const speed = kind === "grok" || kind === "gemini" || kind === "gemini-cli" ? "" : runJob?.speed || metadataSpeed;
   const durationSeconds = collapsedRun?.durationSeconds ?? (runJob?.finishedAt ? jobDurationSeconds(runJob) : messageDurationSeconds(message));
   const settings = [
     model ? modelLabelForKind(kind, model) : "",
@@ -1955,7 +1971,7 @@ function isTerminalJobStatus(status: string) {
 }
 
 function jobRunnerLabel(job?: Pick<Job, "kind"> | null) {
-  if (job?.kind === "gemini") return "Gemini";
+  if (job?.kind === "gemini" || job?.kind === "gemini-cli") return "Gemini";
   return job?.kind === "grok" ? "Grok" : "Codex";
 }
 
@@ -2563,6 +2579,7 @@ function App() {
   const [jobKind, setJobKind] = useState<JobKind>("codex");
   const [codexModel, setCodexModel] = useState("gpt-5.5");
   const [grokModel, setGrokModel] = useState("grok-build");
+  const [geminiCliModel, setGeminiCliModel] = useState("gemini-2.5-pro");
   const [geminiModel, setGeminiModel] = useState("gemini-3.1-pro-preview");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
   const [codexSpeed, setCodexSpeed] = useState<CodexSpeed>("standard");
@@ -4011,11 +4028,12 @@ function App() {
     try {
       const raw = localStorage.getItem("cmc.codexRunSettings");
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { kind?: JobKind; model?: string; codexModel?: string; grokModel?: string; geminiModel?: string; reasoningEffort?: ReasoningEffort; speed?: CodexSpeed };
+      const parsed = JSON.parse(raw) as { kind?: JobKind; model?: string; codexModel?: string; grokModel?: string; geminiCliModel?: string; geminiModel?: string; reasoningEffort?: ReasoningEffort; speed?: CodexSpeed };
       if (parsed.kind && RUNNER_OPTIONS.some((option) => option.value === parsed.kind)) setJobKind(parsed.kind);
       if (parsed.model && CODEX_MODEL_OPTIONS.some((option) => option.value === parsed.model)) setCodexModel(parsed.model);
       if (parsed.codexModel && CODEX_MODEL_OPTIONS.some((option) => option.value === parsed.codexModel)) setCodexModel(parsed.codexModel);
       if (parsed.grokModel && GROK_MODEL_OPTIONS.some((option) => option.value === parsed.grokModel)) setGrokModel(parsed.grokModel);
+      if (parsed.geminiCliModel && GEMINI_CLI_MODEL_OPTIONS.some((option) => option.value === parsed.geminiCliModel)) setGeminiCliModel(parsed.geminiCliModel);
       if (parsed.geminiModel && GEMINI_MODEL_OPTIONS.some((option) => option.value === parsed.geminiModel)) setGeminiModel(parsed.geminiModel);
       if (parsed.reasoningEffort && REASONING_OPTIONS.some((option) => option.value === parsed.reasoningEffort)) setReasoningEffort(parsed.reasoningEffort);
       if (parsed.speed && SPEED_OPTIONS.some((option) => option.value === parsed.speed)) setCodexSpeed(parsed.speed);
@@ -4032,9 +4050,10 @@ function App() {
     try {
       localStorage.setItem("cmc.codexRunSettings", JSON.stringify({
         kind: jobKind,
-        model: jobKind === "grok" ? grokModel : jobKind === "gemini" ? geminiModel : codexModel,
+        model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
         codexModel,
         grokModel,
+        geminiCliModel,
         geminiModel,
         reasoningEffort,
         speed: codexSpeed
@@ -4042,7 +4061,7 @@ function App() {
     } catch {
       // The settings are just a UI convenience; a blocked storage write should not break chat.
     }
-  }, [jobKind, codexModel, grokModel, geminiModel, reasoningEffort, codexSpeed]);
+  }, [jobKind, codexModel, grokModel, geminiCliModel, geminiModel, reasoningEffort, codexSpeed]);
 
   useEffect(() => {
     if (!sandboxMenuOpen && !actionMenuOpen) return;
@@ -4512,7 +4531,7 @@ function App() {
         sandbox,
         branchMode: "current",
         kind: jobKind,
-        model: jobKind === "grok" ? grokModel : jobKind === "gemini" ? geminiModel : codexModel,
+        model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
         reasoningEffort,
         speed: jobKind === "codex" ? codexSpeed : undefined,
         attachments: []
@@ -4671,7 +4690,7 @@ function App() {
         sandbox,
         branchMode: "current",
         kind: jobKind,
-        model: jobKind === "grok" ? grokModel : jobKind === "gemini" ? geminiModel : codexModel,
+        model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
         reasoningEffort,
         speed: jobKind === "codex" ? codexSpeed : undefined,
         attachments: attachments.map((attachment) => ({
@@ -7057,7 +7076,7 @@ function App() {
     const canSubmit = Boolean(prompt.trim() || attachments.length);
     const runDisabled = busy || !canSubmit || localCodexBusy || activeRunBusy;
     const currentModelOptions = modelOptionsForKind(jobKind);
-    const selectedModel = jobKind === "grok" ? grokModel : jobKind === "gemini" ? geminiModel : codexModel;
+    const selectedModel = modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel);
     const selectedModelLabel = currentModelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel;
     const selectedReasoningLabel = REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label ?? reasoningEffort;
     const selectedSpeedLabel = SPEED_OPTIONS.find((option) => option.value === codexSpeed)?.label ?? codexSpeed;
@@ -7204,7 +7223,7 @@ function App() {
                       role="menuitemcheckbox"
                       aria-checked={selectedModel === option.value}
                       type="button"
-                      onClick={() => jobKind === "grok" ? setGrokModel(option.value) : jobKind === "gemini" ? setGeminiModel(option.value) : setCodexModel(option.value)}
+                      onClick={() => jobKind === "grok" ? setGrokModel(option.value) : jobKind === "gemini-cli" ? setGeminiCliModel(option.value) : jobKind === "gemini" ? setGeminiModel(option.value) : setCodexModel(option.value)}
                     >
                       <span>{option.label}</span>
                       {selectedModel === option.value && <Check size={15} />}

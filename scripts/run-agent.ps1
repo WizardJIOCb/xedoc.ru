@@ -21,6 +21,7 @@ foreach ($Name in @(
   "XAI_API_KEY",
   "GEMINI_API_KEY",
   "GOOGLE_API_KEY",
+  "CMC_GEMINI_BIN",
   "CMC_GROK_BIN",
   "CMC_GROK_WSL_BIN",
   "CMC_WSL_BASH_BIN",
@@ -97,6 +98,13 @@ if (-not $env:CMC_GROK_BIN -and -not $env:CMC_GROK_WSL_BIN) {
     if ($LASTEXITCODE -eq 0) {
       $env:CMC_WSL_BASH_BIN = $BashCmd.Source
     }
+  }
+}
+
+if (-not $env:CMC_GEMINI_BIN) {
+  $GeminiCmd = Get-Command gemini.cmd -ErrorAction SilentlyContinue
+  if ($GeminiCmd) {
+    $env:CMC_GEMINI_BIN = $GeminiCmd.Source
   }
 }
 

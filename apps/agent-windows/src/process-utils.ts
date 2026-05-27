@@ -82,6 +82,7 @@ export function minimalEnv(): NodeJS.ProcessEnv {
     "CODEX_HOME",
     "GROK_HOME",
     "GROK_SANDBOX",
+    "CMC_GEMINI_BIN",
     "CMC_GROK_BIN",
     "CMC_GROK_WSL_BIN",
     "CMC_WSL_BASH_BIN",

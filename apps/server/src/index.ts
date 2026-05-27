@@ -1600,12 +1600,12 @@ function latestThreadIdForChat(chatId: string | null, currentJobId: string, kind
 
 function assistantSourceForJob(kind: JobRow["kind"]): string {
   if (kind === "grok") return "grok";
-  if (kind === "gemini") return "gemini";
+  if (kind === "gemini" || kind === "gemini-cli") return "gemini";
   return "codex";
 }
 
 function promptForAgentJob(job: JobRow): string {
-  if (job.kind !== "gemini" || !job.chat_id) return job.prompt;
+  if ((job.kind !== "gemini" && job.kind !== "gemini-cli") || !job.chat_id) return job.prompt;
   const rows = db.prepare(`
     SELECT role, content, source, external_id FROM chat_messages
     WHERE chat_id = ? AND external_id != ?

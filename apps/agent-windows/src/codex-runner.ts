@@ -15,7 +15,7 @@ type RunContext = {
     prompt: string;
     sandbox: "read-only" | "workspace-write" | "danger-full-access";
     branchMode: "current" | "create-per-job";
-    kind: "codex" | "grok" | "gemini" | "test";
+    kind: "codex" | "grok" | "gemini-cli" | "gemini" | "test";
     testCommandId?: string;
     model?: string;
     reasoningEffort?: "low" | "medium" | "high" | "xhigh";
@@ -59,7 +59,8 @@ export class Runner {
     if (context.config.fakeRunner || process.env.CMC_FAKE_RUNNER === "1") return this.runFake(context, repo);
     if (context.job.kind === "test") return this.runTest(context, repo);
     if (context.job.kind === "grok") return this.runGrok(context, repo);
-    if (context.job.kind === "gemini") return this.runGemini(context, repo);
+    if (context.job.kind === "gemini-cli") return this.runGeminiCli(context, repo);
+    if (context.job.kind === "gemini") return this.runGeminiApi(context, repo);
     return this.runCodex(context, repo);
   }
 
@@ -186,7 +187,41 @@ export class Runner {
     });
   }
 
-  private async runGemini(context: RunContext, repo: RepoConfig): Promise<AgentJobDone> {
+  private async runGeminiCli(context: RunContext, repo: RepoConfig): Promise<AgentJobDone> {
+    const attachments = prepareAttachments(context, repo);
+    const userPrompt = attachments.length
+      ? [
+        context.job.prompt,
+        "",
+        "Attached files saved locally for this task:",
+        ...attachments.map((attachment) => `- ${attachment.name} (${attachment.mimeType}, ${attachment.size} bytes): ${attachment.path}`),
+        "",
+        "Use these file paths as the attached user-provided context."
+      ].join("\n")
+      : context.job.prompt;
+    const prompt = [
+      geminiCliEnvironmentPrompt(repo),
+      userPrompt
+    ].join("\n\n");
+    const command = geminiExecutable();
+    const args = [
+      ...(context.job.model ? ["--model", context.job.model] : []),
+      "--output-format",
+      "stream-json",
+      "--approval-mode",
+      context.job.sandbox === "danger-full-access" ? "yolo" : "auto_edit",
+      "--include-directories",
+      repo.path,
+      "-p",
+      "Read the full stdin content above and complete the user's requested task now. Do not wait for another command."
+    ];
+    return this.spawnAndCollect(context, repo, command, args, context.config.maxJobDurationMs, prompt, {
+      toolName: "Gemini",
+      handleJsonLine: createGeminiCliJsonLineHandler()
+    });
+  }
+
+  private async runGeminiApi(context: RunContext, repo: RepoConfig): Promise<AgentJobDone> {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set. Create a Gemini API key in Google AI Studio and add it to the agent environment.");
     const attachments = prepareAttachments(context, repo);
@@ -443,6 +478,11 @@ function grokExecutable(args: string[]): { command: string; args: string[] } {
   return { command: "grok", args };
 }
 
+function geminiExecutable(): string {
+  if (process.env.CMC_GEMINI_BIN) return process.env.CMC_GEMINI_BIN;
+  return process.platform === "win32" ? "gemini.cmd" : "gemini";
+}
+
 function curlExecutable(): string {
   return process.platform === "win32" ? "curl.exe" : "curl";
 }
@@ -554,6 +594,18 @@ function geminiEnvironmentPrompt(repo: RepoConfig): string {
     "- You do not have direct local tool access in this runner: you cannot execute shell commands, inspect files, or modify the working tree yourself.",
     "- Help with architecture, debugging, code review, planning, and patch suggestions. If the task requires actual file edits or commands, say that Codex or Grok should run it locally.",
     "- Keep answers practical and concise unless the user asks for depth."
+  ].join("\n");
+}
+
+function geminiCliEnvironmentPrompt(repo: RepoConfig): string {
+  return [
+    "Gemini CLI web agent environment:",
+    `- Project: ${repo.name} at ${repo.path}.`,
+    "- You are running through codex.rodion.pro's local Windows/Linux agent using Gemini CLI authenticated with the user's Google account.",
+    "- You may inspect and edit files in the working directory when the user asks for code work.",
+    "- Prefer finite commands and avoid long-lived dev servers unless the user explicitly asks for them.",
+    "- Respect the requested sandbox mode in spirit: avoid destructive operations unless the user clearly asks for them.",
+    "- Report environment limitations clearly when a required dependency or quota is unavailable."
   ].join("\n");
 }
 
@@ -822,6 +874,55 @@ function createGrokJsonLineHandler(): JsonLineHandler {
       return { handled: true, threadId: sessionId, messageText: text };
     }
     return { handled: true };
+  };
+}
+
+function createGeminiCliJsonLineHandler(): JsonLineHandler {
+  let messageText = "";
+  return (context, line) => {
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return { handled: false };
+    }
+    if (!event || typeof event !== "object") return { handled: false };
+    const record = event as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+
+    if (type === "init") {
+      const sessionId = typeof record.session_id === "string" ? record.session_id : undefined;
+      context.sendProgress(progress(context.job.id, "started", "Gemini session started.", sessionId ? { codexThreadId: sessionId } : undefined));
+      return { handled: true, threadId: sessionId };
+    }
+
+    if (type === "message") {
+      const role = typeof record.role === "string" ? record.role : "";
+      const content = typeof record.content === "string" ? record.content : "";
+      if (role !== "assistant" || !content) return { handled: true, messageText };
+      messageText = record.delta === true ? `${messageText}${content}` : content;
+      const text = messageText.trim();
+      if (text) {
+        context.sendProgress(progress(context.job.id, "message", text.slice(-500)));
+        context.sendLog(log(context.job.id, "stdout", text));
+      }
+      return { handled: true, messageText: text };
+    }
+
+    if (type === "result") {
+      const status = typeof record.status === "string" ? record.status : "";
+      if (status === "error") {
+        const error = record.error && typeof record.error === "object" ? record.error as Record<string, unknown> : undefined;
+        const errorMessage = typeof error?.message === "string" ? error.message : "Gemini CLI returned an error.";
+        messageText = `Gemini CLI error: ${errorMessage}`;
+        context.sendProgress(progress(context.job.id, "message", messageText.slice(-500)));
+        context.sendLog(log(context.job.id, "stderr", messageText));
+        return { handled: true, messageText };
+      }
+      return { handled: true, messageText: messageText.trim() };
+    }
+
+    return { handled: true, messageText };
   };
 }
 
