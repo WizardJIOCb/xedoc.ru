@@ -1509,6 +1509,11 @@ textarea:focus {
   background: rgba(16, 163, 127, 0.04);
 }
 
+.agent-connection.project-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(16, 163, 127, 0.16), 0 14px 32px rgba(16, 163, 127, 0.08);
+}
+
 .agent-connection.offline {
   background: var(--panel);
 }
@@ -1521,6 +1526,21 @@ textarea:focus {
   min-width: 0;
   overflow-wrap: anywhere;
   text-align: right;
+}
+
+.agent-project-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid rgba(16, 163, 127, 0.24);
+  border-radius: 999px;
+  color: #007a5a;
+  background: rgba(16, 163, 127, 0.08);
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
 }
 
 .agent-connection-meta {

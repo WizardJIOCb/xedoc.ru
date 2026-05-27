@@ -6377,10 +6377,12 @@ function App() {
                 const agentOnline = agent.status === "online";
                 const lastSeen = formatDateTime(agent.last_seen_at);
                 const canDeleteAgent = !agentOnline && agentRepos.length === 0;
+                const projectAgent = syncRepo?.agentId === agent.id;
                 return (
-                  <article className={`agent-connection ${agentOnline ? "online" : "offline"}`} key={agent.id}>
+                  <article className={`agent-connection ${agentOnline ? "online" : "offline"} ${projectAgent ? "project-active" : ""}`} key={agent.id}>
                     <div className="agent-connection-title">
                       <span className={`status ${agentOnline ? "ok" : "bad"}`}>{agentOnline ? <Wifi size={14} /> : <WifiOff size={14} />} {agentOnline ? "Online" : "Offline"}</span>
+                      {projectAgent && <span className="agent-project-badge"><CheckCircle2 size={14} /> Активен для проекта</span>}
                       <strong>{agent.name}</strong>
                     </div>
                     <div className="agent-connection-meta">
@@ -6394,7 +6396,7 @@ function App() {
                       <button className="secondary compact" disabled={!firstRepo} type="button" onClick={() => {
                         if (firstRepo) setSyncRepoKey(`${firstRepo.agentId}:${firstRepo.id}`);
                       }}>
-                        <Check size={14} /> Выбрать
+                        <Check size={14} /> {projectAgent ? "Выбран" : "Выбрать"}
                       </button>
                       <button className="secondary compact" disabled={busy || agentOnline} type="button" onClick={() => void downloadAgentSetup(agent)}>
                         <Download size={14} /> Setup
@@ -6447,7 +6449,7 @@ function App() {
               <select value={repoKeyValue} onChange={(event) => setSyncRepoKey(event.target.value)}>
                 {repos.map((repo) => (
                   <option key={`${repo.agentId}:${repo.id}`} value={`${repo.agentId}:${repo.id}`}>
-                    {repo.name} · {repo.currentBranch || "no branch"}
+                    {repo.name} · {repoAgentLabel(repo)} · {repo.currentBranch || "no branch"}
                   </option>
                 ))}
               </select>
