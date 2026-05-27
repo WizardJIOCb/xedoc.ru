@@ -24,6 +24,8 @@ foreach ($Name in @(
   "GOOGLE_GENAI_USE_GCA",
   "GEMINI_CLI_TRUST_WORKSPACE",
   "CMC_GEMINI_BIN",
+  "CMC_GEMINI_JS",
+  "CMC_GEMINI_NODE",
   "CMC_GROK_BIN",
   "CMC_GROK_WSL_BIN",
   "CMC_WSL_BASH_BIN",
@@ -107,7 +109,14 @@ if (-not $env:CMC_GEMINI_BIN) {
   $GeminiCmd = Get-Command gemini.cmd -ErrorAction SilentlyContinue
   if ($GeminiCmd) {
     $env:CMC_GEMINI_BIN = $GeminiCmd.Source
+    $env:CMC_GEMINI_JS = Join-Path (Split-Path -Parent $GeminiCmd.Source) "node_modules\@google\gemini-cli\dist\index.js"
+    $env:CMC_GEMINI_NODE = (Get-Command node.exe -ErrorAction Stop).Source
   }
+}
+
+if ($env:CMC_GEMINI_BIN -and -not $env:CMC_GEMINI_JS -and $env:CMC_GEMINI_BIN -match "\.cmd$") {
+  $env:CMC_GEMINI_JS = Join-Path (Split-Path -Parent $env:CMC_GEMINI_BIN) "node_modules\@google\gemini-cli\dist\index.js"
+  $env:CMC_GEMINI_NODE = (Get-Command node.exe -ErrorAction Stop).Source
 }
 
 node apps/agent-windows/dist/index.js --config $Config

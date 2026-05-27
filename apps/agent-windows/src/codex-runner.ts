@@ -203,19 +203,21 @@ export class Runner {
       geminiCliEnvironmentPrompt(repo),
       userPrompt
     ].join("\n\n");
-    const command = geminiExecutable();
+    const geminiCommand = geminiExecutable();
+    const approvalMode = await geminiApprovalMode(geminiCommand);
     const args = [
+      ...geminiCommand.prefixArgs,
       ...(context.job.model ? ["--model", context.job.model] : []),
       "--output-format",
       "stream-json",
       "--approval-mode",
-      context.job.sandbox === "danger-full-access" ? "yolo" : "auto_edit",
+      context.job.sandbox === "danger-full-access" ? "yolo" : approvalMode,
       "--include-directories",
       repo.path,
       "-p",
       "Read the full stdin content above and complete the user's requested task now. Do not wait for another command."
     ];
-    return this.spawnAndCollect(context, repo, command, args, context.config.maxJobDurationMs, prompt, {
+    return this.spawnAndCollect(context, repo, geminiCommand.command, args, context.config.maxJobDurationMs, prompt, {
       toolName: "Gemini",
       handleJsonLine: createGeminiCliJsonLineHandler()
     });
@@ -478,9 +480,23 @@ function grokExecutable(args: string[]): { command: string; args: string[] } {
   return { command: "grok", args };
 }
 
-function geminiExecutable(): string {
-  if (process.env.CMC_GEMINI_BIN) return process.env.CMC_GEMINI_BIN;
-  return process.platform === "win32" ? "gemini.cmd" : "gemini";
+function geminiExecutable(): { command: string; prefixArgs: string[] } {
+  if (process.env.CMC_GEMINI_NODE && process.env.CMC_GEMINI_JS) {
+    return { command: process.env.CMC_GEMINI_NODE, prefixArgs: [process.env.CMC_GEMINI_JS] };
+  }
+  if (process.env.CMC_GEMINI_BIN) {
+    if (process.platform === "win32" && /\.cmd$/i.test(process.env.CMC_GEMINI_BIN)) {
+      const geminiJs = join(dirname(process.env.CMC_GEMINI_BIN), "node_modules", "@google", "gemini-cli", "dist", "index.js");
+      if (existsSync(geminiJs)) return { command: process.env.CMC_GEMINI_NODE || "node", prefixArgs: [geminiJs] };
+    }
+    return { command: process.env.CMC_GEMINI_BIN, prefixArgs: [] };
+  }
+  return { command: process.platform === "win32" ? "gemini.cmd" : "gemini", prefixArgs: [] };
+}
+
+async function geminiApprovalMode(command: { command: string; prefixArgs: string[] }): Promise<string> {
+  const result = await runCapture(command.command, [...command.prefixArgs, "--help"], undefined, 15000);
+  return /\bautoedit\b/.test(result.stdout) ? "autoedit" : "auto_edit";
 }
 
 function curlExecutable(): string {
