@@ -730,6 +730,11 @@ function modelLabelForKind(kind: string | null | undefined, model: string) {
   return modelOptionsForKind(kind).find((option) => option.value === model)?.label ?? model;
 }
 
+function runnerSettingsSummary(kind: JobKind, modelLabel: string, reasoningLabel: string, speedLabel: string) {
+  if (kind === "grok") return [modelLabel, reasoningLabel].filter(Boolean).join(" · ");
+  return ["Codex", modelLabel, reasoningLabel, speedLabel].filter(Boolean).join(" · ");
+}
+
 function shortChatExternalId(chat?: Pick<Chat, "externalId"> | null) {
   return chat?.externalId ? chat.externalId.slice(0, 8) : "";
 }
@@ -966,7 +971,6 @@ function messageRunDetails(message: ChatMessage, job: Job | undefined, collapsed
   const speed = kind === "grok" ? "" : runJob?.speed || metadataSpeed;
   const durationSeconds = collapsedRun?.durationSeconds ?? (runJob?.finishedAt ? jobDurationSeconds(runJob) : messageDurationSeconds(message));
   const settings = [
-    kind === "grok" ? "Grok" : "",
     model ? modelLabelForKind(kind, model) : "",
     reasoning ? `Intelligence ${REASONING_OPTIONS.find((option) => option.value === reasoning)?.label ?? reasoning}` : "",
     speed ? `Speed ${SPEED_OPTIONS.find((option) => option.value === speed)?.label ?? speed}` : ""
@@ -975,7 +979,7 @@ function messageRunDetails(message: ChatMessage, job: Job | undefined, collapsed
     formatDateTime(message.createdAt),
     durationSeconds > 0 ? `Работал ${formatDuration(durationSeconds)}` : ""
   ].filter(Boolean);
-  return { settings, timing };
+  return { settings, timing, model };
 }
 
 function parseCommandOutput(output: string) {
@@ -6900,10 +6904,10 @@ function App() {
     const runDisabled = busy || !canSubmit || localCodexBusy || activeRunBusy;
     const currentModelOptions = modelOptionsForKind(jobKind);
     const selectedModel = jobKind === "grok" ? grokModel : codexModel;
-    const selectedRunnerLabel = RUNNER_OPTIONS.find((option) => option.value === jobKind)?.label ?? jobKind;
     const selectedModelLabel = currentModelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel;
     const selectedReasoningLabel = REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label ?? reasoningEffort;
     const selectedSpeedLabel = SPEED_OPTIONS.find((option) => option.value === codexSpeed)?.label ?? codexSpeed;
+    const currentModeSummary = runnerSettingsSummary(jobKind, selectedModelLabel, selectedReasoningLabel, selectedSpeedLabel);
     const showCodexBusy = localCodexBusy || activeRunBusy;
     const activeRunnerLabel = jobRunnerLabel(activeJob);
     const busyLabel = activeRunBusy ? `${activeRunnerLabel} занят` : "Codex занят";
@@ -7072,8 +7076,8 @@ function App() {
                     </button>
                   ))}
                 </div>}
-                <div className="menu-summary current-mode">
-                  {[selectedRunnerLabel, selectedModelLabel, selectedReasoningLabel, jobKind === "codex" ? selectedSpeedLabel : ""].filter(Boolean).join(" · ")}
+                <div className="menu-summary current-mode" title={`Model id: ${selectedModel}`}>
+                  {currentModeSummary}
                 </div>
                 {vscodeNotice && <div className="menu-summary">{vscodeNotice}</div>}
                 <button
@@ -7725,7 +7729,7 @@ function App() {
                                     <div className="message-author-stack">
                                       <span>
                                         {author}
-                                        {assistantDetails.settings.length > 0 && <> <small className="message-run-settings">{assistantDetails.settings.join(" · ")}</small></>}
+                                        {assistantDetails.settings.length > 0 && <> <small className="message-run-settings" title={assistantDetails.model ? `Model id: ${assistantDetails.model}` : undefined}>{assistantDetails.settings.join(" · ")}</small></>}
                                       </span>
                                       {assistantDetails.timing.length > 0 && <small>{assistantDetails.timing.join(" · ")}</small>}
                                     </div>
