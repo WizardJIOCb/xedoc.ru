@@ -11,13 +11,46 @@ if ($UserAgentToken) {
   $env:CMC_AGENT_TOKEN = $UserAgentToken
 }
 
-foreach ($Name in @("GH_TOKEN", "GITHUB_TOKEN", "XAI_API_KEY", "CMC_GROK_BIN", "CMC_GROK_WSL_BIN", "CMC_WSL_BASH_BIN")) {
+foreach ($Name in @(
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "XAI_API_KEY",
+  "CMC_GROK_BIN",
+  "CMC_GROK_WSL_BIN",
+  "CMC_WSL_BASH_BIN",
+  "CMC_AGENT_TRANSPORT_PROXY",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy"
+)) {
   if (-not (Get-Item -Path "Env:$Name" -ErrorAction SilentlyContinue)) {
     $UserValue = [Environment]::GetEnvironmentVariable($Name, "User")
     if ($UserValue) {
       Set-Item -Path "Env:$Name" -Value $UserValue
     }
   }
+}
+
+$TransportProxy = $env:CMC_AGENT_TRANSPORT_PROXY
+if ($TransportProxy) {
+  foreach ($Name in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")) {
+    Set-Item -Path "Env:$Name" -Value $TransportProxy
+  }
+
+  $NoProxyDefaults = @("127.0.0.1", "localhost", "::1", "codex.rodion.pro", "82.146.42.213", "100.64.0.0/10", "100.87.116.56")
+  $ExistingNoProxy = @($env:NO_PROXY, $env:no_proxy) |
+    Where-Object { $_ } |
+    ForEach-Object { $_ -split "," } |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ }
+  $NoProxy = @($ExistingNoProxy + $NoProxyDefaults) | Select-Object -Unique
+  $env:NO_PROXY = $NoProxy -join ","
+  $env:no_proxy = $env:NO_PROXY
 }
 
 if (-not $env:CMC_AGENT_TOKEN) {

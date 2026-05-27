@@ -382,9 +382,10 @@ function grokExecutable(args: string[]): { command: string; args: string[] } {
   }
   if (process.platform === "win32") {
     const grokBin = grokWslBinCommand();
+    const proxyPrefix = grokWslProxyEnvPrefix();
     return {
       command: process.env.CMC_WSL_BASH_BIN || "bash.exe",
-      args: ["-lc", `exec ${grokBin} ${args.map(shellQuote).join(" ")}`]
+      args: ["-lc", `exec ${proxyPrefix}${grokBin} ${args.map(shellQuote).join(" ")}`]
     };
   }
   return { command: "grok", args };
@@ -399,6 +400,28 @@ function grokWslBinCommand(): string {
 
 function shellQuoteSegment(value: string): string {
   return value.replaceAll("'", "'\\''");
+}
+
+function grokWslProxyEnvPrefix(): string {
+  const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.ALL_PROXY || process.env.https_proxy || process.env.http_proxy || process.env.all_proxy;
+  const noProxy = process.env.NO_PROXY || process.env.no_proxy;
+  const assignments: Array<[string, string]> = [];
+  if (proxy) {
+    assignments.push(
+      ["HTTP_PROXY", proxy],
+      ["HTTPS_PROXY", proxy],
+      ["ALL_PROXY", proxy],
+      ["http_proxy", proxy],
+      ["https_proxy", proxy],
+      ["all_proxy", proxy]
+    );
+  }
+  if (noProxy) {
+    assignments.push(["NO_PROXY", noProxy], ["no_proxy", noProxy]);
+  }
+  return assignments.length
+    ? `env ${assignments.map(([name, value]) => `${name}=${shellQuote(value)}`).join(" ")} `
+    : "";
 }
 
 function grokPathMapper(): (value: string) => string {
