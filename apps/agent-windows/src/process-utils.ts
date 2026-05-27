@@ -79,6 +79,8 @@ export function minimalEnv(): NodeJS.ProcessEnv {
     "XAI_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    "GOOGLE_GENAI_USE_GCA",
+    "GEMINI_CLI_TRUST_WORKSPACE",
     "CODEX_HOME",
     "GROK_HOME",
     "GROK_SANDBOX",
