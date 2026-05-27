@@ -14,6 +14,10 @@ if ($UserAgentToken) {
 foreach ($Name in @(
   "GH_TOKEN",
   "GITHUB_TOKEN",
+  "OPENAI_API_KEY",
+  "OPENAI_ADMIN_KEY",
+  "OPENAI_PROJECT_ID",
+  "OPENAI_RATE_LIMIT_MODEL",
   "XAI_API_KEY",
   "CMC_GROK_BIN",
   "CMC_GROK_WSL_BIN",

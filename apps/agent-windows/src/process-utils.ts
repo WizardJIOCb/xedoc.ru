@@ -6,7 +6,7 @@ export type SpawnResult = {
   stderr: string;
 };
 
-export function runCapture(command: string, args: string[], cwd?: string, timeoutMs = 30000): Promise<SpawnResult> {
+export function runCapture(command: string, args: string[], cwd?: string, timeoutMs = 30000, input?: string): Promise<SpawnResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
@@ -23,6 +23,10 @@ export function runCapture(command: string, args: string[], cwd?: string, timeou
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
+    if (input !== undefined) {
+      child.stdin.write(input);
+      child.stdin.end();
+    }
     child.on("error", (error) => {
       clearTimeout(timer);
       resolve({ exitCode: 127, stdout, stderr: `${stderr}${error.message}` });
@@ -69,6 +73,9 @@ export function minimalEnv(): NodeJS.ProcessEnv {
     "ComSpec",
     "ProgramData",
     "OPENAI_API_KEY",
+    "OPENAI_ADMIN_KEY",
+    "OPENAI_PROJECT_ID",
+    "OPENAI_RATE_LIMIT_MODEL",
     "XAI_API_KEY",
     "CODEX_HOME",
     "GROK_HOME",

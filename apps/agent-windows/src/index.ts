@@ -749,6 +749,143 @@ async function toolVersion(command: string, args = ["--version"]): Promise<strin
   return (result.stdout || result.stderr).trim().split(/\r?\n/)[0];
 }
 
+function curlExecutable(): string {
+  return process.platform === "win32" ? "curl.exe" : "curl";
+}
+
+function curlConfigQuote(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\r?\n/g, " ")}"`;
+}
+
+function truncateText(value: string, maxLength = 300): string {
+  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function compactSummary(parts: Array<string | undefined>, maxLength = 300): string {
+  return truncateText(parts.filter(Boolean).join(" "), maxLength);
+}
+
+function shortError(error: unknown): string {
+  return truncateText(error instanceof Error ? error.message : String(error), 140);
+}
+
+async function apiGetJson(url: string, bearerToken: string, timeoutMs = 20000): Promise<unknown> {
+  const curlConfig = [
+    `url = ${curlConfigQuote(url)}`,
+    `header = ${curlConfigQuote(`Authorization: Bearer ${bearerToken}`)}`,
+    `header = ${curlConfigQuote("Content-Type: application/json")}`,
+    "silent",
+    "show-error",
+    "location",
+    "fail"
+  ].join("\n");
+  const result = await runCapture(curlExecutable(), ["--config", "-"], undefined, timeoutMs, `${curlConfig}\n`);
+  if (result.exitCode !== 0) {
+    throw new Error((result.stderr || result.stdout).trim() || `curl exited with ${result.exitCode}`);
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error("Invalid JSON API response.");
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function monthStartUnixSeconds(date = new Date()): number {
+  return Math.floor(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) / 1000);
+}
+
+function sumOpenAiCosts(payload: unknown): number {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) return 0;
+  let total = 0;
+  for (const bucket of payload.data) {
+    if (!isRecord(bucket) || !Array.isArray(bucket.results)) continue;
+    for (const result of bucket.results) {
+      if (!isRecord(result) || !isRecord(result.amount)) continue;
+      const value = result.amount.value;
+      if (typeof value === "number" && Number.isFinite(value)) total += value;
+    }
+  }
+  return total;
+}
+
+function formatUsd(value: number): string {
+  const digits = value > 0 && value < 1 ? 4 : 2;
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+}
+
+function formatCompactNumber(value: number): string {
+  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`;
+  if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}K`;
+  return String(value);
+}
+
+function summarizeOpenAiRateLimits(payload: unknown): string | undefined {
+  if (!isRecord(payload) || !Array.isArray(payload.data) || payload.data.length === 0) return undefined;
+  const limits = payload.data.filter(isRecord);
+  const preferredModel = optionalText(process.env.OPENAI_RATE_LIMIT_MODEL)?.toLowerCase();
+  const selected = (preferredModel
+    ? limits.find((item) => String(item.model ?? "").toLowerCase() === preferredModel)
+    : limits.find((item) => String(item.model ?? "").toLowerCase().includes("gpt-5"))) ?? limits[0];
+  if (!selected) return undefined;
+  const model = String(selected.model ?? "model");
+  const rpm = typeof selected.max_requests_per_1_minute === "number" ? `${formatCompactNumber(selected.max_requests_per_1_minute)} RPM` : undefined;
+  const tpm = typeof selected.max_tokens_per_1_minute === "number" ? `${formatCompactNumber(selected.max_tokens_per_1_minute)} TPM` : undefined;
+  return `project limits ${limits.length} models; ${[model, rpm, tpm].filter(Boolean).join(" ")}`;
+}
+
+async function probeOpenAiApiSummary(): Promise<string | undefined> {
+  const adminKey = optionalText(process.env.OPENAI_ADMIN_KEY);
+  if (!adminKey) return undefined;
+
+  try {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const costParams = new URLSearchParams({
+      start_time: String(monthStartUnixSeconds()),
+      end_time: String(nowSeconds),
+      bucket_width: "1d",
+      limit: "31"
+    });
+    const costs = await apiGetJson(`https://api.openai.com/v1/organization/costs?${costParams.toString()}`, adminKey);
+    const parts = [`OpenAI API month spend ${formatUsd(sumOpenAiCosts(costs))}.`];
+    const projectId = optionalText(process.env.OPENAI_PROJECT_ID);
+    if (projectId) {
+      try {
+        const limits = await apiGetJson(`https://api.openai.com/v1/organization/projects/${encodeURIComponent(projectId)}/rate_limits?limit=100`, adminKey);
+        parts.push(summarizeOpenAiRateLimits(limits) ?? "project limits empty");
+      } catch (error) {
+        parts.push(`project limits failed: ${shortError(error)}`);
+      }
+    } else {
+      parts.push("Set OPENAI_PROJECT_ID for model RPM/TPM.");
+    }
+    return compactSummary(parts);
+  } catch (error) {
+    return `OpenAI API probe failed: ${shortError(error)}`;
+  }
+}
+
+function countApiModels(payload: unknown): number | undefined {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) return undefined;
+  return payload.data.length;
+}
+
+async function probeXaiApiSummary(): Promise<string | undefined> {
+  const apiKey = optionalText(process.env.XAI_API_KEY);
+  if (!apiKey) return undefined;
+
+  try {
+    const models = await apiGetJson("https://api.x.ai/v1/models", apiKey);
+    const count = countApiModels(models);
+    return `xAI API key works; ${count === undefined ? "models visible" : `${count} models visible`}. Limits are in xAI Console; API responses include per-call cost.`;
+  } catch (error) {
+    return `xAI API probe failed: ${shortError(error)}`;
+  }
+}
+
 async function probeCodexUsage(force = false): Promise<CodexUsage> {
   const cacheTtlMs = 10 * 60 * 1000;
   if (!force && cachedCodexUsage && Date.now() - cachedCodexUsageAt < cacheTtlMs) return cachedCodexUsage;
@@ -759,12 +896,16 @@ async function probeCodexUsage(force = false): Promise<CodexUsage> {
     const result = await runCapture(executable.command, [...executable.args, "login", "status"], undefined, 15000);
     const rawStatus = (result.stdout || result.stderr).trim();
     const signedIn = result.exitCode === 0 && /logged in/i.test(rawStatus);
+    const apiSummary = await probeOpenAiApiSummary();
     cachedCodexUsage = {
       status: signedIn ? "signed-in" : "signed-out",
-      summary: signedIn
-        ? "Signed in. Exact remaining Codex limit is not exposed by the local CLI yet."
-        : rawStatus || "Codex account is not signed in.",
-      source: "codex login status",
+      summary: compactSummary([
+        signedIn
+          ? "Signed in. Exact remaining Codex CLI limit is not exposed by the local CLI."
+          : rawStatus || "Codex account is not signed in.",
+        apiSummary ?? "Set OPENAI_ADMIN_KEY for OpenAI API spend and project limit probes."
+      ]),
+      source: apiSummary ? "codex login status + OpenAI API" : "codex login status",
       checkedAt
     };
   } catch (error) {
@@ -790,12 +931,16 @@ async function probeGrokUsage(force = false): Promise<CodexUsage> {
     const rawStatus = (result.stdout || result.stderr).trim();
     const signedIn = result.exitCode === 0 && /logged in with grok\.com/i.test(rawStatus);
     const authMissing = /not logged in|log in|login|auth|unauthori[sz]ed/i.test(rawStatus);
+    const apiSummary = await probeXaiApiSummary();
     cachedGrokUsage = {
       status: signedIn ? "signed-in" : authMissing ? "signed-out" : result.exitCode === 0 ? "signed-out" : "unavailable",
-      summary: signedIn
-        ? "Signed in. Exact remaining Grok Build limit is not exposed by the local CLI yet."
-        : rawStatus || "Grok account is not signed in.",
-      source: "grok models",
+      summary: compactSummary([
+        signedIn
+          ? "Signed in. Exact remaining Grok Build CLI limit is not exposed by the local CLI."
+          : rawStatus || "Grok account is not signed in.",
+        apiSummary ?? "Set XAI_API_KEY for xAI API status; xAI team limits remain in Console."
+      ]),
+      source: apiSummary ? "grok models + xAI API" : "grok models",
       checkedAt
     };
   } catch (error) {

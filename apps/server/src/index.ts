@@ -2131,6 +2131,8 @@ function agentSetupPayload(request: { protocol: string; hostname: string }, agen
       "sk-[A-Za-z0-9_-]+",
       "ghp_[A-Za-z0-9_]+",
       "OPENAI_API_KEY=\\S+",
+      "OPENAI_ADMIN_KEY=\\S+",
+      "XAI_API_KEY=\\S+",
       "cmc_agent_[A-Za-z0-9_-]+"
     ]
   }, null, 2);

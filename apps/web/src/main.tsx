@@ -7810,7 +7810,7 @@ function App() {
           </div>
           <div className="codex-limit">
             <div>
-              <span>Codex Account</span>
+              <span>Codex CLI / OpenAI API</span>
               <strong>{selectedAgent?.codexUsage?.status === "signed-in" ? "Signed in" : selectedAgent?.codexUsage?.status === "signed-out" ? "Signed out" : "Unknown"}</strong>
             </div>
             <p>{selectedAgent?.codexUsage?.summary ?? "Waiting for agent limit probe."}</p>
@@ -7822,13 +7822,13 @@ function App() {
             <small>
               {selectedAgent?.codexUsage?.remaining !== undefined && selectedAgent?.codexUsage?.limit !== undefined
                 ? `${selectedAgent.codexUsage.remaining} of ${selectedAgent.codexUsage.limit} left`
-                : "Exact remaining limit is not exposed by Codex CLI."}
+                : "Codex CLI remaining quota is not exposed locally."}
             </small>
             {selectedAgent?.codexUsage?.checkedAt && <small>Checked {formatDateTime(selectedAgent.codexUsage.checkedAt)}</small>}
           </div>
           <div className="codex-limit">
             <div>
-              <span>Grok Build</span>
+              <span>Grok Build / xAI API</span>
               <strong>{selectedAgent?.grokUsage?.status === "signed-in" ? "Signed in" : selectedAgent?.grokUsage?.status === "signed-out" ? "Signed out" : "Unknown"}</strong>
             </div>
             <p>{selectedAgent?.grokUsage?.summary ?? "Waiting for agent Grok probe."}</p>
