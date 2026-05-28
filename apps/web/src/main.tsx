@@ -539,53 +539,97 @@ function commonPrefixLength(left: string, right: string) {
   return index;
 }
 
-function AnimatedStreamingTail({ text }: { text: string }) {
-  return (
-    <>
-      {Array.from(text).map((char, index) => {
-        if (char === "\n") return <br key={`br:${index}`} />;
-        return (
-          <span
-            className={`stream-letter${char === " " ? " stream-space" : ""}`}
-            key={`${index}:${char}`}
-            style={{ animationDelay: `${Math.min(index * 10, 220)}ms` }}
-          >
-            {char === " " ? "\u00A0" : char}
-          </span>
-        );
-      })}
-    </>
-  );
+function streamingRevealStep(backlog: number) {
+  if (backlog > 2400) return 96;
+  if (backlog > 1200) return 58;
+  if (backlog > 600) return 34;
+  if (backlog > 240) return 18;
+  if (backlog > 80) return 9;
+  if (backlog > 30) return 5;
+  return 2;
 }
 
-function AnimatedStreamingRichText({ text, className, options }: { text: string; className: string; options?: RichTextOptions }) {
-  const normalized = normalizeDisplayText(text).trim();
-  const [streamState, setStreamState] = useState(() => ({
-    animatedFrom: 0,
-    text: normalized
-  }));
+function AnimatedStreamingRichText({
+  text,
+  className,
+  options,
+  onFrame
+}: {
+  text: string;
+  className: string;
+  options?: RichTextOptions;
+  onFrame?: () => void;
+}) {
+  const normalized = useMemo(() => normalizeDisplayText(text).trim(), [text]);
+  const [displayText, setDisplayText] = useState("");
+  const displayTextRef = useRef("");
+  const targetTextRef = useRef(normalized);
+  const frameRef = useRef<number | null>(null);
+  const onFrameRef = useRef(onFrame);
 
   useEffect(() => {
-    setStreamState((current) => {
-      if (current.text === normalized) return current;
-      return {
-        animatedFrom: commonPrefixLength(current.text, normalized),
-        text: normalized
-      };
-    });
-  }, [normalized]);
+    onFrameRef.current = onFrame;
+  }, [onFrame]);
 
-  const tail = streamState.text.slice(streamState.animatedFrom);
-  const shouldAnimateTail = tail.length > 0 && tail.length <= 700;
-  const stableText = shouldAnimateTail ? streamState.text.slice(0, streamState.animatedFrom) : streamState.text;
-  const completedTailBreak = shouldAnimateTail ? tail.lastIndexOf("\n") : -1;
-  const formattedText = completedTailBreak >= 0 ? `${stableText}${tail.slice(0, completedTailBreak + 1)}` : stableText;
-  const animatedTail = shouldAnimateTail ? tail.slice(completedTailBreak + 1) : "";
+  useEffect(() => {
+    displayTextRef.current = displayText;
+    onFrameRef.current?.();
+  }, [displayText]);
+
+  useEffect(() => {
+    targetTextRef.current = normalized;
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (prefersReducedMotion) {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+      displayTextRef.current = normalized;
+      setDisplayText(normalized);
+      return undefined;
+    }
+
+    const tick = () => {
+      frameRef.current = null;
+      const current = displayTextRef.current;
+      const target = targetTextRef.current;
+      if (current === target) return;
+
+      let next = target;
+      if (target.startsWith(current)) {
+        const backlog = target.length - current.length;
+        next = target.slice(0, current.length + streamingRevealStep(backlog));
+      } else {
+        const prefix = commonPrefixLength(current, target);
+        const isSmallRewrite = prefix >= Math.max(0, current.length - 24);
+        if (isSmallRewrite && prefix < target.length) {
+          const backlog = target.length - prefix;
+          next = target.slice(0, prefix + streamingRevealStep(backlog));
+        }
+      }
+
+      displayTextRef.current = next;
+      setDisplayText(next);
+      if (next !== targetTextRef.current) {
+        frameRef.current = window.requestAnimationFrame(tick);
+      }
+    };
+
+    if (frameRef.current === null) {
+      frameRef.current = window.requestAnimationFrame(tick);
+    }
+
+    return () => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, [normalized]);
 
   return (
     <div className={className}>
-      {formattedText ? renderRichText(formattedText, "rich-text compact live-activity-rich-stable", options) : null}
-      {animatedTail && <p className="streaming-tail"><AnimatedStreamingTail text={animatedTail} /></p>}
+      {displayText ? renderRichText(displayText, "rich-text compact live-activity-rich-body", options) : null}
       <span className="stream-caret" aria-hidden="true" />
     </div>
   );
@@ -3155,6 +3199,15 @@ function App() {
     const timeline = liveActivityTimelineRef.current;
     if (!timeline) return;
     timeline.scrollTop = timeline.scrollHeight;
+  }
+
+  function pinStreamingFrameToLatest() {
+    if (!chatStickToBottomRef.current) return;
+    scrollLiveActivityToLatest();
+    const scroller = getChatScroller();
+    autoScrollingUntilRef.current = Date.now() + 80;
+    scroller.scrollTop = scroller.scrollHeight;
+    chatAtBottomRef.current = true;
   }
 
   function nudgeChatToLatest(behavior: ScrollBehavior = "auto") {
@@ -6876,7 +6929,7 @@ function App() {
           </div>
           {isError
             ? renderRichText(entry.text ?? "", "rich-text compact live-activity-text")
-            : <AnimatedStreamingRichText className="live-activity-text streaming-text streaming-rich-text" text={entry.text ?? ""} />}
+            : <AnimatedStreamingRichText className="live-activity-text streaming-text streaming-rich-text" text={entry.text ?? ""} onFrame={pinStreamingFrameToLatest} />}
         </div>
       </article>
     );

@@ -4736,21 +4736,12 @@ h2 > strong {
 }
 
 .streaming-rich-text {
-  display: grid;
-  gap: 7px;
+  display: block;
   white-space: normal;
 }
 
-.streaming-rich-text .live-activity-rich-stable {
+.streaming-rich-text .live-activity-rich-body {
   min-width: 0;
-}
-
-.streaming-tail {
-  margin: 0;
-  min-width: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .stream-letter {
