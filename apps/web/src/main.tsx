@@ -798,6 +798,14 @@ function modelLabelForKind(kind: string | null | undefined, model: string) {
   return modelOptionsForKind(kind).find((option) => option.value === model)?.label ?? model;
 }
 
+function modelLabelForMessage(kind: string | null | undefined, model: string) {
+  const label = modelLabelForKind(kind, model);
+  const sourceLabel = kind === "gemini-cli" ? "Gemini" : chatSourceLabel(kind);
+  return label.toLowerCase().startsWith(`${sourceLabel.toLowerCase()} `)
+    ? label.slice(sourceLabel.length + 1)
+    : label;
+}
+
 function modelValueForKind(kind: JobKind, codexModel: string, grokModel: string, geminiCliModel: string, geminiModel: string) {
   if (kind === "grok") return grokModel;
   if (kind === "gemini-cli") return geminiCliModel;
@@ -1048,7 +1056,7 @@ function messageRunDetails(message: ChatMessage, job: Job | undefined, collapsed
   const speed = kind === "grok" || kind === "gemini" || kind === "gemini-cli" ? "" : runJob?.speed || metadataSpeed;
   const durationSeconds = collapsedRun?.durationSeconds ?? (runJob?.finishedAt ? jobDurationSeconds(runJob) : messageDurationSeconds(message));
   const settings = [
-    model ? modelLabelForKind(kind, model) : "",
+    model ? modelLabelForMessage(kind, model) : "",
     reasoning ? `Intelligence ${REASONING_OPTIONS.find((option) => option.value === reasoning)?.label ?? reasoning}` : "",
     speed ? `Speed ${SPEED_OPTIONS.find((option) => option.value === speed)?.label ?? speed}` : ""
   ].filter(Boolean);
