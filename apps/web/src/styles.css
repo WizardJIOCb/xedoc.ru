@@ -4660,6 +4660,8 @@ h2 > strong {
   min-width: 0;
   max-height: 44vh;
   overflow-y: auto;
+  overflow-anchor: none;
+  scroll-behavior: auto;
   background: var(--panel-2);
 }
 
@@ -4731,6 +4733,24 @@ h2 > strong {
   overflow-wrap: anywhere;
   word-break: break-word;
   line-height: 1.55;
+}
+
+.streaming-rich-text {
+  display: grid;
+  gap: 7px;
+  white-space: normal;
+}
+
+.streaming-rich-text .live-activity-rich-stable {
+  min-width: 0;
+}
+
+.streaming-tail {
+  margin: 0;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .stream-letter {

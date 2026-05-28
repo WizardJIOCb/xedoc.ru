@@ -539,7 +539,26 @@ function commonPrefixLength(left: string, right: string) {
   return index;
 }
 
-function AnimatedStreamingText({ text, className }: { text: string; className: string }) {
+function AnimatedStreamingTail({ text }: { text: string }) {
+  return (
+    <>
+      {Array.from(text).map((char, index) => {
+        if (char === "\n") return <br key={`br:${index}`} />;
+        return (
+          <span
+            className={`stream-letter${char === " " ? " stream-space" : ""}`}
+            key={`${index}:${char}`}
+            style={{ animationDelay: `${Math.min(index * 10, 220)}ms` }}
+          >
+            {char === " " ? "\u00A0" : char}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+function AnimatedStreamingRichText({ text, className, options }: { text: string; className: string; options?: RichTextOptions }) {
   const normalized = normalizeDisplayText(text).trim();
   const [streamState, setStreamState] = useState(() => ({
     animatedFrom: 0,
@@ -559,22 +578,14 @@ function AnimatedStreamingText({ text, className }: { text: string; className: s
   const tail = streamState.text.slice(streamState.animatedFrom);
   const shouldAnimateTail = tail.length > 0 && tail.length <= 700;
   const stableText = shouldAnimateTail ? streamState.text.slice(0, streamState.animatedFrom) : streamState.text;
+  const completedTailBreak = shouldAnimateTail ? tail.lastIndexOf("\n") : -1;
+  const formattedText = completedTailBreak >= 0 ? `${stableText}${tail.slice(0, completedTailBreak + 1)}` : stableText;
+  const animatedTail = shouldAnimateTail ? tail.slice(completedTailBreak + 1) : "";
 
   return (
     <div className={className}>
-      {stableText}
-      {shouldAnimateTail && Array.from(tail).map((char, index) => {
-        if (char === "\n") return <br key={`br:${index}`} />;
-        return (
-          <span
-            className={`stream-letter${char === " " ? " stream-space" : ""}`}
-            key={`${index}:${char}`}
-            style={{ animationDelay: `${Math.min(index * 10, 220)}ms` }}
-          >
-            {char === " " ? "\u00A0" : char}
-          </span>
-        );
-      })}
+      {formattedText ? renderRichText(formattedText, "rich-text compact live-activity-rich-stable", options) : null}
+      {animatedTail && <p className="streaming-tail"><AnimatedStreamingTail text={animatedTail} /></p>}
       <span className="stream-caret" aria-hidden="true" />
     </div>
   );
@@ -2881,6 +2892,7 @@ function App() {
   const projectStateRestoredRef = useRef(false);
   const shellRef = useRef<HTMLElement | null>(null);
   const chatThreadRef = useRef<HTMLElement | null>(null);
+  const liveActivityTimelineRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLFormElement | null>(null);
   const firstMessageRef = useRef<HTMLElement | null>(null);
   const lastMessageRef = useRef<HTMLElement | null>(null);
@@ -3139,8 +3151,15 @@ function App() {
     window.setTimeout(updateChatBottomState, behavior === "smooth" ? 260 : 0);
   }
 
+  function scrollLiveActivityToLatest() {
+    const timeline = liveActivityTimelineRef.current;
+    if (!timeline) return;
+    timeline.scrollTop = timeline.scrollHeight;
+  }
+
   function nudgeChatToLatest(behavior: ScrollBehavior = "auto") {
     if (!chatStickToBottomRef.current) return;
+    scrollLiveActivityToLatest();
     scrollChatToLatest(behavior);
   }
 
@@ -4229,12 +4248,15 @@ function App() {
     const timers: number[] = [];
     const scrollDown = () => {
       if (activeChatIdRef.current !== chatId || !chatStickToBottomRef.current) return;
+      scrollLiveActivityToLatest();
       scrollChatToLatest("auto");
     };
     const raf = window.requestAnimationFrame(() => {
       scrollDown();
       timers.push(window.setTimeout(scrollDown, 50));
       timers.push(window.setTimeout(scrollDown, 180));
+      timers.push(window.setTimeout(scrollDown, 360));
+      timers.push(window.setTimeout(scrollDown, 620));
     });
     return () => {
       window.cancelAnimationFrame(raf);
@@ -6831,7 +6853,7 @@ function App() {
           <ChevronDown className={expanded ? "open" : ""} size={15} />
         </button>
         {expanded && (
-          <div className="live-activity-timeline">
+          <div className="live-activity-timeline" ref={liveActivityTimelineRef}>
             {entries.length ? entries.map(renderLiveActivityEntry) : (
               <div className="live-activity-empty">Жду события от {runnerLabel}...</div>
             )}
@@ -6854,7 +6876,7 @@ function App() {
           </div>
           {isError
             ? renderRichText(entry.text ?? "", "rich-text compact live-activity-text")
-            : <AnimatedStreamingText className="live-activity-text streaming-text" text={entry.text ?? ""} />}
+            : <AnimatedStreamingRichText className="live-activity-text streaming-text streaming-rich-text" text={entry.text ?? ""} />}
         </div>
       </article>
     );
