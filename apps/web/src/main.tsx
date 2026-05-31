@@ -8624,8 +8624,87 @@ function App() {
   function renderProjectOverview() {
     if (!selectedRepo || activeChat) return null;
     const previewLabel = selectedRepo.domain || selectedRepo.githubUrl || selectedRepo.pathMasked;
+    const deployConfigured = hasDeployConfig(selectedRepo);
+    const hasServerPath = Boolean(selectedRepo.serverPath?.trim());
+    const hasDomain = Boolean(selectedRepo.domain?.trim());
+    const buildMissingPackage = /package\.json|enoent|could not read package/i.test(buildNotice);
+    const buildFailed = Boolean(buildNotice && /failed|error|enoent/i.test(buildNotice));
+    const nextSetup = buildMissingPackage
+      ? {
+        tone: "danger",
+        label: "Folder",
+        title: "Build не видит проект",
+        detail: `В ${selectedRepo.pathMasked} нет package.json. Проверь папку/GitHub в Project settings или сначала создай приложение в этой папке через Codex. Deploy, Nginx и SSL нажимать рано.`
+      }
+      : !deployConfigured || !hasServerPath || !hasDomain
+        ? {
+          tone: "warning",
+          label: "Settings",
+          title: "Сначала заполни настройки проекта",
+          detail: "Нужны папка проекта, server folder, domain и deploy config. После этого проверяй Build и переходи к Deploy."
+        }
+        : buildFailed
+          ? {
+            tone: "warning",
+            label: "Build",
+            title: "Сначала добейся зелёного Build",
+            detail: "Build проверяет, что проект собирается в выбранной папке. Пока он падает, Deploy просто повторит ту же ошибку."
+          }
+          : {
+            tone: "ready",
+            label: "Ready",
+            title: "Готово к запуску цепочки",
+            detail: "Если нужно всё сразу, жми Launch. Если хочешь по шагам: Build, Deploy, Nginx, SSL, Open."
+          };
     return (
       <section className="project-home" aria-label="Обзор проекта">
+        <article className={`project-setup-card ${nextSetup.tone}`}>
+          <div className="project-home-head">
+            <div>
+              <h3><SlidersHorizontal size={16} /> Что делать дальше</h3>
+              <small>{nextSetup.label}</small>
+            </div>
+            <button className="secondary compact" type="button" onClick={() => openProjectSettings(selectedRepo)}>
+              <Settings size={15} /> Project settings
+            </button>
+          </div>
+          <div className="project-setup-next">
+            <strong>{nextSetup.title}</strong>
+            <span>{nextSetup.detail}</span>
+          </div>
+          <div className="project-setup-flow" aria-label="Порядок настройки проекта">
+            <button type="button" onClick={() => openProjectSettings(selectedRepo)}>
+              <Settings size={15} />
+              <span>Settings</span>
+              <small>папка, GitHub, domain, deploy</small>
+            </button>
+            <button disabled={buildBusy} type="button" onClick={() => void buildProject()}>
+              <Terminal size={15} />
+              <span>Build</span>
+              <small>проверка package/build</small>
+            </button>
+            <button disabled={deployBusy || !deployConfigured} type="button" onClick={() => void deployProject()}>
+              <UploadCloud size={15} />
+              <span>Deploy</span>
+              <small>копия сборки в server folder</small>
+            </button>
+            <button disabled={nginxBusy || !deployConfigured || !hasDomain} type="button" onClick={() => void configureNginx()}>
+              <Settings size={15} />
+              <span>Nginx</span>
+              <small>домен на папку сайта</small>
+            </button>
+            <button disabled={sslBusy || !deployConfigured || !hasDomain} type="button" onClick={() => void configureSsl()}>
+              <ShieldCheck size={15} />
+              <span>SSL</span>
+              <small>сертификат после Nginx</small>
+            </button>
+            <button disabled={!selectedProjectUrl} type="button" onClick={() => selectedProjectUrl && window.open(selectedProjectUrl, "_blank", "noopener,noreferrer")}>
+              <ExternalLink size={15} />
+              <span>Open</span>
+              <small>проверить результат</small>
+            </button>
+          </div>
+        </article>
         {selectedProjectUrl ? (
           <div className="project-site-preview">
             <div className="project-site-framebar">
