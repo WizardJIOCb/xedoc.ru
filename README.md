@@ -385,13 +385,13 @@ Project chat:
 Current production path:
 
 ```text
-/var/www/codex.rodion.pro
+/var/www/xedoc.ru
 ```
 
 Manual deploy:
 
 ```bash
-cd /var/www/codex.rodion.pro
+cd /var/www/xedoc.ru
 git pull --ff-only
 corepack pnpm install --frozen-lockfile
 corepack pnpm build
@@ -480,7 +480,7 @@ pnpm --filter @cmc/agent-windows build
 
 ```powershell
 git push origin master
-ssh myserver "set -e; cd /var/www/codex.rodion.pro; git pull --ff-only; corepack pnpm install --frozen-lockfile; corepack pnpm build; systemctl restart codex-controller.service; systemctl is-active codex-controller.service"
+ssh myserver "set -e; cd /var/www/xedoc.ru; git pull --ff-only; corepack pnpm install --frozen-lockfile; NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm build; systemctl restart codex-controller.service; systemctl is-active codex-controller.service"
 ```
 
 Обновить локальный VS Code bridge:
@@ -514,12 +514,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-vscode-bridg
 
 Запустить агента:
 
-C:\Projects\codex.rodion.pro\start-agent.bat
+C:\Projects\xedoc.ru\start-agent.bat
 Остановить агента:
 
-C:\Projects\codex.rodion.pro\stop-agent.bat
+C:\Projects\xedoc.ru\stop-agent.bat
 start-agent.bat запускает обычного фонового Windows-агента, который видит VS Code bridge и синхронизирует чаты с xedoc.ru. Окна/трея у него может не быть, он работает скрытым процессом. Логи здесь:
 
-C:\Projects\codex.rodion.pro\data\prod-agent.log
-C:\Projects\codex.rodion.pro\data\prod-agent.err.log
+C:\Projects\xedoc.ru\data\prod-agent.log
+C:\Projects\xedoc.ru\data\prod-agent.err.log
 start-native-agent.bat сейчас не нужен для простого запуска. Это dev/release запуск нативного Tauri-приложения с UI, он тяжелее и требует Rust/Cargo. Для ежедневного “включить/выключить агента” лучше start-agent.bat / stop-agent.bat.

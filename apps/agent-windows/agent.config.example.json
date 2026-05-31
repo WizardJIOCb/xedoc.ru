@@ -11,9 +11,9 @@
     {
       "id": "codex-mobile-controller",
       "name": "Codex Mobile Controller",
-      "path": "C:\\Projects\\codex.rodion.pro",
-      "githubUrl": "https://github.com/WizardJIOCb/codex.rodion.pro.git",
-      "serverPath": "/var/www/codex.rodion.pro",
+      "path": "C:\\Projects\\xedoc.ru",
+      "githubUrl": "https://github.com/WizardJIOCb/xedoc.ru.git",
+      "serverPath": "/var/www/xedoc.ru",
       "domain": "xedoc.ru",
       "defaultSandbox": "danger-full-access",
       "allowedSandboxes": ["read-only", "workspace-write", "danger-full-access"],
