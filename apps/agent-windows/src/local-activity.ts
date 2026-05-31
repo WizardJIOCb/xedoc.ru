@@ -8,6 +8,8 @@ const BUSY_WINDOW_MS = 8000;
 const BUSY_COMPLETED_SETTLE_MS = 3000;
 const BUSY_IDLE_GRACE_MS = 15 * 60 * 1000;
 const BUSY_USER_TURN_WINDOW_MS = 30 * 60 * 1000;
+const WEB_ACTIVITY_SOURCE = "xedoc.ru";
+const WEB_ACTIVITY_SOURCES = new Set([WEB_ACTIVITY_SOURCE, "codex.rodion.pro"]);
 
 let busyKey = "";
 let busySinceMs = 0;
@@ -38,18 +40,18 @@ export function detectLocalCodexActivity(config: AgentConfig, currentJobId?: str
   if (currentJobId) {
     markBusy(`web:${currentJobId}`, Date.now(), {
       key: `web:${currentJobId}`,
-      source: "codex.rodion.pro",
+      source: WEB_ACTIVITY_SOURCE,
       updatedAt: Date.now()
     });
     return {
       status: "busy",
-      summary: "Codex is running a web task from codex.rodion.pro.",
-      source: "codex.rodion.pro",
+      summary: "Codex is running a web task from xedoc.ru.",
+      source: WEB_ACTIVITY_SOURCE,
       detectedAt,
       busySinceAt: new Date(busySinceMs).toISOString()
     };
   }
-  if (lastBusyCandidate?.source === "codex.rodion.pro") {
+  if (isWebActivitySource(lastBusyCandidate?.source)) {
     resetBusyState();
   }
 
@@ -109,6 +111,10 @@ function markBusy(key: string, seenAt: number, candidate: Candidate): void {
   }
   lastBusySeenMs = Math.max(lastBusySeenMs, seenAt);
   lastBusyCandidate = candidate;
+}
+
+function isWebActivitySource(source: string | undefined): boolean {
+  return Boolean(source && WEB_ACTIVITY_SOURCES.has(source));
 }
 
 function isSettledCompletedCandidate(candidate: Candidate): boolean {

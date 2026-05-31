@@ -18,6 +18,35 @@ const LOCAL_CHAT_SYNC_SETTLE_DELAYS_MS = [3000, 10000];
 const LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS = 30000;
 const LOCAL_CHAT_SYNC_BACKPRESSURE_BYTES = 16 * 1024 * 1024;
 const MAX_EDITOR_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_PREVIEW_BYTES = 8 * 1024 * 1024;
+const MAX_FILE_TREE_ENTRIES = 900;
+const MAX_FILE_TREE_DEPTH = 8;
+const FILE_TREE_IGNORED_DIRS = new Set([
+  ".git",
+  ".next",
+  ".nuxt",
+  ".turbo",
+  ".cache",
+  "coverage",
+  "dist",
+  "build",
+  "node_modules",
+  "target",
+  "vendor"
+]);
+
+const IMAGE_MIME_TYPES = new Map([
+  [".apng", "image/apng"],
+  [".avif", "image/avif"],
+  [".gif", "image/gif"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".webp", "image/webp"],
+  [".bmp", "image/bmp"],
+  [".ico", "image/x-icon"]
+]);
 const config = loadAgentConfig();
 const redact = makeRedactor(config.redactPatterns);
 const token = process.env[config.tokenEnv];
@@ -84,23 +113,43 @@ async function ensureGitRepo(path: string): Promise<void> {
   }
 }
 
-function repoFileTarget(repoId: string, rawPath: string): { repoPath: string; filePath: string; targetPath: string } {
+async function prepareProjectFolder(path: string, githubUrl?: string): Promise<void> {
+  const remoteUrl = optionalText(githubUrl);
+  if (!remoteUrl) {
+    await ensureGitRepo(path);
+    return;
+  }
+  const targetPath = resolve(path);
+  if (existsSync(targetPath)) {
+    const stat = statSync(targetPath);
+    if (!stat.isDirectory()) throw new Error("Project path exists and is not a directory.");
+    const gitProbe = await runCapture("git", ["-C", targetPath, "rev-parse", "--is-inside-work-tree"], undefined, 15000);
+    if (gitProbe.exitCode === 0 && gitProbe.stdout.trim() === "true") return;
+    if (readdirSync(targetPath).length > 0) {
+      throw new Error("Project folder is not empty. Use an empty folder or an existing Git repository for clone.");
+    }
+  }
+  mkdirSync(dirname(targetPath), { recursive: true });
+  const clone = await runCapture("git", ["clone", remoteUrl, targetPath], undefined, 180000);
+  if (clone.exitCode !== 0) throw new Error(clone.stderr || clone.stdout || "git clone failed");
+}
+
+function repoPathTarget(repoId: string, rawPath = ""): { repoPath: string; filePath: string; targetPath: string } {
   const repo = config.repos.find((item) => item.id === repoId);
   if (!repo) throw new Error("Project not found in agent config.");
   const filePath = rawPath.replace(/\\/g, "/").replace(/^\.\/+/, "").trim();
   if (
-    !filePath
-    || filePath.includes("\0")
+    filePath.includes("\0")
     || filePath.startsWith("/")
     || /^[a-z]:\//i.test(filePath)
-    || filePath.split("/").some((part) => !part || part === "." || part === "..")
+    || (filePath ? filePath.split("/").some((part) => !part || part === "." || part === "..") : false)
     || filePath === ".git"
     || filePath.startsWith(".git/")
   ) {
     throw new Error("Unsafe file path.");
   }
   const repoPath = resolve(repo.path);
-  const targetPath = resolve(repoPath, ...filePath.split("/"));
+  const targetPath = filePath ? resolve(repoPath, ...filePath.split("/")) : repoPath;
   const compareRoot = repoPath.endsWith(sep) ? repoPath : `${repoPath}${sep}`;
   const compareTarget = targetPath.endsWith(sep) ? targetPath : `${targetPath}${sep}`;
   const normalizeCase = process.platform === "win32"
@@ -112,16 +161,89 @@ function repoFileTarget(repoId: string, rawPath: string): { repoPath: string; fi
   return { repoPath, filePath, targetPath };
 }
 
+function repoFileTarget(repoId: string, rawPath: string): { repoPath: string; filePath: string; targetPath: string } {
+  const target = repoPathTarget(repoId, rawPath);
+  if (!target.filePath) throw new Error("Unsafe file path.");
+  return target;
+}
+
+function imageMimeType(path: string): string | undefined {
+  const lower = path.toLowerCase();
+  for (const [extension, mimeType] of IMAGE_MIME_TYPES) {
+    if (lower.endsWith(extension)) return mimeType;
+  }
+  return undefined;
+}
+
+function listProjectFiles(repoId: string, rawPath = "") {
+  const target = repoPathTarget(repoId, rawPath);
+  if (!existsSync(target.targetPath) || !statSync(target.targetPath).isDirectory()) throw new Error("Folder not found.");
+  const entries: Array<{ path: string; name: string; type: "file" | "directory"; depth: number; size?: number; mtimeMs?: number }> = [];
+
+  const walk = (dirPath: string, relativeDir: string, depth: number) => {
+    if (entries.length >= MAX_FILE_TREE_ENTRIES || depth > MAX_FILE_TREE_DEPTH) return;
+    let children;
+    try {
+      children = readdirSync(dirPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    children
+      .filter((entry) => !entry.isSymbolicLink())
+      .filter((entry) => !(entry.isDirectory() && FILE_TREE_IGNORED_DIRS.has(entry.name)))
+      .sort((left, right) => {
+        if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? -1 : 1;
+        return left.name.localeCompare(right.name);
+      })
+      .forEach((entry) => {
+        if (entries.length >= MAX_FILE_TREE_ENTRIES) return;
+        const path = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+        const fullPath = join(dirPath, entry.name);
+        let stat;
+        try {
+          stat = statSync(fullPath);
+        } catch {
+          return;
+        }
+        if (entry.isDirectory()) {
+          entries.push({ path, name: entry.name, type: "directory", depth, mtimeMs: stat.mtimeMs });
+          walk(fullPath, path, depth + 1);
+          return;
+        }
+        if (entry.isFile()) {
+          entries.push({ path, name: entry.name, type: "file", depth, size: stat.size, mtimeMs: stat.mtimeMs });
+        }
+      });
+  };
+
+  walk(target.targetPath, target.filePath, 0);
+  return { entries };
+}
+
 function readProjectFile(repoId: string, rawPath: string) {
   const target = repoFileTarget(repoId, rawPath);
   if (!existsSync(target.targetPath) || !statSync(target.targetPath).isFile()) throw new Error("File not found.");
   const stat = statSync(target.targetPath);
-  if (stat.size > MAX_EDITOR_FILE_BYTES) throw new Error("File is too large for the web editor.");
+  const mimeType = imageMimeType(target.filePath);
+  if (mimeType && stat.size > MAX_IMAGE_PREVIEW_BYTES) throw new Error("Image is too large for preview.");
+  if (!mimeType && stat.size > MAX_EDITOR_FILE_BYTES) throw new Error("File is too large for the web editor.");
   const bytes = readFileSync(target.targetPath);
+  if (mimeType) {
+    return {
+      path: target.filePath,
+      content: "",
+      binary: true,
+      mimeType,
+      dataBase64: bytes.toString("base64"),
+      size: bytes.length,
+      mtimeMs: stat.mtimeMs
+    };
+  }
   if (bytes.includes(0)) throw new Error("Binary files cannot be opened in the web editor.");
   return {
     path: target.filePath,
     content: bytes.toString("utf8"),
+    binary: false,
     size: bytes.length,
     mtimeMs: stat.mtimeMs
   };
@@ -342,7 +464,7 @@ async function githubApi(
     headers: {
       "accept": "application/vnd.github+json",
       "authorization": `Bearer ${token}`,
-      "user-agent": "codex.rodion.pro-agent",
+      "user-agent": "xedoc.ru-agent",
       "x-github-api-version": "2022-11-28",
       ...(init.headers ?? {})
     }
@@ -467,6 +589,36 @@ async function gitSync(
   await runGit(["push", "-u", "origin", branch], 120000);
   const status = await runGit(["status", "--short", "--branch"], 15000);
   return [...output, status.stdout.trim() || "Git sync completed."].filter(Boolean).join("\n");
+}
+
+function inferBuildCommand(repoPath: string): { command: string; args: string[]; timeoutMs: number } | undefined {
+  const packageJsonPath = join(repoPath, "package.json");
+  if (!existsSync(packageJsonPath)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { scripts?: Record<string, unknown> };
+    if (typeof parsed.scripts?.build !== "string") return undefined;
+    return {
+      command: process.platform === "win32" ? "npm.cmd" : "npm",
+      args: ["run", "build"],
+      timeoutMs: 120000
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function buildProject(repoId: string): Promise<string> {
+  const repo = config.repos.find((item) => item.id === repoId);
+  if (!repo) throw new Error("Project not found in agent config.");
+  const build = repo.deploy?.buildCommand ?? inferBuildCommand(repo.path);
+  if (!build) throw new Error("Project build command is not configured and package.json has no build script.");
+  const label = [build.command, ...build.args].join(" ");
+  const result = await runCapture(build.command, build.args, repo.path, build.timeoutMs ?? 120000);
+  const output = [`$ ${label}`];
+  const text = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
+  if (text) output.push(text);
+  if (result.exitCode !== 0) throw new Error([...output, `${label} failed with exit code ${result.exitCode}`].join("\n"));
+  return [...output, "Build completed."].join("\n");
 }
 
 async function deployProject(repoId: string): Promise<string> {
@@ -602,7 +754,7 @@ async function configureNginx(repoId: string): Promise<string> {
     "    }"
   ];
   const httpConfig = [
-    "# Generated by codex.rodion.pro",
+    "# Generated by xedoc.ru",
     "server {",
     "    listen 80;",
     "    listen [::]:80;",
@@ -616,7 +768,7 @@ async function configureNginx(repoId: string): Promise<string> {
     ""
   ].join("\n");
   const sslConfig = [
-    "# Generated by codex.rodion.pro",
+    "# Generated by xedoc.ru",
     "server {",
     "    listen 80;",
     "    listen [::]:80;",
@@ -1027,7 +1179,7 @@ async function hello(): Promise<AgentToServer> {
   return {
     type: "agent.hello",
     agentId: config.agentId,
-    hostname: os.hostname(),
+    hostname: optionalText(process.env.CMC_AGENT_HOSTNAME) ?? os.hostname(),
     os: `${os.type()} ${os.release()}`,
     agentVersion: "0.1.0",
     codexVersion,
@@ -1189,7 +1341,7 @@ function connect() {
       try {
         logProgress(`project: Creating ${message.project.name}.`);
         if (config.repos.some((repo) => repo.id === message.project.id)) throw new Error("Project id already exists.");
-        await ensureGitRepo(message.project.path);
+        await prepareProjectFolder(message.project.path, message.project.githubUrl);
         config.repos.push({
           id: message.project.id,
           name: message.project.name,
@@ -1219,7 +1371,7 @@ function connect() {
         let repo = config.repos.find((item) => item.id === message.repoId);
         if (!repo) {
           if (!message.patch.name || !message.patch.path) throw new Error("Project not found in agent config.");
-          await ensureGitRepo(message.patch.path);
+          await prepareProjectFolder(message.patch.path, message.patch.githubUrl);
           repo = {
             id: message.repoId,
             name: message.patch.name,
@@ -1236,7 +1388,7 @@ function connect() {
           config.repos.push(repo);
         } else {
           if (message.patch.path) {
-            await ensureGitRepo(message.patch.path);
+            await prepareProjectFolder(message.patch.path, "githubUrl" in message.patch ? optionalText(message.patch.githubUrl) : repo.githubUrl);
             repo.path = message.patch.path;
           }
           if (message.patch.name) repo.name = message.patch.name;
@@ -1301,6 +1453,31 @@ function connect() {
       return;
     }
 
+    if (message.type === "project.command") {
+      try {
+        logProgress(`project-command: ${message.command} started for ${message.repoId}.`);
+        const output = message.command === "build"
+          ? await buildProject(message.repoId)
+          : "Unknown project command.";
+        send({
+          type: "project.command.result",
+          requestId: message.requestId,
+          ok: true,
+          output
+        });
+        logProgress(`project-command: ${message.command} completed for ${message.repoId}.`);
+      } catch (error) {
+        console.error(`[progress] project-command: ${message.command} failed: ${error instanceof Error ? error.message : String(error)}`);
+        send({
+          type: "project.command.result",
+          requestId: message.requestId,
+          ok: false,
+          error: error instanceof Error ? redact(error.message) : redact(String(error))
+        });
+      }
+      return;
+    }
+
     if (message.type === "project.nginx") {
       try {
         logProgress(`nginx: Configure started for ${message.repoId}.`);
@@ -1335,6 +1512,26 @@ function connect() {
           requestId: message.requestId,
           ok: true,
           ...file
+        });
+      } catch (error) {
+        send({
+          type: "file.result",
+          requestId: message.requestId,
+          ok: false,
+          error: error instanceof Error ? redact(error.message) : redact(String(error))
+        });
+      }
+      return;
+    }
+
+    if (message.type === "file.list") {
+      try {
+        const tree = listProjectFiles(message.repoId, message.path);
+        send({
+          type: "file.result",
+          requestId: message.requestId,
+          ok: true,
+          ...tree
         });
       } catch (error) {
         send({

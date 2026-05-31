@@ -15,7 +15,7 @@ The goal is:
 ## Topology
 
 ```text
-codex.rodion.pro web
+xedoc.ru web
   |
   | WebSocket /api/agent/ws
   v
@@ -99,7 +99,7 @@ start-server-tunnel.bat /nopause
 ```
 
 When it prints `Tunnel check completed successfully`, Server Ubuntu projects on
-`https://codex.rodion.pro` are ready to use.
+`https://xedoc.ru` are ready to use.
 
 ## Server Setup
 
@@ -138,7 +138,7 @@ cat >> /root/codex-agent/agent.env <<'ENV'
 ALL_PROXY=http://127.0.0.1:10809
 HTTPS_PROXY=http://127.0.0.1:10809
 HTTP_PROXY=http://127.0.0.1:10809
-NO_PROXY=127.0.0.1,localhost,codex.rodion.pro,82.146.42.213
+NO_PROXY=127.0.0.1,localhost,xedoc.ru,82.146.42.213
 ENV
 
 systemctl restart codex-agent-linux.service
@@ -146,7 +146,7 @@ systemctl is-active codex-agent-linux.service
 '@
 ```
 
-`NO_PROXY` is important. It keeps `codex.rodion.pro` and local server traffic
+`NO_PROXY` is important. It keeps `xedoc.ru` and local server traffic
 direct, while Codex/OpenAI traffic goes through the proxy.
 
 ## Windows Tunnel
@@ -238,7 +238,7 @@ Register-ScheduledTask `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description 'Keeps the reverse SOCKS tunnel for codex.rodion.pro Linux agent alive.' `
+  -Description 'Keeps the reverse SOCKS tunnel for xedoc.ru Linux agent alive.' `
   -Force
 
 Start-ScheduledTask -TaskName $taskName
@@ -500,7 +500,7 @@ ERROR: Permission to WizardJIOCb/chat.rodion.pro.git denied to deploy key
 Configure the account SSH key:
 
 ```bash
-ssh-keygen -t ed25519 -f /root/.ssh/codex_agent_github_account -C "codex-agent-linux-account@cyka.lol" -N ""
+ssh-keygen -t ed25519 -f /root/.ssh/codex_agent_github_account -C "codex-agent-linux-account@xedoc.ru" -N ""
 cat >> /root/.ssh/config <<'SSH'
 
 Host github-codex

@@ -33,7 +33,7 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "Tray manager for codex.rodion.pro agent",
-    "longDescription": "Native tray manager for codex.rodion.pro sync agent, VS Code bridge, and local chat synchronization."
+    "shortDescription": "Tray manager for xedoc.ru agent",
+    "longDescription": "Native tray manager for xedoc.ru sync agent, VS Code bridge, and local chat synchronization."
   }
 }

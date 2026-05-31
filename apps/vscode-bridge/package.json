@@ -1,7 +1,7 @@
 {
   "name": "@cmc/vscode-bridge",
-  "displayName": "codex.rodion.pro VS Code Bridge",
-  "description": "Local VS Code companion bridge for codex.rodion.pro.",
+  "displayName": "xedoc.ru VS Code Bridge",
+  "description": "Local VS Code companion bridge for xedoc.ru.",
   "version": "0.0.1",
   "publisher": "local",
   "private": true,
@@ -21,18 +21,18 @@
     "commands": [
       {
         "command": "codexRodionBridge.restart",
-        "title": "codex.rodion.pro: Restart VS Code Bridge"
+        "title": "xedoc.ru: Restart VS Code Bridge"
       },
       {
         "command": "codexRodionBridge.refreshChats",
-        "title": "codex.rodion.pro: Refresh Chats"
+        "title": "xedoc.ru: Refresh Chats"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "codexRodion",
-          "title": "codex.rodion.pro",
+          "title": "xedoc.ru",
           "icon": "resources/codex-rodion.svg"
         }
       ]

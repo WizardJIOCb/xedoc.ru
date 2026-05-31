@@ -339,7 +339,7 @@ function serverOriginFromConfig(config: AgentConfig): string {
   const explicit = process.env.CMC_PUBLIC_BASE_URL?.trim();
   if (explicit) return explicit.replace(/\/+$/, "");
   const serverUrl = config.serverUrl?.trim();
-  if (!serverUrl) return "https://codex.rodion.pro";
+  if (!serverUrl) return "https://xedoc.ru";
   return serverUrl
     .replace(/^wss:/i, "https:")
     .replace(/^ws:/i, "http:")
@@ -643,12 +643,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.window.registerWebviewViewProvider("codexRodionChats", chatsProvider));
   context.subscriptions.push(vscode.commands.registerCommand("codexRodionBridge.refreshChats", () => chatsProvider?.refresh()));
   startServer()
-    .then(() => vscode.window.showInformationMessage("codex.rodion.pro VS Code bridge is ready."))
-    .catch((error) => vscode.window.showWarningMessage(`codex.rodion.pro bridge failed: ${error instanceof Error ? error.message : String(error)}`));
+    .then(() => vscode.window.showInformationMessage("xedoc.ru VS Code bridge is ready."))
+    .catch((error) => vscode.window.showWarningMessage(`xedoc.ru bridge failed: ${error instanceof Error ? error.message : String(error)}`));
   context.subscriptions.push(vscode.commands.registerCommand("codexRodionBridge.restart", () => {
     startServer()
-      .then(() => vscode.window.showInformationMessage("codex.rodion.pro VS Code bridge restarted."))
-      .catch((error) => vscode.window.showWarningMessage(`codex.rodion.pro bridge failed: ${error instanceof Error ? error.message : String(error)}`));
+      .then(() => vscode.window.showInformationMessage("xedoc.ru VS Code bridge restarted."))
+      .catch((error) => vscode.window.showWarningMessage(`xedoc.ru bridge failed: ${error instanceof Error ? error.message : String(error)}`));
   }));
   context.subscriptions.push({ dispose: () => { void stopServer(); } });
 }

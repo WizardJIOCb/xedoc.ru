@@ -191,6 +191,14 @@ export const AgentDeployResultSchema = z.object({
   repos: z.array(RepoInfoSchema).optional()
 });
 
+export const AgentProjectCommandResultSchema = z.object({
+  type: z.literal("project.command.result"),
+  requestId: z.string().min(1),
+  ok: z.boolean(),
+  error: z.string().optional(),
+  output: z.string().optional()
+});
+
 export const AgentNginxResultSchema = z.object({
   type: z.literal("nginx.result"),
   requestId: z.string().min(1),
@@ -237,8 +245,19 @@ export const AgentFileResultSchema = z.object({
   error: z.string().optional(),
   path: z.string().optional(),
   content: z.string().optional(),
+  binary: z.boolean().optional(),
+  mimeType: z.string().max(120).optional(),
+  dataBase64: z.string().max(12 * 1024 * 1024).optional(),
   size: z.number().int().nonnegative().optional(),
-  mtimeMs: z.number().nonnegative().optional()
+  mtimeMs: z.number().nonnegative().optional(),
+  entries: z.array(z.object({
+    path: z.string().min(1).max(500),
+    name: z.string().min(1).max(180),
+    type: z.enum(["file", "directory"]),
+    depth: z.number().int().nonnegative(),
+    size: z.number().int().nonnegative().optional(),
+    mtimeMs: z.number().nonnegative().optional()
+  })).max(1200).optional()
 });
 
 export const AgentChatSyncResultSchema = z.object({
@@ -281,6 +300,7 @@ export const AgentToServerSchema = z.discriminatedUnion("type", [
   AgentProjectResultSchema,
   AgentGitResultSchema,
   AgentDeployResultSchema,
+  AgentProjectCommandResultSchema,
   AgentNginxResultSchema,
   AgentSslResultSchema,
   AgentVscodeResultSchema,
@@ -374,6 +394,13 @@ export const ServerDeploySchema = z.object({
   repoId: z.string().min(1)
 });
 
+export const ServerProjectCommandSchema = z.object({
+  type: z.literal("project.command"),
+  requestId: z.string().min(1),
+  repoId: z.string().min(1),
+  command: z.enum(["build"])
+});
+
 export const ServerNginxSchema = z.object({
   type: z.literal("project.nginx"),
   requestId: z.string().min(1),
@@ -407,6 +434,16 @@ export const ServerFileReadSchema = z.object({
   path: ProjectFilePathSchema
 });
 
+export const ServerFileListSchema = z.object({
+  type: z.literal("file.list"),
+  requestId: z.string().min(1),
+  repoId: z.string().min(1),
+  path: z.string().max(500).default("").refine((value) => {
+    const normalized = value.replace(/\\/g, "/");
+    return !normalized.includes("\0") && !normalized.startsWith("/") && !/^[a-z]:\//i.test(normalized);
+  }, "relative_file_path_required")
+});
+
 export const ServerFileWriteSchema = z.object({
   type: z.literal("file.write"),
   requestId: z.string().min(1),
@@ -428,9 +465,11 @@ export const ServerToAgentSchema = z.discriminatedUnion("type", [
   ServerProjectDeleteSchema,
   ServerGitSyncSchema,
   ServerDeploySchema,
+  ServerProjectCommandSchema,
   ServerNginxSchema,
   ServerSslSchema,
   ServerVscodeCommandSchema,
+  ServerFileListSchema,
   ServerFileReadSchema,
   ServerFileWriteSchema,
   ServerChatSyncRequestSchema,
@@ -483,6 +522,7 @@ export const CreateProjectSchema = z.object({
 export type CreateProject = z.infer<typeof CreateProjectSchema>;
 
 export const UpdateProjectSchema = z.object({
+  targetAgentId: z.string().min(1).optional(),
   name: z.string().min(1).max(120).optional(),
   path: z.string().min(3).max(260).optional(),
   githubUrl: z.string().max(300).optional(),
@@ -532,6 +572,14 @@ export const ProjectFileReadQuerySchema = z.object({
   path: ProjectFilePathSchema
 });
 export type ProjectFileReadQuery = z.infer<typeof ProjectFileReadQuerySchema>;
+
+export const ProjectFileListQuerySchema = z.object({
+  path: z.string().max(500).optional().default("").refine((value) => {
+    const normalized = value.replace(/\\/g, "/");
+    return !normalized.includes("\0") && !normalized.startsWith("/") && !/^[a-z]:\//i.test(normalized);
+  }, "relative_file_path_required")
+});
+export type ProjectFileListQuery = z.infer<typeof ProjectFileListQuerySchema>;
 
 export const ProjectFileWriteSchema = z.object({
   path: ProjectFilePathSchema,

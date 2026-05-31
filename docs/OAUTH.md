@@ -7,7 +7,7 @@ The app supports password login plus social login/registration through Google an
 Set these in `.env` on the server:
 
 ```env
-PUBLIC_BASE_URL=https://codex.rodion.pro
+PUBLIC_BASE_URL=https://xedoc.ru
 
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
@@ -23,11 +23,11 @@ VK_CLIENT_SECRET=
 Register these redirect/callback URLs in provider dashboards:
 
 ```text
-https://codex.rodion.pro/api/oauth/google/callback
-https://codex.rodion.pro/api/oauth/vk/callback
+https://xedoc.ru/api/oauth/google/callback
+https://xedoc.ru/api/oauth/vk/callback
 ```
 
-For a different domain, replace only `https://codex.rodion.pro`.
+For a different domain, replace only `https://xedoc.ru`.
 
 ## Where to get credentials
 

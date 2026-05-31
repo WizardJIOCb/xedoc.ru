@@ -67,7 +67,7 @@ const DEFAULT_STATUS: AgentStatus = {
   configured: false,
   running: false,
   tokenConfigured: false,
-  serverUrl: "wss://codex.rodion.pro/api/agent/ws",
+  serverUrl: "wss://xedoc.ru/api/agent/ws",
   agentId: "home-windows",
   agentRoot: "",
   configPath: "",
@@ -343,7 +343,7 @@ function App() {
     <main className="shell">
       <section className="topbar">
         <div>
-          <p className="eyebrow">codex.rodion.pro</p>
+          <p className="eyebrow">xedoc.ru</p>
           <h1>Codex Agent</h1>
         </div>
         <div className={`pill ${tone}`}>

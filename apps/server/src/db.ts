@@ -350,6 +350,13 @@ export function openDb(path: string): DatabaseSync {
       deleted_at TEXT NOT NULL,
       PRIMARY KEY (agent_id, repo_id, source, external_id)
     );
+    CREATE TABLE IF NOT EXISTS repo_agent_redirects (
+      agent_id TEXT NOT NULL,
+      repo_id TEXT NOT NULL,
+      target_agent_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (agent_id, repo_id)
+    );
     CREATE TABLE IF NOT EXISTS user_activity_days (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       day TEXT NOT NULL,
@@ -399,7 +406,7 @@ export function openDb(path: string): DatabaseSync {
   if (firstUser && !adminUser) {
     db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(firstUser.id);
   }
-  db.prepare("UPDATE users SET role = 'admin' WHERE lower(email) = lower(?)").run("owner@codex.rodion.pro");
+  db.prepare("UPDATE users SET role = 'admin' WHERE lower(email) = lower(?)").run("rodion89@list.ru");
   const agentColumns = db.prepare("PRAGMA table_info(agents)").all() as Array<{ name: string }>;
   if (!agentColumns.some((column) => column.name === "user_id")) {
     db.exec("ALTER TABLE agents ADD COLUMN user_id TEXT");

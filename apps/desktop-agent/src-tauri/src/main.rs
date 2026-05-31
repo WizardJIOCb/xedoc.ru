@@ -19,7 +19,7 @@ use tauri::{
     Manager, State,
 };
 
-const SERVICE_NAME: &str = "codex.rodion.pro.desktop-agent";
+const SERVICE_NAME: &str = "xedoc.ru.desktop-agent";
 const MAX_LOG_LINES: usize = 160;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,7 +33,7 @@ struct DesktopConfig {
 impl Default for DesktopConfig {
     fn default() -> Self {
         Self {
-            server_url: "wss://codex.rodion.pro/api/agent/ws".to_string(),
+            server_url: "wss://xedoc.ru/api/agent/ws".to_string(),
             agent_id: "home-windows".to_string(),
             agent_root: default_agent_root().to_string_lossy().to_string(),
         }
@@ -279,7 +279,7 @@ fn stop_agent(state: State<'_, DesktopState>) -> Result<(), String> {
 
 #[tauri::command]
 fn open_web() -> Result<(), String> {
-    open::that("https://codex.rodion.pro/sync").map_err(|error| format!("Could not open web UI: {error}"))
+    open::that("https://xedoc.ru/sync").map_err(|error| format!("Could not open web UI: {error}"))
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {

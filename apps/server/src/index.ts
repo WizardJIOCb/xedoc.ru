@@ -18,6 +18,7 @@ import {
   CreateProjectSchema,
   CreateUserSchema,
   NginxSchema,
+  ProjectFileListQuerySchema,
   PasswordUpdateSchema,
   ProjectFileReadQuerySchema,
   ProjectFileWriteSchema,
@@ -28,7 +29,10 @@ import {
   UpdateProjectSchema,
   VscodeCommandRequestSchema,
   type AgentToServer,
+  type DeployConfig,
   type LocalCodexActivity,
+  type ProjectDataConfig,
+  type ProjectVisibility,
   type RepoInfo,
   type ServerToAgent,
   type UiEvent
@@ -72,7 +76,10 @@ const AGENT_OFFLINE_GRACE_MS = 8000;
 const WEBSOCKET_MAX_PAYLOAD_BYTES = 10 * 1024 * 1024;
 const REGISTRATION_GATE_COOKIE = "cmc_registration_gate";
 const REGISTRATION_GATE_VALUE = "sure";
-const OWNER_ADMIN_EMAIL = "owner@codex.rodion.pro";
+const PUBLIC_DOMAIN = "xedoc.ru";
+const LEGACY_PUBLIC_DOMAIN = "codex.rodion.pro";
+const WEB_ACTIVITY_SOURCES = new Set([PUBLIC_DOMAIN, LEGACY_PUBLIC_DOMAIN]);
+const OWNER_ADMIN_EMAIL = process.env.OWNER_ADMIN_EMAIL ?? "rodion89@list.ru";
 
 type AgentConnection = {
   id: string;
@@ -103,6 +110,10 @@ type OAuthProfile = {
   email: string;
   displayName?: string;
 };
+
+function isWebActivitySource(source: string | undefined | null): boolean {
+  return Boolean(source && WEB_ACTIVITY_SOURCES.has(source));
+}
 type PublicProjectRow = RepoRow & {
   author_id: string;
   author_email: string;
@@ -134,6 +145,13 @@ const gitRequests = new Map<string, {
 }>();
 const deployRequests = new Map<string, {
   resolve: (value: Extract<AgentToServer, { type: "deploy.result" }>) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+  agentId: string;
+  connectionId: string;
+}>();
+const projectCommandRequests = new Map<string, {
+  resolve: (value: Extract<AgentToServer, { type: "project.command.result" }>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   agentId: string;
@@ -624,6 +642,28 @@ function requestAgentDeploy(
   });
 }
 
+function requestAgentProjectCommand(
+  agentId: string,
+  message: Extract<ServerToAgent, { type: "project.command" }>
+): Promise<Extract<AgentToServer, { type: "project.command.result" }>> {
+  const agent = agents.get(agentId);
+  if (!agent) return Promise.reject(new Error("agent_offline"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      projectCommandRequests.delete(message.requestId);
+      reject(new Error("agent_timeout"));
+    }, 300000);
+    projectCommandRequests.set(message.requestId, { resolve, reject, timer, agentId, connectionId: agent.connectionId });
+    try {
+      agent.send(message);
+    } catch (error) {
+      clearTimeout(timer);
+      projectCommandRequests.delete(message.requestId);
+      reject(error instanceof Error ? error : new Error("agent_send_failed"));
+    }
+  });
+}
+
 function requestAgentNginx(
   agentId: string,
   message: Extract<ServerToAgent, { type: "project.nginx" }>
@@ -686,7 +726,7 @@ function requestAgentVscode(
 
 function requestAgentFile(
   agentId: string,
-  message: Extract<ServerToAgent, { type: "file.read" | "file.write" }>
+  message: Extract<ServerToAgent, { type: "file.list" | "file.read" | "file.write" }>
 ): Promise<Extract<AgentToServer, { type: "file.result" }>> {
   const agent = agents.get(agentId);
   if (!agent) return Promise.reject(new Error("agent_offline"));
@@ -724,6 +764,7 @@ function rejectAgentRequestsForConnection(agentId: string, connectionId: string,
   rejectAgentRequestMap(projectRequests, agentId, connectionId, reason);
   rejectAgentRequestMap(gitRequests, agentId, connectionId, reason);
   rejectAgentRequestMap(deployRequests, agentId, connectionId, reason);
+  rejectAgentRequestMap(projectCommandRequests, agentId, connectionId, reason);
   rejectAgentRequestMap(nginxRequests, agentId, connectionId, reason);
   rejectAgentRequestMap(sslRequests, agentId, connectionId, reason);
   rejectAgentRequestMap(fileRequests, agentId, connectionId, reason);
@@ -781,6 +822,7 @@ async function syncAgentProjectConfig(agentId: string, row: RepoRow): Promise<vo
 
 function upsertRepos(agentId: string, repos: RepoInfo[]): void {
   const stamp = nowIso();
+  // Deploy/data are controller-owned after first insert, so offline UI edits survive stale agent heartbeats.
   const upsert = db.prepare(`
     INSERT INTO repos (id,agent_id,name,path_masked,github_url,server_path,domain,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -790,8 +832,6 @@ function upsertRepos(agentId: string, repos: RepoInfo[]): void {
       github_url=excluded.github_url,
       server_path=excluded.server_path,
       domain=excluded.domain,
-      deploy_json=excluded.deploy_json,
-      data_json=excluded.data_json,
       current_branch=excluded.current_branch,
       dirty=excluded.dirty,
       default_sandbox=excluded.default_sandbox,
@@ -799,7 +839,9 @@ function upsertRepos(agentId: string, repos: RepoInfo[]): void {
       test_commands=excluded.test_commands,
       updated_at=excluded.updated_at
   `);
+  const redirected = db.prepare("SELECT target_agent_id FROM repo_agent_redirects WHERE agent_id = ? AND repo_id = ?");
   for (const repo of repos) {
+    if (redirected.get(agentId, repo.id)) continue;
     upsert.run(
       repo.id,
       agentId,
@@ -819,6 +861,124 @@ function upsertRepos(agentId: string, repos: RepoInfo[]): void {
     );
   }
   broadcast({ type: "repos.updated", agentId, repos: repoInfosForAgent(agentId) });
+}
+
+function nullableText(value: string | undefined | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function activeProjectJob(agentId: string, repoId: string): JobRow | undefined {
+  return db.prepare("SELECT * FROM jobs WHERE agent_id = ? AND repo_id = ? AND status IN ('queued','assigned','running') LIMIT 1")
+    .get(agentId, repoId) as JobRow | undefined;
+}
+
+function moveProjectRowsToAgent(
+  sourceAgentId: string,
+  targetAgentId: string,
+  repoId: string,
+  patch: Extract<ServerToAgent, { type: "project.update" }>["patch"],
+  visibility: ProjectVisibility
+): void {
+  const stamp = nowIso();
+  const allowedSandboxes = patch.allowedSandboxes ?? ["read-only", "workspace-write", "danger-full-access"];
+  db.exec("BEGIN");
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO repos (id,agent_id,name,path_masked,github_url,server_path,domain,visibility,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      repoId,
+      targetAgentId,
+      patch.name ?? repoId,
+      patch.path ?? "",
+      nullableText(patch.githubUrl),
+      nullableText(patch.serverPath),
+      nullableText(patch.domain),
+      visibility,
+      patch.deploy ? JSON.stringify(patch.deploy) : null,
+      patch.data ? JSON.stringify(patch.data) : null,
+      null,
+      0,
+      patch.defaultSandbox ?? "danger-full-access",
+      JSON.stringify(allowedSandboxes),
+      JSON.stringify([]),
+      stamp
+    );
+    db.prepare(`
+      UPDATE repos
+      SET name = ?,
+          path_masked = ?,
+          github_url = ?,
+          server_path = ?,
+          domain = ?,
+          visibility = ?,
+          deploy_json = ?,
+          data_json = ?,
+          default_sandbox = ?,
+          allowed_sandboxes = ?,
+          updated_at = ?
+      WHERE agent_id = ? AND id = ?
+    `).run(
+      patch.name ?? repoId,
+      patch.path ?? "",
+      nullableText(patch.githubUrl),
+      nullableText(patch.serverPath),
+      nullableText(patch.domain),
+      visibility,
+      patch.deploy ? JSON.stringify(patch.deploy) : null,
+      patch.data ? JSON.stringify(patch.data) : null,
+      patch.defaultSandbox ?? "danger-full-access",
+      JSON.stringify(allowedSandboxes),
+      stamp,
+      targetAgentId,
+      repoId
+    );
+    db.prepare("UPDATE chats SET agent_id = ? WHERE agent_id = ? AND repo_id = ?").run(targetAgentId, sourceAgentId, repoId);
+    db.prepare("UPDATE jobs SET agent_id = ? WHERE agent_id = ? AND repo_id = ?").run(targetAgentId, sourceAgentId, repoId);
+    db.prepare("UPDATE chat_shares SET agent_id = ? WHERE agent_id = ? AND repo_id = ?").run(targetAgentId, sourceAgentId, repoId);
+    db.prepare("UPDATE OR IGNORE deleted_chat_sync SET agent_id = ? WHERE agent_id = ? AND repo_id = ?").run(targetAgentId, sourceAgentId, repoId);
+    db.prepare("DELETE FROM deleted_chat_sync WHERE agent_id = ? AND repo_id = ?").run(sourceAgentId, repoId);
+    db.prepare("DELETE FROM repos WHERE agent_id = ? AND id = ?").run(sourceAgentId, repoId);
+    db.prepare("DELETE FROM repo_agent_redirects WHERE agent_id = ? AND repo_id = ?").run(targetAgentId, repoId);
+    db.prepare("INSERT OR REPLACE INTO repo_agent_redirects (agent_id, repo_id, target_agent_id, created_at) VALUES (?,?,?,?)")
+      .run(sourceAgentId, repoId, targetAgentId, stamp);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function updateControllerProjectSettings(
+  agentId: string,
+  repoId: string,
+  patch: {
+    visibility?: ProjectVisibility;
+    deploy?: DeployConfig | null;
+    data?: ProjectDataConfig | null;
+  },
+  fields: { deploy: boolean; data: boolean }
+): boolean {
+  const assignments: string[] = [];
+  const values: Array<string | null> = [];
+  if (patch.visibility) {
+    assignments.push("visibility = ?");
+    values.push(patch.visibility);
+  }
+  if (fields.deploy) {
+    assignments.push("deploy_json = ?");
+    values.push(patch.deploy ? JSON.stringify(patch.deploy) : null);
+  }
+  if (fields.data) {
+    assignments.push("data_json = ?");
+    values.push(patch.data ? JSON.stringify(patch.data) : null);
+  }
+  if (!assignments.length) return false;
+  assignments.push("updated_at = ?");
+  values.push(nowIso(), agentId, repoId);
+  db.prepare(`UPDATE repos SET ${assignments.join(", ")} WHERE agent_id = ? AND id = ?`).run(...values);
+  return true;
 }
 
 function appendLog(log: Omit<LogRow, "id">): void {
@@ -984,7 +1144,7 @@ function idleLocalActivity(summary = "No recent local Codex activity."): LocalCo
 function freshLocalActivity(activity: LocalCodexActivity | undefined, _agentId?: string): LocalCodexActivity | undefined {
   if (!activity) return undefined;
   const timestampSource = activity.status === "busy"
-    && activity.source !== "codex.rodion.pro"
+    && !isWebActivitySource(activity.source)
     && activity.updatedAt
     ? activity.updatedAt
     : activity.detectedAt;
@@ -1255,7 +1415,7 @@ function titleFromSyncedContent(value: string | undefined | null): string | unde
   if (!content || /^# Context from my IDE setup:/i.test(content)) return undefined;
   const normalized = content.toLowerCase();
   if (
-    normalized.includes("новый чат для https://codex.rodion.pro")
+    (normalized.includes("https://xedoc.ru") || normalized.includes("https://codex.rodion.pro"))
     && (normalized.includes("sync") || normalized.includes("синхрон"))
   ) {
     return "Синхронизировать новый чат";
@@ -2271,7 +2431,7 @@ function agentSetupPayload(request: { protocol: string; hostname: string }, agen
     "SERVICE_FILE=\"$ROOT/$SERVICE_NAME.service\"",
     "cat > \"$SERVICE_FILE\" <<SERVICE",
     "[Unit]",
-    "Description=codex.rodion.pro Linux agent",
+    "Description=xedoc.ru Linux agent",
     "After=network-online.target",
     "Wants=network-online.target",
     "",
@@ -2397,7 +2557,7 @@ async function fetchOAuthProfile(
     const profile = await jsonGet("https://api.github.com/user", {
       authorization: `Bearer ${accessToken}`,
       accept: "application/vnd.github+json",
-      "user-agent": "codex.rodion.pro"
+      "user-agent": PUBLIC_DOMAIN
     });
     let email = stringValue(profile.email);
     if (!email) {
@@ -2405,7 +2565,7 @@ async function fetchOAuthProfile(
         headers: {
           authorization: `Bearer ${accessToken}`,
           accept: "application/vnd.github+json",
-          "user-agent": "codex.rodion.pro"
+          "user-agent": PUBLIC_DOMAIN
         }
       }).then((response) => response.json().catch(() => [])) as Array<Record<string, unknown>>;
       email = stringValue(emails.find((item) => item.primary === true && item.verified === true)?.email)
@@ -2438,7 +2598,7 @@ async function fetchOAuthProfile(
     const email = stringValue(user.email)
       ?? stringValue(token.email)
       ?? stringValue(idToken.email)
-      ?? `vk-${providerUserId}@users.noreply.codex.rodion.pro`;
+      ?? `vk-${providerUserId}@users.noreply.${PUBLIC_DOMAIN}`;
     const userId = String(user.user_id ?? user.id ?? idToken.sub ?? providerUserId);
     if (!userId) throw new Error("oauth_profile_missing");
     const displayName = [stringValue(user.first_name), stringValue(user.last_name)].filter(Boolean).join(" ")
@@ -2536,7 +2696,7 @@ async function createApp(): Promise<FastifyInstance> {
     reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
     reply.header("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss: https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; img-src 'self' data: https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; frame-src 'self' https:;");
     if (_request.method === "GET") {
-      const url = new URL(_request.raw.url ?? "/", "https://codex.rodion.pro");
+      const url = new URL(_request.raw.url ?? "/", `https://${PUBLIC_DOMAIN}`);
       if (url.pathname === "/" && url.searchParams.get("cango") === REGISTRATION_GATE_VALUE) {
         setRegistrationGateCookie(reply);
       }
@@ -3072,21 +3232,77 @@ async function createApp(): Promise<FastifyInstance> {
     if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = UpdateProjectSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_project", details: parsed.error.flatten() });
-    const { visibility, ...agentPatch } = parsed.data;
+    const { visibility, deploy, data, targetAgentId, ...agentPatch } = parsed.data;
+    const deployProvided = Object.prototype.hasOwnProperty.call(parsed.data, "deploy");
+    const dataProvided = Object.prototype.hasOwnProperty.call(parsed.data, "data");
+    const agentPatchKeys = Object.keys(agentPatch).filter((key) => (agentPatch as Record<string, unknown>)[key] !== undefined);
+    const nextAgentId = targetAgentId?.trim();
     try {
-      if (Object.keys(agentPatch).length) {
+      if (nextAgentId && nextAgentId !== params.agentId) {
+        if (!canAccessAgent(auth.user, nextAgentId)) return reply.code(404).send({ error: "target_agent_not_found" });
+        const sourceRepo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
+          .get(params.agentId, params.repoId) as RepoRow | undefined;
+        if (!sourceRepo) return reply.code(404).send({ error: "repo_not_found" });
+        const existingTargetRepo = db.prepare("SELECT 1 FROM repos WHERE agent_id = ? AND id = ?")
+          .get(nextAgentId, params.repoId) as { 1: number } | undefined;
+        if (existingTargetRepo) return reply.code(409).send({ error: "target_project_exists" });
+        if (activeProjectJob(params.agentId, params.repoId)) return reply.code(409).send({ error: "project_has_running_job" });
+        const fullPatch = fullProjectPatchFromRepo(sourceRepo);
+        const migrationPatch = {
+          ...fullPatch,
+          ...agentPatch,
+          ...(deployProvided ? { deploy } : {}),
+          ...(dataProvided ? { data } : {})
+        };
+        const result = await requestAgentProject(nextAgentId, {
+          type: "project.update",
+          requestId: id("req"),
+          repoId: params.repoId,
+          patch: migrationPatch
+        });
+        if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_update_failed" });
+        if (result.repos) upsertRepos(nextAgentId, result.repos);
+        moveProjectRowsToAgent(params.agentId, nextAgentId, params.repoId, migrationPatch, visibility ?? sourceRepo.visibility);
+        broadcast({ type: "repos.updated", agentId: params.agentId, repos: repoInfosForAgent(params.agentId) });
+        broadcast({ type: "repos.updated", agentId: nextAgentId, repos: repoInfosForAgent(nextAgentId) });
+        broadcast({ type: "chats.updated", agentId: params.agentId, repoId: params.repoId });
+        broadcast({ type: "chats.updated", agentId: nextAgentId, repoId: params.repoId });
+        return { ok: true, agentId: nextAgentId, repoId: params.repoId };
+      }
+      if (agentPatchKeys.length) {
         const result = await requestAgentProject(params.agentId, {
           type: "project.update",
           requestId: id("req"),
           repoId: params.repoId,
-          patch: agentPatch
+          patch: {
+            ...agentPatch,
+            ...(deployProvided ? { deploy } : {}),
+            ...(dataProvided ? { data } : {})
+          }
         });
         if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_update_failed" });
         if (result.repos) upsertRepos(params.agentId, result.repos);
       }
-      if (visibility) {
-        db.prepare("UPDATE repos SET visibility = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
-          .run(visibility, nowIso(), params.agentId, params.repoId);
+      const controllerSettingsUpdated = updateControllerProjectSettings(params.agentId, params.repoId, {
+        visibility,
+        deploy: deploy ?? null,
+        data: data ?? null
+      }, { deploy: deployProvided, data: dataProvided });
+      if (controllerSettingsUpdated) {
+        broadcast({ type: "repos.updated", agentId: params.agentId, repos: repoInfosForAgent(params.agentId) });
+      }
+      if (!agentPatchKeys.length && controllerSettingsUpdated && (deployProvided || dataProvided) && agents.has(params.agentId)) {
+        const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
+          .get(params.agentId, params.repoId) as RepoRow | undefined;
+        if (repo) {
+          void syncAgentProjectConfig(params.agentId, repo).catch((error) => {
+            request.log.warn({
+              agentId: params.agentId,
+              repoId: params.repoId,
+              error: error instanceof Error ? error.message : String(error)
+            }, "Deferred project config sync failed");
+          });
+        }
       }
       return { ok: true };
     } catch (error) {
@@ -3302,6 +3518,29 @@ async function createApp(): Promise<FastifyInstance> {
     }
   });
 
+  app.post("/api/projects/:agentId/:repoId/build", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const params = request.params as { agentId: string; repoId: string };
+    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
+      .get(params.agentId, params.repoId) as RepoRow | undefined;
+    if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    try {
+      await syncAgentProjectConfig(params.agentId, repo);
+      const result = await requestAgentProjectCommand(params.agentId, {
+        type: "project.command",
+        requestId: id("req"),
+        repoId: params.repoId,
+        command: "build"
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error ?? "build_failed", output: result.output });
+      return { ok: true, output: result.output };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
   app.post("/api/projects/:agentId/:repoId/nginx", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
@@ -3481,6 +3720,27 @@ async function createApp(): Promise<FastifyInstance> {
     }
   });
 
+  app.get("/api/projects/:agentId/:repoId/files/list", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth) return;
+    const params = request.params as { agentId: string; repoId: string };
+    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const parsed = ProjectFileListQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_path", details: parsed.error.flatten() });
+    try {
+      const result = await requestAgentFile(params.agentId, {
+        type: "file.list",
+        requestId: id("req"),
+        repoId: params.repoId,
+        path: parsed.data.path ?? ""
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error || "file_list_failed" });
+      return { entries: result.entries ?? [] };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
   app.get("/api/projects/:agentId/:repoId/files/read", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth) return;
@@ -3496,7 +3756,16 @@ async function createApp(): Promise<FastifyInstance> {
         path: parsed.data.path
       });
       if (!result.ok) return reply.code(400).send({ error: result.error ?? "file_read_failed" });
-      return { ok: true, path: result.path ?? parsed.data.path, content: result.content ?? "", size: result.size, mtimeMs: result.mtimeMs };
+      return {
+        ok: true,
+        path: result.path ?? parsed.data.path,
+        content: result.content ?? "",
+        binary: Boolean(result.binary),
+        mimeType: result.mimeType,
+        dataBase64: result.dataBase64,
+        size: result.size,
+        mtimeMs: result.mtimeMs
+      };
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }
@@ -3568,7 +3837,7 @@ async function createApp(): Promise<FastifyInstance> {
     appendChatMessage({
       chat_id: chatId,
       role: "system",
-      content: "Chat created on codex.rodion.pro.",
+      content: "Chat created on xedoc.ru.",
       source: "web",
       external_id: `chat:${chatId}:created`,
       metadata_json: null,
@@ -4066,6 +4335,14 @@ async function createApp(): Promise<FastifyInstance> {
         if (pending) {
           clearTimeout(pending.timer);
           deployRequests.delete(parsed.requestId);
+          pending.resolve(parsed);
+        }
+      }
+      if (parsed.type === "project.command.result") {
+        const pending = projectCommandRequests.get(parsed.requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          projectCommandRequests.delete(parsed.requestId);
           pending.resolve(parsed);
         }
       }

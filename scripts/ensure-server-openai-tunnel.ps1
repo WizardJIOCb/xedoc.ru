@@ -104,7 +104,7 @@ Register-ScheduledTask `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description "Keeps the reverse SOCKS tunnel for codex.rodion.pro Linux agent alive." `
+  -Description "Keeps the reverse SOCKS tunnel for xedoc.ru Linux agent alive." `
   -Force | Out-Null
 
 if ($NoRestart) {
@@ -213,5 +213,5 @@ if (!$ok) {
 }
 
 Write-Host ""
-Write-Ok "Tunnel is ready. You can use Server Ubuntu projects on https://codex.rodion.pro"
+Write-Ok "Tunnel is ready. You can use Server Ubuntu projects on https://xedoc.ru"
 Write-Host "Log: $logFile"

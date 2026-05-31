@@ -1,7 +1,7 @@
 [package]
 name = "codex-desktop-agent"
 version = "0.1.0"
-description = "Native tray manager for codex.rodion.pro agent"
+description = "Native tray manager for xedoc.ru agent"
 authors = ["Rodion"]
 edition = "2021"
 

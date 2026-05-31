@@ -1,6 +1,12 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useRef } from "react";
+import * as monaco from "monaco-editor";
+import CssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
+import HtmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
+import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
+import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import {
   Activity,
   ArrowLeft,
@@ -25,7 +31,9 @@ import {
   Link2,
   LogOut,
   Mail,
+  Maximize2,
   Menu,
+  Minimize2,
   MoreHorizontal,
   MessageSquare,
   Palette,
@@ -54,20 +62,49 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
+(self as unknown as {
+  MonacoEnvironment?: {
+    getWorker: (_moduleId: string, label: string) => Worker;
+  };
+}).MonacoEnvironment = {
+  getWorker(_moduleId: string, label: string) {
+    if (label === "json") return new JsonWorker();
+    if (label === "css" || label === "scss" || label === "less") return new CssWorker();
+    if (label === "html" || label === "handlebars" || label === "razor") return new HtmlWorker();
+    if (label === "typescript" || label === "javascript") return new TsWorker();
+    return new EditorWorker();
+  }
+};
+
 type Sandbox = "read-only" | "workspace-write" | "danger-full-access";
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "standard" | "fast";
 type JobKind = "codex" | "grok" | "gemini-cli" | "gemini";
 type ProjectVisibility = "private" | "public";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
+type EditorTheme = "xedoc-light" | "xedoc-dark" | "xedoc-aurora" | "xedoc-midnight" | "vs-light" | "vs-dark" | "hc-black";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
 type ProjectDataLocation = "local" | "server";
 type ProjectDataConfig = {
   location: ProjectDataLocation;
   path: string;
 };
+type IdeEditorCommand = "focus" | "selectAll" | "format";
+type IdeEditorCommandRequest = {
+  id: number;
+  command: IdeEditorCommand;
+};
 
 const SANDBOXES: Sandbox[] = ["read-only", "workspace-write", "danger-full-access"];
+const EDITOR_THEME_OPTIONS: Array<{ value: EditorTheme; label: string; note: string; swatches: string[] }> = [
+  { value: "xedoc-light", label: "Xedoc Day", note: "Readable TS/JS with soft contrast", swatches: ["#fbfbf8", "#0969da", "#0a7a53", "#a40e26"] },
+  { value: "xedoc-dark", label: "Xedoc Night", note: "Dark editor for long sessions", swatches: ["#101214", "#79c0ff", "#7ee787", "#ffa657"] },
+  { value: "xedoc-aurora", label: "Aurora", note: "Colorful syntax accents", swatches: ["#0f172a", "#67e8f9", "#c084fc", "#f9a8d4"] },
+  { value: "xedoc-midnight", label: "Midnight", note: "Dense VS Code-like dark", swatches: ["#0b1020", "#93c5fd", "#34d399", "#fbbf24"] },
+  { value: "vs-light", label: "VS Code Light", note: "Classic Monaco light", swatches: ["#ffffff", "#000000", "#0451a5", "#a31515"] },
+  { value: "vs-dark", label: "VS Code Dark", note: "Classic Monaco dark", swatches: ["#1e1e1e", "#d4d4d4", "#569cd6", "#ce9178"] },
+  { value: "hc-black", label: "High Contrast", note: "Maximum contrast", swatches: ["#000000", "#ffffff", "#1aebff", "#ffcc00"] }
+];
 const SANDBOX_LABELS: Record<Sandbox, string> = {
   "read-only": "read-only",
   "workspace-write": "workspace-write",
@@ -110,11 +147,12 @@ const RUNNER_OPTIONS: Array<{ value: JobKind; label: string; note: string }> = [
   { value: "gemini-cli", label: "Gemini CLI", note: "Google account agent" },
   { value: "gemini", label: "Gemini API", note: "Google AI Studio key" }
 ];
-const PROJECT_DOMAIN_ROOT = "codex.rodion.pro";
-const DEFAULT_GITHUB_OWNER = "WizardJIOCb";
+const PROJECT_DOMAIN_ROOT = "xedoc.ru";
+const WEB_ACTIVITY_SOURCES = new Set(["xedoc.ru", "codex.rodion.pro"]);
 const DEFAULT_DEPLOY_SSH_TARGET = "myserver";
 const DEFAULT_SERVER_ROOT = "/var/www";
 const LAST_PROJECT_STATE_STORAGE_PREFIX = "cmc.lastProjectState";
+const IDE_PROJECT_STATE_STORAGE_PREFIX = "cmc.ideProjectState";
 const SPEED_OPTIONS: Array<{ value: CodexSpeed; label: string; note: string }> = [
   { value: "standard", label: "Standard", note: "Default speed, normal usage" },
   { value: "fast", label: "Fast", note: "Saved with run metadata" }
@@ -127,6 +165,124 @@ const UI_THEME_OPTIONS: Array<{ value: UiTheme; label: string; note: string; swa
   { value: "rose", label: "Rose", note: "Мягкая теплая", swatches: ["#fbf3f6", "#ffffff", "#35242a", "#be3455"] }
 ];
 const UI_THEMES = UI_THEME_OPTIONS.map((option) => option.value);
+const EDITOR_THEMES = EDITOR_THEME_OPTIONS.map((option) => option.value);
+const XEDOC_EDITOR_THEME_DEFINITIONS: Record<string, monaco.editor.IStandaloneThemeData> = {
+  "xedoc-light": {
+    base: "vs",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: "6b7280", fontStyle: "italic" },
+      { token: "keyword", foreground: "a40e26", fontStyle: "bold" },
+      { token: "number", foreground: "7c3aed" },
+      { token: "string", foreground: "0a7a53" },
+      { token: "regexp", foreground: "b45309" },
+      { token: "type.identifier", foreground: "8250df" },
+      { token: "identifier", foreground: "1f2937" },
+      { token: "delimiter", foreground: "57606a" }
+    ],
+    colors: {
+      "editor.background": "#fbfbf8",
+      "editor.foreground": "#1f2328",
+      "editorLineNumber.foreground": "#8c959f",
+      "editorLineNumber.activeForeground": "#0969da",
+      "editorCursor.foreground": "#0969da",
+      "editor.selectionBackground": "#0969da2b",
+      "editor.inactiveSelectionBackground": "#0969da18",
+      "editor.lineHighlightBackground": "#0969da0d",
+      "editor.findMatchBackground": "#ffd33d66",
+      "editor.findMatchHighlightBackground": "#ffd33d33",
+      "editorBracketMatch.background": "#54aeff22",
+      "editorBracketMatch.border": "#0969da"
+    }
+  },
+  "xedoc-dark": {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: "8b949e", fontStyle: "italic" },
+      { token: "keyword", foreground: "ff7b72", fontStyle: "bold" },
+      { token: "number", foreground: "d2a8ff" },
+      { token: "string", foreground: "a5d6ff" },
+      { token: "regexp", foreground: "ffa657" },
+      { token: "type.identifier", foreground: "79c0ff" },
+      { token: "identifier", foreground: "e6edf3" },
+      { token: "delimiter", foreground: "c9d1d9" }
+    ],
+    colors: {
+      "editor.background": "#101214",
+      "editor.foreground": "#e6edf3",
+      "editorLineNumber.foreground": "#6e7681",
+      "editorLineNumber.activeForeground": "#7ee787",
+      "editorCursor.foreground": "#7ee787",
+      "editor.selectionBackground": "#2f81f74a",
+      "editor.inactiveSelectionBackground": "#2f81f72a",
+      "editor.lineHighlightBackground": "#7ee7870f",
+      "editor.findMatchBackground": "#d2992255",
+      "editor.findMatchHighlightBackground": "#d2992228",
+      "editorBracketMatch.background": "#23863638",
+      "editorBracketMatch.border": "#7ee787"
+    }
+  },
+  "xedoc-aurora": {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: "94a3b8", fontStyle: "italic" },
+      { token: "keyword", foreground: "f472b6", fontStyle: "bold" },
+      { token: "number", foreground: "c084fc" },
+      { token: "string", foreground: "67e8f9" },
+      { token: "regexp", foreground: "fbbf24" },
+      { token: "type.identifier", foreground: "a78bfa" },
+      { token: "identifier", foreground: "e2e8f0" },
+      { token: "delimiter", foreground: "cbd5e1" }
+    ],
+    colors: {
+      "editor.background": "#0f172a",
+      "editor.foreground": "#e2e8f0",
+      "editorLineNumber.foreground": "#64748b",
+      "editorLineNumber.activeForeground": "#67e8f9",
+      "editorCursor.foreground": "#f472b6",
+      "editor.selectionBackground": "#67e8f933",
+      "editor.inactiveSelectionBackground": "#67e8f91e",
+      "editor.lineHighlightBackground": "#f472b60f",
+      "editor.findMatchBackground": "#fbbf2455",
+      "editor.findMatchHighlightBackground": "#fbbf2426",
+      "editorBracketMatch.background": "#c084fc30",
+      "editorBracketMatch.border": "#c084fc"
+    }
+  },
+  "xedoc-midnight": {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: "7c8aa5", fontStyle: "italic" },
+      { token: "keyword", foreground: "93c5fd", fontStyle: "bold" },
+      { token: "number", foreground: "fbbf24" },
+      { token: "string", foreground: "34d399" },
+      { token: "regexp", foreground: "fb7185" },
+      { token: "type.identifier", foreground: "c4b5fd" },
+      { token: "identifier", foreground: "e5e7eb" },
+      { token: "delimiter", foreground: "cbd5e1" }
+    ],
+    colors: {
+      "editor.background": "#0b1020",
+      "editor.foreground": "#e5e7eb",
+      "editorLineNumber.foreground": "#64748b",
+      "editorLineNumber.activeForeground": "#93c5fd",
+      "editorCursor.foreground": "#fbbf24",
+      "editor.selectionBackground": "#1d4ed84f",
+      "editor.inactiveSelectionBackground": "#1d4ed82b",
+      "editor.lineHighlightBackground": "#93c5fd0e",
+      "editor.findMatchBackground": "#fbbf2452",
+      "editor.findMatchHighlightBackground": "#fbbf2424",
+      "editorBracketMatch.background": "#1d4ed838",
+      "editorBracketMatch.border": "#93c5fd"
+    }
+  }
+};
+for (const [themeName, themeData] of Object.entries(XEDOC_EDITOR_THEME_DEFINITIONS)) {
+  monaco.editor.defineTheme(themeName, themeData);
+}
 const PROJECT_WIZARD_STEPS: Array<{ id: ProjectWizardStep; label: string }> = [
   { id: "project", label: "Project" },
   { id: "git", label: "Git" },
@@ -139,6 +295,10 @@ type VscodeCommand = "ping" | "openSidebar" | "newChat" | "newCodexPanel" | "add
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isWebActivitySource(source: string | undefined | null): boolean {
+  return Boolean(source && WEB_ACTIVITY_SOURCES.has(source));
 }
 
 type Agent = {
@@ -396,18 +556,50 @@ type ImagePreview = {
 };
 
 type ProjectFileEditor = {
+  agentId: string;
+  repoId: string;
+  repoName: string;
   path: string;
   content: string;
   originalContent: string;
+  binary?: boolean;
+  mimeType?: string;
+  dataBase64?: string;
+  size?: number;
+  mtimeMs?: number;
   loading: boolean;
   saving: boolean;
   notice: string;
   error: string;
 };
 
+type ProjectFileEntry = {
+  path: string;
+  name: string;
+  type: "file" | "directory";
+  depth: number;
+  size?: number;
+  mtimeMs?: number;
+};
+
+type FileContextMenuState = {
+  entry: ProjectFileEntry;
+  x: number;
+  y: number;
+};
+
+type CommitMessageMode = "auto" | "custom";
+
 type StoredProjectState = {
   repoKey: string;
   chatId?: string;
+  savedAt?: number;
+};
+
+type StoredIdeProjectState = {
+  activeFilePath?: string;
+  openFilePaths?: string[];
+  expandedFolders?: string[];
   savedAt?: number;
 };
 
@@ -549,6 +741,9 @@ function streamingRevealStep(backlog: number) {
   return 2;
 }
 
+const STREAM_LETTER_ANIMATION_MS = 260;
+const STREAM_CARET_HIDE_DELAY_MS = STREAM_LETTER_ANIMATION_MS + 40;
+
 function AnimatedStreamingRichText({
   text,
   className,
@@ -562,9 +757,11 @@ function AnimatedStreamingRichText({
 }) {
   const normalized = useMemo(() => normalizeDisplayText(text).trim(), [text]);
   const [displayText, setDisplayText] = useState("");
+  const [showCaret, setShowCaret] = useState(Boolean(normalized));
   const displayTextRef = useRef("");
   const targetTextRef = useRef(normalized);
   const frameRef = useRef<number | null>(null);
+  const caretHideTimerRef = useRef<number | null>(null);
   const onFrameRef = useRef(onFrame);
 
   useEffect(() => {
@@ -627,10 +824,48 @@ function AnimatedStreamingRichText({
     };
   }, [normalized]);
 
+  useEffect(() => {
+    if (caretHideTimerRef.current !== null) {
+      window.clearTimeout(caretHideTimerRef.current);
+      caretHideTimerRef.current = null;
+    }
+
+    if (!displayText && !normalized) {
+      setShowCaret(false);
+      return undefined;
+    }
+
+    if (displayText !== normalized) {
+      setShowCaret(true);
+      return undefined;
+    }
+
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (prefersReducedMotion) {
+      setShowCaret(false);
+      return undefined;
+    }
+
+    caretHideTimerRef.current = window.setTimeout(() => {
+      caretHideTimerRef.current = null;
+      setShowCaret(false);
+    }, STREAM_CARET_HIDE_DELAY_MS);
+
+    return () => {
+      if (caretHideTimerRef.current !== null) {
+        window.clearTimeout(caretHideTimerRef.current);
+        caretHideTimerRef.current = null;
+      }
+    };
+  }, [displayText, normalized]);
+
+  const isAnimating = displayText !== normalized;
+  const shouldShowCaret = showCaret || isAnimating;
+
   return (
     <div className={className}>
       {displayText ? renderRichText(displayText, "rich-text compact live-activity-rich-body", options) : null}
-      <span className="stream-caret" aria-hidden="true" />
+      {shouldShowCaret && <span className="stream-caret" aria-hidden="true" />}
     </div>
   );
 }
@@ -670,14 +905,8 @@ function chatLoadingPhaseLabel(phase: ChatLoadingProgress["phase"]) {
 }
 
 function defaultProjectPath(name: string, agent?: Agent | null) {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9а-яё.]+/gi, "-")
-    .replace(/\.{2,}/g, ".")
-    .replace(/^-+|-+$/g, "");
-  const safeSlug = slug || "new-project";
-  return isLinuxAgent(agent) ? `/srv/codex-agent/repos/${safeSlug}` : `C:\\Projects\\${safeSlug}`;
+  const safeSlug = projectSlug(name);
+  return isLinuxAgent(agent) ? `/srv/codex-agent/projects/${safeSlug}` : `C:\\Projects\\${safeSlug}`;
 }
 
 function projectSlug(name: string) {
@@ -710,18 +939,66 @@ function defaultServerPathForDomain(domain: string) {
   return domain ? `${DEFAULT_SERVER_ROOT}/${domain}` : "";
 }
 
-function defaultGithubUrlForDomain(domain: string) {
-  return domain ? `https://github.com/${DEFAULT_GITHUB_OWNER}/${domain}` : "";
+function defaultGithubUrlForDomain(_domain: string) {
+  return "";
+}
+
+function defaultProjectOwnerSegment(user?: Pick<User, "id" | "email" | "nickname"> | null) {
+  const candidate = user?.nickname?.trim() || user?.email?.split("@")[0] || user?.id || "me";
+  return projectSlug(candidate);
 }
 
 function isUiTheme(value: string | null): value is UiTheme {
   return UI_THEMES.includes(value as UiTheme);
 }
 
-function defaultProjectValues(name: string, agent?: Agent | null) {
+function isEditorTheme(value: string | null): value is EditorTheme {
+  return EDITOR_THEMES.includes(value as EditorTheme);
+}
+
+function editorThemeLabel(value: EditorTheme) {
+  return EDITOR_THEME_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
+function editorThemeIsDark(value: EditorTheme) {
+  return value === "vs-dark" || value === "hc-black" || value === "xedoc-dark" || value === "xedoc-aurora" || value === "xedoc-midnight";
+}
+
+function editorFileKey(file: Pick<ProjectFileEditor, "agentId" | "repoId" | "path">) {
+  return `${file.agentId}:${file.repoId}:${file.path}`;
+}
+
+function imageDataUrl(file: Pick<ProjectFileEditor, "mimeType" | "dataBase64">) {
+  return file.mimeType && file.dataBase64 ? `data:${file.mimeType};base64,${file.dataBase64}` : "";
+}
+
+function imageMimeTypeFromPath(path: string) {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  if (lower.endsWith(".avif")) return "image/avif";
+  if (lower.endsWith(".bmp")) return "image/bmp";
+  if (lower.endsWith(".ico")) return "image/x-icon";
+  return "";
+}
+
+function fileShareUrl(repo: Pick<Repo, "agentId" | "id">, path: string) {
+  const url = new URL(window.location.origin);
+  url.searchParams.set("agent", repo.agentId);
+  url.searchParams.set("repo", repo.id);
+  url.searchParams.set("file", path);
+  return url.toString();
+}
+
+function defaultProjectValues(name: string, agent?: Agent | null, user?: Pick<User, "id" | "email" | "nickname"> | null) {
   const domain = defaultProjectDomain(name);
+  const safeSlug = projectSlug(name);
+  const linuxPath = `/srv/codex-agent/projects/${defaultProjectOwnerSegment(user)}/${safeSlug}`;
   return {
-    path: defaultProjectPath(name, agent),
+    path: isLinuxAgent(agent) ? linuxPath : defaultProjectPath(name, agent),
     domain,
     serverPath: defaultServerPathForDomain(domain),
     githubUrl: defaultGithubUrlForDomain(domain)
@@ -735,6 +1012,36 @@ function projectUrl(domain?: string) {
 
 function repoKeyFor(repo: Pick<Repo, "agentId" | "id">) {
   return `${repo.agentId}:${repo.id}`;
+}
+
+function normalizeProjectFilePath(path: string) {
+  return path.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "");
+}
+
+function fileFolderAncestors(path: string) {
+  const parts = normalizeProjectFilePath(path).split("/").filter(Boolean);
+  parts.pop();
+  const ancestors: string[] = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    ancestors.push(parts.slice(0, index + 1).join("/"));
+  }
+  return ancestors;
+}
+
+function parentFoldersExpanded(path: string, expandedFolders: Record<string, boolean>) {
+  return fileFolderAncestors(path).every((folder) => expandedFolders[folder]);
+}
+
+function expandedFolderRecord(paths: string[]) {
+  const record: Record<string, boolean> = {};
+  paths.map(normalizeProjectFilePath).filter(Boolean).forEach((path) => {
+    record[path] = true;
+  });
+  return record;
+}
+
+function projectFileIsInFolder(path: string, folderPath: string) {
+  return path === folderPath || path.startsWith(`${folderPath}/`);
 }
 
 function appendProjectPath(root: string, segment: string) {
@@ -833,6 +1140,24 @@ function formatDateTime(value?: string | null) {
     second: "2-digit",
     hour12: false
   });
+}
+
+function publicProjectTargetLabel(project: Pick<PublicProject, "domain" | "githubUrl" | "url">) {
+  const raw = project.domain || project.url || project.githubUrl || "";
+  if (!raw) return "Без публичного домена";
+  try {
+    const parsed = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    const path = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname.replace(/\/$/, "") : "";
+    return `${parsed.hostname}${path}`;
+  } catch {
+    return raw.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  }
+}
+
+function publicProjectInitials(name: string) {
+  const parts = name.trim().split(/[\s._-]+/).filter(Boolean);
+  const value = (parts[0]?.[0] ?? "P") + (parts.length > 1 ? parts[1]?.[0] ?? "" : parts[0]?.[1] ?? "");
+  return value.toUpperCase();
 }
 
 function chatSourceLabel(source?: string | null) {
@@ -1393,13 +1718,61 @@ function safeMarkdownHref(value: string) {
 type RichTextOptions = {
   onFileReference?: (path: string) => void;
   projectRoot?: string | null;
+  projectRoots?: Array<string | null | undefined>;
+  projectReferenceNames?: Array<string | null | undefined>;
 };
+
+function normalizeReferencePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/g, "");
+}
+
+function basenameFromPath(value: string | undefined | null): string | undefined {
+  const normalized = normalizeReferencePath(value ?? "").split("/").filter(Boolean).at(-1)?.trim();
+  return normalized || undefined;
+}
+
+function filePathLooksOpenable(value: string): boolean {
+  return /^(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16}$/.test(value);
+}
+
+function stripReferenceLineSuffix(value: string): string {
+  const match = value.match(/^(.+\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16})(?::\d+(?::\d+)?)$/);
+  return match?.[1] ?? value;
+}
+
+function projectReferenceNameSet(options?: RichTextOptions): Set<string> {
+  const names = new Set<string>();
+  const add = (value: string | undefined | null) => {
+    const normalized = value?.trim().toLowerCase();
+    if (normalized) names.add(normalized);
+  };
+  add(basenameFromPath(options?.projectRoot));
+  for (const root of options?.projectRoots ?? []) add(basenameFromPath(root));
+  for (const name of options?.projectReferenceNames ?? []) {
+    add(name);
+    add(name?.replace(/^https?:\/\//i, "").split("/")[0]);
+  }
+  return names;
+}
+
+function relativePathFromAbsoluteProjectReference(candidate: string, options?: RichTextOptions): string | null {
+  const names = projectReferenceNameSet(options);
+  if (!names.size) return null;
+  const segments = normalizeReferencePath(candidate).split("/").filter(Boolean);
+  for (let index = segments.length - 2; index >= 0; index -= 1) {
+    const segment = (segments[index] ?? "").toLowerCase();
+    if (!names.has(segment)) continue;
+    const relative = segments.slice(index + 1).join("/");
+    if (filePathLooksOpenable(relative)) return relative;
+  }
+  return null;
+}
 
 function projectFilePathFromReference(value: string, options?: RichTextOptions): string | null {
   if (!options?.onFileReference) return null;
   const cleaned = value.trim().replace(/^['"`(<[{]+|['"`)>}\],.;:]+$/g, "");
   if (!cleaned || cleaned.includes("\0")) return null;
-  let candidate = cleaned;
+  let candidate = stripReferenceLineSuffix(cleaned);
   let fromUrl = false;
   try {
     if (/^https?:\/\//i.test(candidate)) {
@@ -1410,13 +1783,26 @@ function projectFilePathFromReference(value: string, options?: RichTextOptions):
   } catch {
     return null;
   }
-  candidate = candidate.replace(/\\/g, "/");
-  const projectRoot = options.projectRoot?.replace(/\\/g, "/").replace(/\/+$/g, "");
-  const absoluteCandidate = candidate.startsWith("/");
-  if (projectRoot && candidate.startsWith(`${projectRoot}/`)) {
-    candidate = candidate.slice(projectRoot.length + 1);
-  } else if (fromUrl || absoluteCandidate) {
-    return null;
+  candidate = normalizeReferencePath(candidate);
+  const projectRoots = [options.projectRoot, ...(options.projectRoots ?? [])]
+    .map((root) => normalizeReferencePath(root ?? ""))
+    .filter(Boolean);
+  const lowerCandidate = candidate.toLowerCase();
+  let matchedRoot = false;
+  for (const projectRoot of projectRoots) {
+    const lowerRoot = projectRoot.toLowerCase();
+    if (lowerCandidate === lowerRoot) return null;
+    if (lowerCandidate.startsWith(`${lowerRoot}/`)) {
+      candidate = candidate.slice(projectRoot.length + 1);
+      matchedRoot = true;
+      break;
+    }
+  }
+  const absoluteCandidate = candidate.startsWith("/") || /^[a-z]:\//i.test(candidate);
+  if (!matchedRoot && (fromUrl || absoluteCandidate)) {
+    const relative = relativePathFromAbsoluteProjectReference(candidate, options);
+    if (!relative) return null;
+    candidate = relative;
   }
   candidate = candidate.replace(/^\/+/, "").replace(/^\.\/+/, "");
   if (
@@ -1431,22 +1817,246 @@ function projectFilePathFromReference(value: string, options?: RichTextOptions):
   ) {
     return null;
   }
-  if (!/^(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16}$/.test(candidate)) return null;
+  if (!filePathLooksOpenable(candidate)) return null;
   return candidate;
 }
 
 function fileReferenceButton(path: string, label: string, key: string, options: RichTextOptions) {
+  const displayLabel = label.trim() || basenameFromPath(path) || path;
   return (
-    <button className="inline-file-link" key={key} type="button" onClick={() => options.onFileReference?.(path)}>
-      {label}
+    <button className="inline-file-link" key={key} title={`Открыть ${path}`} type="button" onClick={() => options.onFileReference?.(path)}>
+      <FilePenLine size={13} />
+      <span>{displayLabel}</span>
     </button>
   );
+}
+
+function cleanCommitSummary(value: string | undefined | null): string {
+  if (!value) return "";
+  return normalizeDisplayText(value)
+    .replace(/<image>[\s\S]*?<\/image>/gi, " ")
+    .replace(/<image\s*\/>/gi, " ")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/[•*-]\s+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.。!?！？]+$/g, "");
+}
+
+function truncateCommitPart(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const cut = value.slice(0, maxLength).replace(/\s+\S*$/g, "").trim();
+  return cut || value.slice(0, maxLength).trim();
+}
+
+function commitSummaryFromChat(activeChat: Chat | undefined, messages: ChatMessage[]): string {
+  const lastUser = activeChat ? [...messages].reverse().find((message) => message.role === "user")?.content : undefined;
+  const candidates = [
+    cleanCommitSummary(lastUser),
+    cleanCommitSummary(activeChat?.title)
+  ].filter(Boolean);
+  return truncateCommitPart(candidates[0] ?? "", 92);
+}
+
+function formatCommitTemplate(template: string, values: Record<string, string>): string {
+  let result = template || "{project}: {summary}";
+  for (const [key, value] of Object.entries(values)) {
+    result = result.split(`{${key}}`).join(value);
+  }
+  return result.replace(/\s+/g, " ").replace(/\s+([:;,.])/g, "$1").trim();
+}
+
+function autoCommitMessage(repo: Repo | undefined, activeChat: Chat | undefined, messages: ChatMessage[], template: string): string {
+  const project = repo?.name?.trim() || "Project";
+  const summary = commitSummaryFromChat(activeChat, messages);
+  const fallback = `Update ${project}`;
+  const message = formatCommitTemplate(template, {
+    project,
+    summary: summary || "update project",
+    branch: repo?.currentBranch || "main",
+    chat: cleanCommitSummary(activeChat?.title) || summary || project
+  });
+  const cleaned = message && message !== `${project}: update project` ? message : fallback;
+  return truncateCommitPart(cleaned, 120) || fallback;
+}
+
+function textSearchMatches(content: string, query: string): number[] {
+  const needle = query.trim();
+  if (!needle) return [];
+  const haystack = content.toLowerCase();
+  const loweredNeedle = needle.toLowerCase();
+  const matches: number[] = [];
+  let index = 0;
+  while ((index = haystack.indexOf(loweredNeedle, index)) >= 0 && matches.length < 1000) {
+    matches.push(index);
+    index += Math.max(1, loweredNeedle.length);
+  }
+  return matches;
+}
+
+function lineNumbersForContent(content: string): number[] {
+  const count = Math.max(1, content.split("\n").length);
+  return Array.from({ length: count }, (_, index) => index + 1);
+}
+
+function editorLanguageFromPath(path: string): string {
+  const filename = path.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  if (filename === "dockerfile" || filename.endsWith(".dockerfile")) return "dockerfile";
+  if (filename === ".env" || filename.startsWith(".env.")) return "ini";
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  if (["ts", "tsx", "mts", "cts"].includes(ext)) return "typescript";
+  if (["js", "jsx", "mjs", "cjs"].includes(ext)) return "javascript";
+  if (ext === "json") return "json";
+  if (ext === "css") return "css";
+  if (["scss", "sass"].includes(ext)) return "scss";
+  if (["html", "htm"].includes(ext)) return "html";
+  if (ext === "xml") return "xml";
+  if (["md", "markdown"].includes(ext)) return "markdown";
+  if (["yml", "yaml"].includes(ext)) return "yaml";
+  if (["sh", "bash", "zsh"].includes(ext)) return "shell";
+  if (["bat", "cmd"].includes(ext)) return "bat";
+  if (["ps1", "psm1"].includes(ext)) return "powershell";
+  if (ext === "sql") return "sql";
+  if (ext === "py") return "python";
+  if (ext === "go") return "go";
+  if (ext === "rs") return "rust";
+  if (["java", "kt", "kts"].includes(ext)) return "java";
+  if (["php", "phtml"].includes(ext)) return "php";
+  if (["toml", "ini", "conf"].includes(ext)) return "ini";
+  return "plaintext";
+}
+
+type MonacoCodeEditorProps = {
+  value: string;
+  path: string;
+  theme: EditorTheme;
+  findQuery: string;
+  findIndex: number;
+  command?: IdeEditorCommandRequest | null;
+  onChange: (value: string) => void;
+};
+
+function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, onChange }: MonacoCodeEditorProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const modelRef = useRef<monaco.editor.ITextModel | null>(null);
+  const decorationRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
+  const onChangeRef = useRef(onChange);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const uri = monaco.Uri.parse(`file:///${path.replace(/\\/g, "/").replace(/^\/+/, "")}`);
+    const model = monaco.editor.createModel(value, editorLanguageFromPath(path), uri);
+    modelRef.current = model;
+    const editor = monaco.editor.create(container, {
+      model,
+      theme,
+      automaticLayout: true,
+      minimap: { enabled: true, maxColumn: 90, renderCharacters: false, scale: 0.72 },
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace",
+      fontSize: 13,
+      lineHeight: 20,
+      scrollBeyondLastLine: false,
+      wordWrap: "off",
+      tabSize: 2,
+      insertSpaces: true,
+      renderWhitespace: "selection",
+      roundedSelection: false,
+      bracketPairColorization: { enabled: true },
+      guides: {
+        bracketPairs: true,
+        indentation: true
+      },
+      occurrencesHighlight: "multiFile",
+      renderLineHighlight: "all",
+      cursorBlinking: "smooth",
+      cursorSmoothCaretAnimation: "on",
+      smoothScrolling: true,
+      contextmenu: true,
+      fixedOverflowWidgets: true
+    });
+    editorRef.current = editor;
+    decorationRef.current = editor.createDecorationsCollection();
+    const subscription = editor.onDidChangeModelContent(() => {
+      onChangeRef.current(model.getValue());
+    });
+    return () => {
+      subscription.dispose();
+      decorationRef.current?.clear();
+      decorationRef.current = null;
+      editor.dispose();
+      model.dispose();
+      editorRef.current = null;
+      modelRef.current = null;
+    };
+  }, [path]);
+
+  useEffect(() => {
+    const model = modelRef.current;
+    if (!model || model.getValue() === value) return;
+    model.pushEditOperations([], [{ range: model.getFullModelRange(), text: value }], () => null);
+  }, [value]);
+
+  useEffect(() => {
+    monaco.editor.setTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !command) return;
+    if (command.command === "focus") {
+      editor.focus();
+      return;
+    }
+    if (command.command === "selectAll") {
+      editor.trigger("xedoc-menu", "editor.action.selectAll", null);
+      editor.focus();
+      return;
+    }
+    if (command.command === "format") {
+      void editor.getAction("editor.action.formatDocument")?.run().finally(() => editor.focus());
+    }
+  }, [command]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = modelRef.current;
+    if (!editor || !model) return;
+    const needle = findQuery.trim();
+    if (!needle) {
+      decorationRef.current?.clear();
+      return;
+    }
+    const matches = model.findMatches(needle, false, false, false, null, true, 1000);
+    decorationRef.current?.set(matches.map((match) => ({
+      range: match.range,
+      options: {
+        className: "monaco-find-line",
+        inlineClassName: "monaco-find-match"
+      }
+    })));
+    if (!matches.length) return;
+    const match = matches[((findIndex % matches.length) + matches.length) % matches.length];
+    if (!match) return;
+    editor.setSelection(match.range);
+    editor.revealRangeInCenterIfOutsideViewport(match.range, monaco.editor.ScrollType.Smooth);
+  }, [findIndex, findQuery, value]);
+
+  return <div className="monaco-editor-host" ref={containerRef} />;
 }
 
 function renderPlainWithFileReferences(text: string, keyPrefix: string, options?: RichTextOptions): React.ReactNode[] {
   if (!options?.onFileReference) return [text];
   const nodes: React.ReactNode[] = [];
-  const pattern = /(?:https?:\/\/[^\s<>()]+|(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16})/g;
+  const pattern = /(?:[A-Za-z]:[\\/][^\s<>()]+?\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16}(?::\d+(?::\d+)?)?|\/[^\s<>()]+?\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16}(?::\d+(?::\d+)?)?|https?:\/\/[^\s<>()]+|(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16})/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text))) {
@@ -1454,7 +2064,7 @@ function renderPlainWithFileReferences(text: string, keyPrefix: string, options?
     const path = projectFilePathFromReference(raw, options);
     if (!path) continue;
     if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
-    nodes.push(fileReferenceButton(path, raw, `${keyPrefix}:file:${nodes.length}`, options));
+    nodes.push(fileReferenceButton(path, path, `${keyPrefix}:file:${nodes.length}`, options));
     lastIndex = match.index + raw.length;
   }
   if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
@@ -1715,6 +2325,60 @@ function PublicChatThread({ payload, onPreview }: { payload: PublicChatPayload; 
   );
 }
 
+function PublicProjectCard({
+  project,
+  onOpenChat,
+  showAuthor = false
+}: {
+  project: PublicProject;
+  onOpenChat: (chat: Chat) => void | Promise<void>;
+  showAuthor?: boolean;
+}) {
+  const targetLabel = publicProjectTargetLabel(project);
+  const updatedLabel = formatDateTime(project.updatedAt);
+  const hasExternalTarget = Boolean(project.url || project.githubUrl);
+  const branchLabel = project.currentBranch ? `${project.currentBranch} · ${project.dirty ? "dirty" : "clean"}` : project.dirty ? "dirty" : "clean";
+
+  return (
+    <article className="public-project-card">
+      <div className="public-project-cover" aria-hidden="true">
+        <FolderGit2 size={20} />
+        <span>{publicProjectInitials(project.name)}</span>
+      </div>
+      <div className="public-project-main">
+        <div className="public-project-top">
+          <div className="public-project-title">
+            <h3>{project.name}</h3>
+            <p><Link2 size={14} /> {targetLabel}</p>
+          </div>
+          <div className="public-project-actions">
+            {project.url && <a className="secondary compact" href={project.url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open</a>}
+            {project.githubUrl && <a className="secondary compact" href={project.githubUrl} target="_blank" rel="noreferrer"><Github size={15} /> GitHub</a>}
+          </div>
+        </div>
+
+        <div className="public-project-meta">
+          {showAuthor && <a className="public-project-author" href={project.author.profileUrl}><UserCircle size={15} /> {project.author.nickname || project.author.email}</a>}
+          <span><MessageSquare size={15} /> {project.chatCount} chats</span>
+          <span><GitBranch size={15} /> {branchLabel}</span>
+          {updatedLabel && <span><Clock3 size={15} /> {updatedLabel}</span>}
+          {!hasExternalTarget && <span><ExternalLink size={15} /> No public URL</span>}
+        </div>
+
+        <div className="public-chat-pills">
+          {project.latestChats.map((chat) => (
+            <button key={chat.id} type="button" title={chat.title} onClick={() => void onOpenChat(chat)}>
+              <MessageSquare size={14} />
+              <span>{chat.title}</span>
+            </button>
+          ))}
+          {!project.latestChats.length && <span className="small-empty">Публичных чатов пока нет.</span>}
+        </div>
+      </div>
+    </article>
+  );
+}
+
 const ADMIN_METRIC_META: Record<AdminStatsMetric, { label: string; color: string }> = {
   dau: { label: "DAU", color: "#0f8f6b" },
   wau: { label: "WAU", color: "#2563eb" },
@@ -1815,7 +2479,7 @@ function SharedChatPage({ token }: { token: string }) {
       <header className="share-hero">
         <div>
           <img className="brand-logo" src="/favicon.svg" alt="" />
-          <span>codex.rodion.pro</span>
+          <span>xedoc.ru</span>
         </div>
         <h1>{share?.title ?? "Shared Codex chat"}</h1>
         {share && (
@@ -1930,7 +2594,7 @@ function PublicProfilePage({ slug }: { slug: string }) {
       <header className="share-hero">
         <div>
           <img className="brand-logo" src="/favicon.svg" alt="" />
-          <span>codex.rodion.pro</span>
+          <span>xedoc.ru</span>
         </div>
         <h1>{displayName}</h1>
         {profile && <p>{profile.email} · зарегистрирован {formatDateTime(profile.createdAt) || "unknown"}</p>}
@@ -1966,22 +2630,7 @@ function PublicProfilePage({ slug }: { slug: string }) {
               <span>{projects.length}</span>
             </div>
             {projects.map((project) => (
-              <article className="public-project-card" key={`${project.agentId}:${project.id}`}>
-                <div>
-                  <h3>{project.name}</h3>
-                  <p>{project.domain || project.githubUrl || "Без публичного домена"}</p>
-                </div>
-                <div className="public-project-actions">
-                  {project.url && <a className="secondary compact" href={project.url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open</a>}
-                  <span>{project.chatCount} chats</span>
-                </div>
-                <div className="public-chat-pills">
-                  {project.latestChats.map((chat) => (
-                    <button key={chat.id} type="button" onClick={() => void openPublicChat(chat)}>{chat.title}</button>
-                  ))}
-                  {!project.latestChats.length && <span className="small-empty">Публичных чатов пока нет.</span>}
-                </div>
-              </article>
+              <PublicProjectCard key={`${project.agentId}:${project.id}`} project={project} onOpenChat={openPublicChat} />
             ))}
             {!projects.length && <div className="share-card">У пользователя пока нет публичных проектов.</div>}
           </section>
@@ -2655,9 +3304,13 @@ function App() {
   const [linkedChatId, setLinkedChatId] = useState("");
   const [hiddenLocalChats, setHiddenLocalChats] = useState<Chat[]>([]);
   const [gitMessage, setGitMessage] = useState("Update project");
+  const [gitMessageMode, setGitMessageMode] = useState<CommitMessageMode>("auto");
+  const [gitMessageTemplate, setGitMessageTemplate] = useState("{project}: {summary}");
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitNotice, setGitNotice] = useState("");
   const [gitBusy, setGitBusy] = useState(false);
+  const [buildNotice, setBuildNotice] = useState("");
+  const [buildBusy, setBuildBusy] = useState(false);
   const [deployNotice, setDeployNotice] = useState("");
   const [deployBusy, setDeployBusy] = useState(false);
   const [nginxNotice, setNginxNotice] = useState("");
@@ -2708,8 +3361,46 @@ function App() {
     }
     return "paper";
   });
+  const [editorTheme, setEditorTheme] = useState<EditorTheme>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.editorTheme");
+      if (isEditorTheme(stored)) return stored;
+    } catch {
+      // Ignore blocked storage.
+    }
+    return "xedoc-light";
+  });
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const [fileEditor, setFileEditor] = useState<ProjectFileEditor | null>(null);
+  const [fileEditorTabs, setFileEditorTabs] = useState<ProjectFileEditor[]>([]);
+  const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
+  const [projectFilesRepoKey, setProjectFilesRepoKey] = useState("");
+  const [projectFilesLoading, setProjectFilesLoading] = useState(false);
+  const [projectFilesError, setProjectFilesError] = useState("");
+  const [fileTreeQuery, setFileTreeQuery] = useState("");
+  const [expandedProjectFolders, setExpandedProjectFolders] = useState<Record<string, boolean>>({});
+  const [editorFindQuery, setEditorFindQuery] = useState("");
+  const [editorFindIndex, setEditorFindIndex] = useState(0);
+  const [ideChatPanelOpen, setIdeChatPanelOpen] = useState(true);
+  const [ideExplorerOpen, setIdeExplorerOpen] = useState(true);
+  const [ideFindOpen, setIdeFindOpen] = useState(true);
+  const [ideOutputOpen, setIdeOutputOpen] = useState(false);
+  const [ideMenuOpen, setIdeMenuOpen] = useState("");
+  const [ideCommandPaletteOpen, setIdeCommandPaletteOpen] = useState(false);
+  const [ideCommandQuery, setIdeCommandQuery] = useState("");
+  const [ideEditorCommand, setIdeEditorCommand] = useState<IdeEditorCommandRequest | null>(null);
+  const [fileEditorFullscreen, setFileEditorFullscreen] = useState(() => {
+    try {
+      return localStorage.getItem("cmc.fileEditorFullscreen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [ideChatPrompt, setIdeChatPrompt] = useState("");
+  const [ideChatNotice, setIdeChatNotice] = useState("");
+  const [ideChatSending, setIdeChatSending] = useState(false);
+  const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null);
+  const [fileProperties, setFileProperties] = useState<ProjectFileEntry | null>(null);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [localBusyHold, setLocalBusyHold] = useState<{ until: number; since?: string; key?: string }>({ until: 0 });
@@ -2746,6 +3437,47 @@ function App() {
     ?? repos[0]
   ), [repos, selectedRepo, syncRepoKey]);
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId), [activeChatId, chats]);
+  const generatedGitMessage = useMemo(
+    () => autoCommitMessage(selectedRepo, activeChat, messages, gitMessageTemplate),
+    [activeChat, gitMessageTemplate, messages, selectedRepo]
+  );
+  const effectiveGitMessage = gitMessageMode === "auto" ? generatedGitMessage : gitMessage.trim();
+  const visibleProjectFiles = useMemo(() => {
+    const query = fileTreeQuery.trim().toLowerCase();
+    if (!query) {
+      return projectFiles.filter((entry) => entry.depth === 0 || parentFoldersExpanded(entry.path, expandedProjectFolders));
+    }
+    const visiblePaths = new Set<string>();
+    const matches = projectFiles.filter((entry) => entry.path.toLowerCase().includes(query) || entry.name.toLowerCase().includes(query));
+    for (const match of matches) {
+      visiblePaths.add(match.path);
+      fileFolderAncestors(match.path).forEach((folder) => visiblePaths.add(folder));
+      if (match.type === "directory") {
+        projectFiles.forEach((entry) => {
+          if (projectFileIsInFolder(entry.path, match.path)) visiblePaths.add(entry.path);
+        });
+      }
+    }
+    return projectFiles.filter((entry) => visiblePaths.has(entry.path));
+  }, [expandedProjectFolders, fileTreeQuery, projectFiles]);
+  const fileEditorOpenPathSignature = useMemo(() => (
+    fileEditorTabs
+      .filter((tab) => selectedRepo && tab.agentId === selectedRepo.agentId && tab.repoId === selectedRepo.id)
+      .map((tab) => normalizeProjectFilePath(tab.path))
+      .join("\n")
+  ), [fileEditorTabs, selectedRepo?.agentId, selectedRepo?.id]);
+  const editorFindMatches = useMemo(
+    () => textSearchMatches(fileEditor?.content ?? "", editorFindQuery),
+    [editorFindQuery, fileEditor?.content]
+  );
+  const ideChatMessages = useMemo(
+    () => messages.filter((message) => !activeChatId || message.chatId === activeChatId).slice(-8),
+    [activeChatId, messages]
+  );
+  const editorLineNumbers = useMemo(
+    () => lineNumbersForContent(fileEditor?.content ?? ""),
+    [fileEditor?.content]
+  );
   const activeCodexThreadId = useMemo(() => {
     if (activeChat?.externalId) return activeChat.externalId;
     for (let index = jobs.length - 1; index >= 0; index--) {
@@ -2759,11 +3491,17 @@ function App() {
   const chatLoadingDeterminate = Boolean(chatLoadingProgress?.totalBytes);
   const chatLoadingLabel = chatLoadingProgress ? chatLoadingPhaseLabel(chatLoadingProgress.phase) : "Загружаю чат";
   const selectedRepoAgent = selectedRepo ? agents.find((agent) => agent.id === selectedRepo.agentId) : undefined;
+  const syncRepoAgent = syncRepo ? agents.find((agent) => agent.id === syncRepo.agentId) : undefined;
   const onlineAgent = agents.find((agent) => agent.status === "online");
   const selectedAgent = selectedRepoAgent ?? onlineAgent ?? agents[0];
+  const syncControlAgent = syncRepoAgent ?? selectedAgent;
+  const chromeAgent = view === "sync" ? syncControlAgent : selectedAgent;
+  const chromeRepo = view === "sync" ? syncRepo : selectedRepo;
   const projectFormAgent = agents.find((agent) => agent.id === projectAgentId) ?? selectedAgent;
   const online = Boolean(selectedAgent && selectedAgent.status === "online");
-  const selectedAgentStatusLabel = selectedAgent ? `${selectedAgent.name} ${online ? "online" : "offline"}` : (online ? "Agent online" : "Agent offline");
+  const chromeOnline = Boolean(chromeAgent && chromeAgent.status === "online");
+  const chromeAgentStatusLabel = chromeAgent ? `${chromeAgent.name} ${chromeOnline ? "online" : "offline"}` : (chromeOnline ? "Agent online" : "Agent offline");
+  const projectTargetAgentChanged = Boolean(projectPanel === "settings" && selectedRepo && projectAgentId && projectAgentId !== selectedRepo.agentId);
   const projectDraftDeployConfig = useMemo(() => (
     projectDeployEnabled
       ? buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null
@@ -2786,17 +3524,18 @@ function App() {
     return (
       projectName.trim() !== selectedRepo.name
       || projectPath.trim() !== originalProjectPath
+      || projectTargetAgentChanged
       || projectGithubUrl.trim() !== (selectedRepo.githubUrl ?? "")
       || projectServerPath.trim() !== (selectedRepo.serverPath ?? "")
       || normalizedDomain !== (selectedRepo.domain ?? "")
-      || JSON.stringify(projectDraftDeployConfig) !== JSON.stringify(selectedRepo.deploy ?? null)
-      || JSON.stringify(projectDraftDataConfig) !== JSON.stringify(selectedRepo.data ?? null)
       || sandbox !== selectedRepo.defaultSandbox
     );
-  }, [originalProjectPath, projectDraftDataConfig, projectDraftDeployConfig, projectDomain, projectGithubUrl, projectName, projectPanel, projectPath, projectServerPath, sandbox, selectedRepo]);
+  }, [originalProjectPath, projectDomain, projectGithubUrl, projectName, projectPanel, projectPath, projectServerPath, projectTargetAgentChanged, sandbox, selectedRepo]);
   const projectSaveAgentOnline = projectPanel === "new"
     ? projectFormAgent?.status === "online"
-    : selectedRepoAgent?.status === "online";
+    : projectTargetAgentChanged
+      ? projectFormAgent?.status === "online"
+      : selectedRepoAgent?.status === "online";
   const canSaveProject = Boolean(!busy && (
     projectPanel === "new"
       ? projectSaveAgentOnline
@@ -2816,25 +3555,26 @@ function App() {
   const localActivity = selectedAgent?.localActivity;
   const activeRunBusy = Boolean(activeJob && ["queued", "assigned", "running"].includes(activeJob.status));
   const runningJobs = useMemo(() => mergeJobs(allJobs, activeJob && activeRunBusy ? [activeJob] : []).filter(isJobRunning), [allJobs, activeJob, activeRunBusy]);
+  const localActivityFromWeb = isWebActivitySource(localActivity?.source);
   const webActivityRunning = Boolean(
-    localActivity?.source === "codex.rodion.pro"
+    localActivityFromWeb
     && (
       activeRunBusy
       || (selectedAgent?.current_job_id && runningJobs.some((job) => job.id === selectedAgent.current_job_id))
     )
   );
-  const localActivityFreshAt = localActivity?.source !== "codex.rodion.pro" && localActivity?.updatedAt
+  const localActivityFreshAt = !localActivityFromWeb && localActivity?.updatedAt
     ? localActivity.updatedAt
     : localActivity?.detectedAt;
   const localActivityFreshTime = Date.parse(localActivityFreshAt || "");
   const localActivityFresh = Number.isFinite(localActivityFreshTime) && nowTick - localActivityFreshTime <= 90000;
   const externalLocalActivityBusy = Boolean(
-    localActivity?.source !== "codex.rodion.pro"
+    !localActivityFromWeb
     && localActivity?.status === "busy"
     && localActivityFresh
   );
   const staleCurrentWebJob = Boolean(selectedAgent?.current_job_id && selectedAgent.current_job_id === activeJob?.id && !activeRunBusy);
-  const staleLocalWebBusy = Boolean(localActivity?.source === "codex.rodion.pro" && !activeRunBusy && activeJob?.finishedAt);
+  const staleLocalWebBusy = Boolean(localActivityFromWeb && !activeRunBusy && activeJob?.finishedAt);
   const rawLocalCodexBusy = Boolean(
     (externalLocalActivityBusy || webActivityRunning)
     && !staleCurrentWebJob
@@ -2932,6 +3672,7 @@ function App() {
   const vscodeRequestSeqRef = useRef(0);
   const projectActionBusyRef = useRef<Record<string, boolean>>({});
   const pendingVscodeThreadRefreshRef = useRef<Set<string>>(new Set());
+  const fileLinkOpenedRef = useRef(false);
   const chatLoadingStartedRef = useRef(0);
   const projectStateRestoredRef = useRef(false);
   const shellRef = useRef<HTMLElement | null>(null);
@@ -2942,6 +3683,11 @@ function App() {
   const lastMessageRef = useRef<HTMLElement | null>(null);
   const sandboxControlRef = useRef<HTMLDivElement | null>(null);
   const actionControlRef = useRef<HTMLDivElement | null>(null);
+  const fileEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileEditorGutterRef = useRef<HTMLDivElement | null>(null);
+  const editorFindInputRef = useRef<HTMLInputElement | null>(null);
+  const ideMenuRef = useRef<HTMLElement | null>(null);
+  const ideCommandInputRef = useRef<HTMLInputElement | null>(null);
   const currentScrollChatRef = useRef("");
   const chatCacheRef = useRef<Map<string, { etag: string; data: ChatPayload }>>(new Map());
   const messageDetailsLoadingRef = useRef<Set<string>>(new Set());
@@ -3315,17 +4061,63 @@ function App() {
     }
   }
 
-  async function refresh() {
+  function storedIdeProjectStateKey(repo: Pick<Repo, "agentId" | "id">) {
+    const userSegment = currentUser?.id ? `:${currentUser.id}` : "";
+    return `${IDE_PROJECT_STATE_STORAGE_PREFIX}${userSegment}:${repoKeyFor(repo)}`;
+  }
+
+  function readStoredIdeProjectState(repo: Pick<Repo, "agentId" | "id">): StoredIdeProjectState | null {
+    try {
+      const raw = localStorage.getItem(storedIdeProjectStateKey(repo));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as StoredIdeProjectState;
+      const openFilePaths = Array.isArray(parsed.openFilePaths)
+        ? [...new Set(parsed.openFilePaths.filter((path) => typeof path === "string" && path.trim()).map(normalizeProjectFilePath))].slice(0, 12)
+        : [];
+      const expandedFolders = Array.isArray(parsed.expandedFolders)
+        ? [...new Set(parsed.expandedFolders.filter((path) => typeof path === "string" && path.trim()).map(normalizeProjectFilePath))].slice(0, 400)
+        : [];
+      const activeFilePath = typeof parsed.activeFilePath === "string" && parsed.activeFilePath.trim()
+        ? normalizeProjectFilePath(parsed.activeFilePath)
+        : undefined;
+      return {
+        activeFilePath,
+        openFilePaths,
+        expandedFolders,
+        savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : undefined
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function saveIdeProjectState(repo: Pick<Repo, "agentId" | "id">, state: StoredIdeProjectState) {
+    try {
+      localStorage.setItem(storedIdeProjectStateKey(repo), JSON.stringify({
+        activeFilePath: state.activeFilePath ? normalizeProjectFilePath(state.activeFilePath) : undefined,
+        openFilePaths: [...new Set((state.openFilePaths ?? []).map(normalizeProjectFilePath).filter(Boolean))].slice(0, 12),
+        expandedFolders: [...new Set((state.expandedFolders ?? []).map(normalizeProjectFilePath).filter(Boolean))].slice(0, 400),
+        savedAt: Date.now()
+      }));
+    } catch {
+      // IDE state is only a local convenience.
+    }
+  }
+
+  async function refresh(options: { keepRepoKey?: string } = {}): Promise<Repo[] | undefined> {
     const [agentResponse, repoResponse, jobsResponse] = await Promise.all([api("/api/agents"), api("/api/repos"), api("/api/jobs")]);
     if (agentResponse.ok) setAgents((await agentResponse.json()).agents);
     if (jobsResponse.ok) setAllJobs((await jobsResponse.json()).jobs);
     if (repoResponse.ok) {
       const nextRepos = (await repoResponse.json()).repos;
       setRepos(nextRepos);
-      if (repoKey && !nextRepos.some((repo: Repo) => `${repo.agentId}:${repo.id}` === repoKey)) {
+      const keyToKeep = options.keepRepoKey || repoKey;
+      if (keyToKeep && !nextRepos.some((repo: Repo) => `${repo.agentId}:${repo.id}` === keyToKeep)) {
         clearProjectSelection();
       }
+      return nextRepos;
     }
+    return undefined;
   }
 
   async function loadAllJobs() {
@@ -3516,6 +4308,69 @@ function App() {
       if (!refreshStarted) {
         setChatListSyncingRepoKey((current) => (current === syncingRepoKey ? "" : current));
       }
+    }
+  }
+
+  async function moveSelectedProjectToAgent(agent: Agent) {
+    if (!selectedRepo || !csrf || busy) return;
+    if (agent.id === selectedRepo.agentId) {
+      setSyncNotice(`${selectedRepo.name} уже привязан к ${agent.name}.`);
+      return;
+    }
+    if (agent.status !== "online") {
+      setSyncNotice("Выбранный агент offline. Перенос проекта можно сделать после подключения агента.");
+      return;
+    }
+    const defaults = defaultProjectValues(selectedRepo.name, agent, currentUser);
+    const sourceDir = selectedRepo.deploy?.sourceDir ?? "dist";
+    const deployMode = isLinuxAgent(agent) ? "local" : "ssh";
+    const deployConfig = buildDeployConfig(
+      deployMode,
+      deployMode === "ssh" ? selectedRepo.deploy?.sshTarget ?? DEFAULT_DEPLOY_SSH_TARGET : "",
+      sourceDir,
+      selectedRepo.deploy?.remoteSubdir ?? "",
+      selectedRepo.deploy?.cleanRemote ?? false,
+      defaultBuildCommandForAgent(agent)
+    ) ?? selectedRepo.deploy ?? null;
+    setBusy(true);
+    setSyncNotice("");
+    try {
+      const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}`, {
+        method: "PUT",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({
+          targetAgentId: agent.id,
+          path: defaults.path,
+          deploy: deployConfig,
+          data: selectedRepo.data ?? {
+            location: isLinuxAgent(agent) ? "server" : "local",
+            path: defaultProjectDataPath(isLinuxAgent(agent) ? "server" : "local", defaults.path, selectedRepo.serverPath ?? defaults.serverPath)
+          }
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setSyncNotice(data.error === "agent_offline"
+          ? "Выбранный агент offline. Перенос проекта можно сделать после подключения агента."
+          : data.error === "target_project_exists"
+            ? "На выбранном агенте уже есть проект с таким ID."
+            : data.error === "project_has_running_job"
+              ? "У проекта есть активная задача. Дождись завершения перед переносом."
+              : data.error || "Не получилось перенести проект.");
+        return;
+      }
+      const movedKey = `${data.agentId ?? agent.id}:${data.repoId ?? selectedRepo.id}`;
+      const nextRepos = await refresh({ keepRepoKey: movedKey });
+      setRepoKey(movedKey);
+      setSyncRepoKey(movedKey);
+      const movedRepo = nextRepos?.find((repo: Repo) => repoKeyFor(repo) === movedKey);
+      if (movedRepo) {
+        saveProjectState(movedRepo);
+        await loadChats(movedRepo, false, { showLoading: true });
+      }
+      setSyncNotice(`${selectedRepo.name} перенесён на ${agent.name}.`);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -3782,6 +4637,7 @@ function App() {
     setGitMessage(`Update ${repo.name}`);
     setGitRemoteUrl(repo.githubUrl ?? "");
     setGitNotice("");
+    setBuildNotice("");
     setDeployNotice("");
     setNginxNotice("");
     setSslNotice("");
@@ -3809,6 +4665,7 @@ function App() {
     setChatMenuId("");
     setProjectActionsOpen(false);
     setGitNotice("");
+    setBuildNotice("");
     setDeployNotice("");
     setNginxNotice("");
     setSslNotice("");
@@ -3857,43 +4714,50 @@ function App() {
   }
 
   function applyProjectDefaultsToForm(options: { includePath: boolean }) {
-    const defaults = defaultProjectValues(projectName, projectPanel === "new" ? projectFormAgent : selectedAgent);
+    const defaults = defaultProjectValues(projectName, projectFormAgent, currentUser);
     if (options.includePath) setProjectPath(defaults.path);
     setProjectDomain(defaults.domain);
     setProjectServerPath(defaults.serverPath);
     setProjectGithubUrl(defaults.githubUrl);
     setProjectDataPath(defaultProjectDataPath(projectDataLocation, options.includePath ? defaults.path : projectPath, defaults.serverPath));
     setProjectDeployEnabled(true);
-    const defaultMode = isLinuxAgent(projectPanel === "new" ? projectFormAgent : selectedAgent) ? "local" : "ssh";
+    const defaultMode = isLinuxAgent(projectFormAgent) ? "local" : "ssh";
     setProjectDeployMode(defaultMode);
     if (!projectDeploySshTarget.trim()) setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
     if (!projectDeploySourceDir.trim()) setProjectDeploySourceDir("dist");
-    if (!projectDeployBuildCommand.trim()) setProjectDeployBuildCommand(defaultBuildCommandForAgent(projectPanel === "new" ? projectFormAgent : selectedAgent));
+    if (!projectDeployBuildCommand.trim()) setProjectDeployBuildCommand(defaultBuildCommandForAgent(projectFormAgent));
   }
 
   function handleProjectAgentChange(agentId: string) {
     const agent = agents.find((item) => item.id === agentId) ?? selectedAgent;
+    const previousAgent = agents.find((item) => item.id === projectAgentId) ?? selectedAgent;
+    const previousDefaultBuild = defaultBuildCommandForAgent(previousAgent);
     setProjectAgentId(agentId);
-    if (projectPanel !== "new") return;
-    const defaults = defaultProjectValues(projectName, agent);
-    setProjectPath(defaults.path);
-    setProjectServerPath(defaults.serverPath);
-    setProjectGithubUrl(defaults.githubUrl);
-    setProjectDomain(defaults.domain);
+    const defaults = defaultProjectValues(projectName, agent, currentUser);
+    if (projectPanel === "new") {
+      setProjectPath(defaults.path);
+      setProjectServerPath(defaults.serverPath);
+      setProjectGithubUrl(defaults.githubUrl);
+      setProjectDomain(defaults.domain);
+    } else {
+      setProjectPath(defaults.path);
+    }
     const nextDataLocation = isLinuxAgent(agent) ? "server" : "local";
     setProjectDataLocation(nextDataLocation);
-    setProjectDataPath(defaultProjectDataPath(nextDataLocation, defaults.path, defaults.serverPath));
+    setProjectDataPath(defaultProjectDataPath(nextDataLocation, defaults.path, projectPanel === "new" ? defaults.serverPath : projectServerPath));
     const defaultMode = isLinuxAgent(agent) ? "local" : "ssh";
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
-    setProjectDeployBuildCommand(defaultBuildCommandForAgent(agent));
+    if (!projectDeployBuildCommand.trim() || projectDeployBuildCommand.trim() === previousDefaultBuild) {
+      setProjectDeployBuildCommand(defaultBuildCommandForAgent(agent));
+    }
   }
 
   function handleProjectNameChange(value: string) {
     const previousDataPath = defaultProjectDataPath(projectDataLocation, projectPath, projectServerPath);
     setProjectName(value);
     if (projectPanel !== "new") return;
-    const defaults = defaultProjectValues(value, projectFormAgent);
+    const defaults = defaultProjectValues(value, projectFormAgent, currentUser);
     setProjectPath(defaults.path);
     setProjectDomain(defaults.domain);
     setProjectServerPath(defaults.serverPath);
@@ -3945,7 +4809,12 @@ function App() {
   }
 
   function openNewProject() {
-    const defaults = defaultProjectValues("New Project", selectedAgent);
+    const defaults = defaultProjectValues("New Project", selectedAgent, currentUser);
+    setMobileMenuOpen(false);
+    setView("projects");
+    setChatProperties(null);
+    setChatMenuId("");
+    setProjectActionsOpen(false);
     setProjectName("New Project");
     setProjectAgentId(selectedAgent?.id ?? agents[0]?.id ?? "");
     setProjectPath(defaults.path);
@@ -4049,6 +4918,7 @@ function App() {
     setGitMessage(`Update ${repo.name}`);
     setGitRemoteUrl(repo.githubUrl ?? "");
     setGitNotice("");
+    setBuildNotice("");
     setDeployNotice("");
     setNginxNotice("");
     setSslNotice("");
@@ -4144,6 +5014,100 @@ function App() {
   }, [jobKind, codexModel, grokModel, geminiCliModel, geminiModel, reasoningEffort, codexSpeed]);
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem("cmc.gitSettings");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { mode?: CommitMessageMode; template?: string; customMessage?: string };
+      if (parsed.mode === "auto" || parsed.mode === "custom") setGitMessageMode(parsed.mode);
+      if (typeof parsed.template === "string" && parsed.template.trim()) setGitMessageTemplate(parsed.template);
+      if (typeof parsed.customMessage === "string") setGitMessage(parsed.customMessage);
+    } catch {
+      try {
+        localStorage.removeItem("cmc.gitSettings");
+      } catch {
+        // Ignore blocked storage.
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.gitSettings", JSON.stringify({
+        mode: gitMessageMode,
+        template: gitMessageTemplate,
+        customMessage: gitMessage
+      }));
+    } catch {
+      // Git settings are optional UI state.
+    }
+  }, [gitMessageMode, gitMessageTemplate, gitMessage]);
+
+  useEffect(() => {
+    const currentFileRepoKey = selectedRepo ? `${selectedRepo.agentId}:${selectedRepo.id}` : "";
+    if (!projectFilesRepoKey || projectFilesRepoKey === currentFileRepoKey) return;
+    setProjectFiles([]);
+    setProjectFilesRepoKey("");
+    setProjectFilesError("");
+    setFileTreeQuery("");
+  }, [projectFilesRepoKey, selectedRepo?.agentId, selectedRepo?.id]);
+
+  useEffect(() => {
+    if (!selectedRepo) {
+      setExpandedProjectFolders({});
+      return;
+    }
+    const storedIdeState = readStoredIdeProjectState(selectedRepo);
+    const folders = storedIdeState?.expandedFolders ?? [];
+    const activeAncestors = storedIdeState?.activeFilePath ? fileFolderAncestors(storedIdeState.activeFilePath) : [];
+    setExpandedProjectFolders(expandedFolderRecord([...folders, ...activeAncestors]));
+  }, [currentUser?.id, selectedRepo?.agentId, selectedRepo?.id]);
+
+  useEffect(() => {
+    if (!selectedRepo || !fileEditor) return;
+    if (fileEditor.agentId !== selectedRepo.agentId || fileEditor.repoId !== selectedRepo.id) return;
+    saveIdeProjectState(selectedRepo, {
+      activeFilePath: fileEditor.path,
+      openFilePaths: fileEditorOpenPathSignature.split("\n").filter(Boolean),
+      expandedFolders: Object.entries(expandedProjectFolders).filter(([, isOpen]) => isOpen).map(([path]) => path)
+    });
+  }, [
+    currentUser?.id,
+    expandedProjectFolders,
+    fileEditor?.agentId,
+    fileEditor?.path,
+    fileEditor?.repoId,
+    fileEditorOpenPathSignature,
+    selectedRepo?.agentId,
+    selectedRepo?.id
+  ]);
+
+  useEffect(() => {
+    setEditorFindIndex(0);
+  }, [editorFindQuery, fileEditor?.path]);
+
+  useEffect(() => {
+    if (!editorFindMatches.length) {
+      if (editorFindIndex !== 0) setEditorFindIndex(0);
+      return;
+    }
+    if (editorFindIndex >= editorFindMatches.length) setEditorFindIndex(0);
+  }, [editorFindIndex, editorFindMatches.length]);
+
+  useEffect(() => {
+    const needle = editorFindQuery.trim();
+    const textarea = fileEditorTextareaRef.current;
+    if (!textarea || !needle || !editorFindMatches.length || !fileEditor) return;
+    const start = editorFindMatches[Math.min(editorFindIndex, editorFindMatches.length - 1)] ?? 0;
+    const end = start + needle.length;
+    textarea.focus({ preventScroll: true });
+    textarea.setSelectionRange(start, end);
+    const linesBeforeMatch = fileEditor.content.slice(0, start).split("\n").length - 1;
+    const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 18;
+    textarea.scrollTop = Math.max(0, (linesBeforeMatch - 3) * lineHeight);
+    if (fileEditorGutterRef.current) fileEditorGutterRef.current.scrollTop = textarea.scrollTop;
+  }, [editorFindIndex, editorFindMatches, editorFindQuery, fileEditor]);
+
+  useEffect(() => {
     if (!sandboxMenuOpen && !actionMenuOpen) return;
 
     const closeComposerMenusOnOutsidePointer = (event: PointerEvent) => {
@@ -4168,6 +5132,44 @@ function App() {
   }, [actionMenuOpen]);
 
   useEffect(() => {
+    if (!ideMenuOpen) return undefined;
+    const closeIdeMenu = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (!ideMenuRef.current?.contains(target)) setIdeMenuOpen("");
+    };
+    document.addEventListener("pointerdown", closeIdeMenu, true);
+    return () => document.removeEventListener("pointerdown", closeIdeMenu, true);
+  }, [ideMenuOpen]);
+
+  useEffect(() => {
+    if (!ideCommandPaletteOpen) return undefined;
+    const focusTimer = window.setTimeout(() => ideCommandInputRef.current?.focus(), 30);
+    const closePalette = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIdeCommandPaletteOpen(false);
+    };
+    document.addEventListener("keydown", closePalette);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", closePalette);
+    };
+  }, [ideCommandPaletteOpen]);
+
+  useEffect(() => {
+    if (!fileContextMenu) return undefined;
+    const close = () => setFileContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFileContextMenu(null);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [fileContextMenu]);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = uiTheme;
     try {
       localStorage.setItem("cmc.uiTheme", uiTheme);
@@ -4175,6 +5177,56 @@ function App() {
       // Theme is local preference only.
     }
   }, [uiTheme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.editorTheme", editorTheme);
+    } catch {
+      // Editor theme is local preference only.
+    }
+  }, [editorTheme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.fileEditorFullscreen", fileEditorFullscreen ? "1" : "0");
+    } catch {
+      // Editor layout is local preference only.
+    }
+  }, [fileEditorFullscreen]);
+
+  useEffect(() => {
+    if (!fileEditor) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "F11") {
+        event.preventDefault();
+        setFileEditorFullscreen((value) => !value);
+        return;
+      }
+      if (event.key === "Escape" && fileEditorFullscreen && !ideCommandPaletteOpen && !fileContextMenu) {
+        event.preventDefault();
+        setFileEditorFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [fileContextMenu, fileEditor, fileEditorFullscreen, ideCommandPaletteOpen]);
+
+  useEffect(() => {
+    if (fileLinkOpenedRef.current || !repos.length) return;
+    const url = new URL(window.location.href);
+    const agentId = url.searchParams.get("agent");
+    const repoId = url.searchParams.get("repo");
+    const filePath = url.searchParams.get("file");
+    if (!agentId || !repoId || !filePath) return;
+    const repo = repos.find((item) => item.agentId === agentId && item.id === repoId);
+    if (!repo) return;
+    fileLinkOpenedRef.current = true;
+    setView("projects");
+    setRepoKey(repoKeyFor(repo));
+    setSandbox(repo.defaultSandbox);
+    saveProjectState(repo);
+    void loadProjectFileList(repo).finally(() => openProjectFile(filePath, repo));
+  }, [repos]);
 
   useEffect(() => {
     if (!csrf) return;
@@ -4508,11 +5560,11 @@ function App() {
   }, [imagePreview]);
 
   useEffect(() => {
-    if (view !== "sync" || !csrf || !selectedAgent || selectedAgent.status !== "online" || vscodeBusy) return;
-    if (syncAutoPingRef.current === selectedAgent.id) return;
-    syncAutoPingRef.current = selectedAgent.id;
-    void runVscodeCommand("ping", selectedAgent.id);
-  }, [csrf, selectedAgent?.id, selectedAgent?.status, view, vscodeBusy]);
+    if (view !== "sync" || !csrf || !syncControlAgent || syncControlAgent.status !== "online" || isLinuxAgent(syncControlAgent) || vscodeBusy) return;
+    if (syncAutoPingRef.current === syncControlAgent.id) return;
+    syncAutoPingRef.current = syncControlAgent.id;
+    void runVscodeCommand("ping", syncControlAgent.id);
+  }, [csrf, syncControlAgent?.id, syncControlAgent?.os, syncControlAgent?.status, view, vscodeBusy]);
 
   useEffect(() => {
     if (!csrf || !activeJob || !isTerminalJobStatus(activeJob.status) || !activeJob.codexThreadId) return;
@@ -4645,7 +5697,7 @@ function App() {
     if ((isNew || projectSettingsNeedsAgent) && !projectSaveAgentOnline) {
       setProjectNotice(isNew
         ? "Выбранный агент offline. Новый проект можно сохранить после подключения агента."
-        : "Агент проекта offline. Сейчас можно сохранить только Public/Private для Search; локальные поля сохранятся после подключения агента.");
+        : "Агент проекта offline. Имя, путь, GitHub, домен и sandbox можно сохранить после подключения агента; Public/Private, Deploy и Data сохраняются прямо сейчас.");
       return;
     }
     setBusy(true);
@@ -4667,6 +5719,7 @@ function App() {
       visibility: projectVisibility
     };
     if (!isNew) {
+      if (projectTargetAgentChanged && projectAgentId) body.targetAgentId = projectAgentId;
       if (projectName.trim() !== selectedRepo?.name) body.name = projectName.trim();
       if (projectPath.trim() !== originalProjectPath) body.path = projectPath.trim();
       if (projectGithubUrl.trim() !== (selectedRepo?.githubUrl ?? "")) body.githubUrl = projectGithubUrl.trim();
@@ -4684,18 +5737,32 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      setChatNoticeOk(false);
-      setChatNotice(data.error === "agent_local_busy"
+      const errorMessage = data.error === "agent_local_busy"
         ? "Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web."
         : data.error === "agent_offline"
-          ? "Агент проекта offline. Public/Private можно сохранить отдельно, а локальные поля проекта - после подключения агента."
-          : data.error || "Job start failed.");
+          ? "Выбранный агент offline. Перенос проекта и локальные поля можно сохранить после подключения агента."
+          : data.error === "target_project_exists"
+            ? "На выбранном агенте уже есть проект с таким ID."
+            : data.error === "project_has_running_job"
+              ? "У проекта есть активная задача. Дождись завершения перед переносом на другой агент."
+              : data.error || "Job start failed.";
+      setChatNoticeOk(false);
+      setChatNotice(errorMessage);
       return;
     }
     const data = await response.json();
-    const savedRepoId = isNew ? data.repoId as string | undefined : selectedRepo?.id;
-    const savedAgentId = isNew ? targetAgent.id : selectedRepo?.agentId ?? targetAgent.id;
-    await refresh();
+    const savedRepoId = isNew ? data.repoId as string | undefined : (data.repoId as string | undefined) ?? selectedRepo?.id;
+    const savedAgentId = isNew ? targetAgent.id : (data.agentId as string | undefined) ?? selectedRepo?.agentId ?? targetAgent.id;
+    const savedRepoKey = savedRepoId && savedAgentId ? `${savedAgentId}:${savedRepoId}` : "";
+    const nextRepos = await refresh(savedRepoKey ? { keepRepoKey: savedRepoKey } : {});
+    if (!isNew && savedRepoKey) {
+      setRepoKey(savedRepoKey);
+      const nextRepo = nextRepos?.find((repo: Repo) => repoKeyFor(repo) === savedRepoKey);
+      if (nextRepo) {
+        saveProjectState(nextRepo);
+        await loadChats(nextRepo, false, { showLoading: true });
+      }
+    }
     if (isNew && data.repoId) {
       setRepoKey(`${targetAgent.id}:${data.repoId}`);
       setSandbox("danger-full-access");
@@ -5003,10 +6070,11 @@ function App() {
   }
 
   async function runGitSync() {
-    if (!selectedRepo || !csrf || !gitMessage.trim() || launchBusy || projectActionBusyRef.current.gitSync) return;
+    const commitMessage = effectiveGitMessage.trim();
+    if (!selectedRepo || !csrf || !commitMessage || launchBusy || projectActionBusyRef.current.gitSync) return;
     projectActionBusyRef.current.gitSync = true;
     const targetChatId = activeChatId || activeChat?.id || "";
-    const operationDetails = [`Сообщение коммита: \`${safeMarkdownInlineCode(gitMessage.trim())}\`.`];
+    const operationDetails = [`Сообщение коммита: \`${safeMarkdownInlineCode(commitMessage)}\`.`];
     const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("git-sync", "Commit & push", operationDetails, targetChatId) : "";
     setGitBusy(true);
     setActionMenuOpen(false);
@@ -5017,7 +6085,7 @@ function App() {
         method: "POST",
         headers: { "x-csrf-token": csrf },
         body: JSON.stringify({
-          message: gitMessage.trim(),
+          message: commitMessage,
           remoteUrl: gitRemoteUrl.trim() || selectedRepo.githubUrl || undefined,
           chatId: targetChatId || undefined
         })
@@ -5072,13 +6140,239 @@ function App() {
     setVscodeNotice(data.output || (options.auto ? "VS Code chat refreshed." : "VS Code bridge command completed."));
   }
 
-  async function openProjectFile(path: string) {
+  async function loadProjectFileList(repo = selectedRepo): Promise<ProjectFileEntry[]> {
+    if (!repo) return [];
+    const fileRepoKey = `${repo.agentId}:${repo.id}`;
+    setProjectFilesLoading(true);
+    setProjectFilesError("");
+    try {
+      const response = await api(`/api/projects/${encodeURIComponent(repo.agentId)}/${encodeURIComponent(repo.id)}/files/list`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setProjectFilesError(data.error || "Не получилось загрузить файлы проекта.");
+        setProjectFiles([]);
+        setProjectFilesRepoKey(fileRepoKey);
+        return [];
+      }
+      const entries: ProjectFileEntry[] = Array.isArray(data.entries)
+        ? data.entries.filter((entry: ProjectFileEntry) => (
+            entry
+            && typeof entry.path === "string"
+            && typeof entry.name === "string"
+            && (entry.type === "file" || entry.type === "directory")
+            && typeof entry.depth === "number"
+          ))
+        : [];
+      setProjectFiles(entries);
+      setProjectFilesRepoKey(fileRepoKey);
+      return entries;
+    } catch (error) {
+      setProjectFilesError(error instanceof Error ? error.message : "Не получилось загрузить файлы проекта.");
+      setProjectFiles([]);
+      setProjectFilesRepoKey(fileRepoKey);
+      return [];
+    } finally {
+      setProjectFilesLoading(false);
+    }
+  }
+
+  function preferredProjectFile(entries: ProjectFileEntry[]) {
+    const files = entries.filter((entry) => entry.type === "file");
+    const byPath = new Map(files.map((entry) => [entry.path.toLowerCase(), entry]));
+    const priority = [
+      "src/main.tsx",
+      "src/main.ts",
+      "src/app.tsx",
+      "src/app.ts",
+      "src/app.js",
+      "src/index.tsx",
+      "src/index.ts",
+      "src/index.js",
+      "package.json",
+      "readme.md",
+      "index.html"
+    ];
+    for (const path of priority) {
+      const match = byPath.get(path);
+      if (match) return match;
+    }
+    return files.find((entry) => /\.(tsx?|jsx?|css|html|md|json|mjs|cjs)$/i.test(entry.path)) ?? files[0];
+  }
+
+  function expandProjectFoldersForFile(path: string) {
+    const ancestors = fileFolderAncestors(path);
+    if (!ancestors.length) return;
+    setExpandedProjectFolders((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const ancestor of ancestors) {
+        if (!next[ancestor]) {
+          next[ancestor] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }
+
+  function toggleProjectFolder(path: string) {
+    const folderPath = normalizeProjectFilePath(path);
+    if (!folderPath) return;
+    setExpandedProjectFolders((current) => ({
+      ...current,
+      [folderPath]: !current[folderPath]
+    }));
+  }
+
+  async function openProjectIde(chat?: Chat) {
     if (!selectedRepo) return;
-    const filePath = projectFilePathFromReference(path, {
+    setMobileMenuOpen(false);
+    setView("projects");
+    setProjectPanel(null);
+    setChatProperties(null);
+    setChatMenuId("");
+    setIdeChatPanelOpen(true);
+    setIdeChatNotice("");
+    if (chat) await loadChat(chat.id, undefined, true).catch(() => undefined);
+    const currentFileRepoKey = `${selectedRepo.agentId}:${selectedRepo.id}`;
+    const entries = projectFilesRepoKey === currentFileRepoKey && projectFiles.length
+      ? projectFiles
+      : await loadProjectFileList(selectedRepo);
+    const filesByPath = new Map(entries.filter((entry) => entry.type === "file").map((entry) => [normalizeProjectFilePath(entry.path).toLowerCase(), entry]));
+    const storedIdeState = readStoredIdeProjectState(selectedRepo);
+    const storedOpenPaths = (storedIdeState?.openFilePaths ?? [])
+      .map(normalizeProjectFilePath)
+      .filter((path) => filesByPath.has(path.toLowerCase()));
+    const storedActivePath = storedIdeState?.activeFilePath && filesByPath.has(normalizeProjectFilePath(storedIdeState.activeFilePath).toLowerCase())
+      ? normalizeProjectFilePath(storedIdeState.activeFilePath)
+      : "";
+    const restoredPaths = [...new Set([...storedOpenPaths, storedActivePath].filter(Boolean))].slice(-8);
+    if (storedIdeState) {
+      setExpandedProjectFolders(expandedFolderRecord([
+        ...(storedIdeState.expandedFolders ?? []),
+        ...(storedActivePath ? fileFolderAncestors(storedActivePath) : [])
+      ]));
+    }
+    const file = storedActivePath
+      ? filesByPath.get(storedActivePath.toLowerCase())
+      : preferredProjectFile(entries);
+    if (!file) {
+      setChatNoticeOk(false);
+      setChatNotice("В проекте пока нет файлов, которые можно открыть в IDE.");
+      return;
+    }
+    if (restoredPaths.length > 1) {
+      const activePath = normalizeProjectFilePath(file.path);
+      const pathsToOpen = [...restoredPaths.filter((path) => path !== activePath), activePath];
+      for (const path of pathsToOpen) {
+        await openProjectFile(path, selectedRepo);
+      }
+      return;
+    }
+    await openProjectFile(file.path, selectedRepo);
+  }
+
+  async function submitIdeChat(event: React.FormEvent) {
+    event.preventDefault();
+    if (!selectedRepo || !csrf || !ideChatPrompt.trim() || ideChatSending) return;
+    if (localCodexBusy || activeRunBusy) {
+      setIdeChatNotice("Codex сейчас занят. Новую задачу можно отправить после завершения текущей.");
+      return;
+    }
+    let targetChatId = activeChatId;
+    const promptText = ideChatPrompt.trim();
+    setIdeChatSending(true);
+    setIdeChatNotice("");
+    try {
+      if (!targetChatId) {
+        const chatResponse = await api("/api/chats", {
+          method: "POST",
+          headers: { "x-csrf-token": csrf },
+          body: JSON.stringify({
+            agentId: selectedRepo.agentId,
+            repoId: selectedRepo.id,
+            title: promptText.slice(0, 120)
+          })
+        });
+        const chatData = await chatResponse.json().catch(() => ({}));
+        if (!chatResponse.ok) {
+          setIdeChatNotice(chatData.error || "Не получилось создать чат для IDE.");
+          return;
+        }
+        targetChatId = chatData.chatId as string;
+        setActiveChatId(targetChatId);
+      }
+      const response = await api("/api/jobs", {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({
+          agentId: selectedRepo.agentId,
+          repoId: selectedRepo.id,
+          chatId: targetChatId,
+          prompt: promptText,
+          sandbox,
+          branchMode: "current",
+          kind: jobKind,
+          model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
+          reasoningEffort,
+          speed: jobKind === "codex" ? codexSpeed : undefined,
+          attachments: []
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setIdeChatNotice(data.error || "Не получилось отправить задачу из IDE.");
+        return;
+      }
+      setIdeChatPrompt("");
+      setIdeChatNotice("Задача отправлена.");
+      await loadChat(targetChatId, data.jobId);
+    } finally {
+      setIdeChatSending(false);
+    }
+  }
+
+  function setActiveFileEditor(next: ProjectFileEditor | null) {
+    setFileEditor(next);
+    if (!next) return;
+    expandProjectFoldersForFile(next.path);
+    setFileEditorTabs((current) => {
+      const key = editorFileKey(next);
+      const without = current.filter((tab) => editorFileKey(tab) !== key);
+      return [...without, next];
+    });
+  }
+
+  async function openProjectFile(path: string, repo = selectedRepo) {
+    if (!repo) return;
+    const currentFileRepoKey = `${repo.agentId}:${repo.id}`;
+    if (!projectFiles.length || projectFilesRepoKey !== currentFileRepoKey) void loadProjectFileList(repo);
+    const filePath = normalizeProjectFilePath(projectFilePathFromReference(path, {
       onFileReference: () => undefined,
-      projectRoot: selectedRepo.pathMasked
-    }) ?? path.replace(/\\/g, "/").replace(/^\.\/+/, "");
-    setFileEditor({
+      projectRoot: repo.pathMasked,
+      projectRoots: [
+        repo.pathMasked,
+        repo.serverPath
+      ],
+      projectReferenceNames: [
+        repo.id,
+        repo.name,
+        repo.domain
+      ]
+    }) ?? path);
+    const existingTab = fileEditorTabs.find((tab) => tab.agentId === repo.agentId && tab.repoId === repo.id && tab.path === filePath);
+    if (existingTab) {
+      setActiveFileEditor(existingTab);
+      setEditorFindQuery("");
+      setEditorFindIndex(0);
+      return;
+    }
+    setEditorFindQuery("");
+    setEditorFindIndex(0);
+    const loadingTab: ProjectFileEditor = {
+      agentId: repo.agentId,
+      repoId: repo.id,
+      repoName: repo.name,
       path: filePath,
       content: "",
       originalContent: "",
@@ -5086,40 +6380,60 @@ function App() {
       saving: false,
       notice: "",
       error: ""
-    });
+    };
+    setActiveFileEditor(loadingTab);
     try {
-      const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/read?path=${encodeURIComponent(filePath)}`);
+      const response = await api(`/api/projects/${encodeURIComponent(repo.agentId)}/${encodeURIComponent(repo.id)}/files/read?path=${encodeURIComponent(filePath)}`);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setFileEditor((current) => current && current.path === filePath
-          ? { ...current, loading: false, error: data.error || "Не получилось открыть файл." }
-          : current);
+        const failedTab = { ...loadingTab, loading: false, error: data.error || "Не получилось открыть файл." };
+        setFileEditor((current) => current && current.path === filePath ? failedTab : current);
+        setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(loadingTab) ? failedTab : tab));
         return;
       }
-      setFileEditor((current) => current && current.path === filePath
-        ? {
-            ...current,
-            path: data.path || filePath,
-            content: data.content ?? "",
-            originalContent: data.content ?? "",
-            loading: false,
-            notice: data.size !== undefined ? `${formatBytes(data.size)} loaded` : "Файл открыт.",
-            error: ""
-          }
-        : current);
+      const loadedTab: ProjectFileEditor = {
+        ...loadingTab,
+        path: data.path || filePath,
+        content: data.content ?? "",
+        originalContent: data.content ?? "",
+        binary: Boolean(data.binary),
+        mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
+        dataBase64: typeof data.dataBase64 === "string" ? data.dataBase64 : undefined,
+        size: typeof data.size === "number" ? data.size : undefined,
+        mtimeMs: typeof data.mtimeMs === "number" ? data.mtimeMs : undefined,
+        loading: false,
+        notice: data.size !== undefined ? `${formatBytes(data.size)} loaded` : "Файл открыт.",
+        error: ""
+      };
+      setFileEditor((current) => current && editorFileKey(current) === editorFileKey(loadingTab) ? loadedTab : current);
+      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(loadingTab) ? loadedTab : tab));
     } catch (error) {
-      setFileEditor((current) => current && current.path === filePath
-        ? { ...current, loading: false, error: error instanceof Error ? error.message : "Не получилось открыть файл." }
-        : current);
+      const failedTab = { ...loadingTab, loading: false, error: error instanceof Error ? error.message : "Не получилось открыть файл." };
+      setFileEditor((current) => current && current.path === filePath ? failedTab : current);
+      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(loadingTab) ? failedTab : tab));
+    }
+  }
+
+  function goToEditorFindMatch(index: number) {
+    if (!editorFindMatches.length) return;
+    const length = editorFindMatches.length;
+    setEditorFindIndex(((index % length) + length) % length);
+  }
+
+  function handleFileEditorScroll(event: React.UIEvent<HTMLTextAreaElement>) {
+    if (fileEditorGutterRef.current) {
+      fileEditorGutterRef.current.scrollTop = event.currentTarget.scrollTop;
     }
   }
 
   async function saveProjectFile() {
-    if (!selectedRepo || !fileEditor || fileEditor.loading || fileEditor.saving || !csrf) return;
-    const { path, content } = fileEditor;
+    if (!fileEditor || fileEditor.loading || fileEditor.saving || !csrf) return;
+    if (fileEditor.binary) return;
+    const { agentId, repoId, path, content } = fileEditor;
     setFileEditor((current) => current ? { ...current, saving: true, notice: "", error: "" } : current);
+    setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: true, notice: "", error: "" } : tab));
     try {
-      const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/write`, {
+      const response = await api(`/api/projects/${encodeURIComponent(agentId)}/${encodeURIComponent(repoId)}/files/write`, {
         method: "PUT",
         headers: { "content-type": "application/json", "x-csrf-token": csrf },
         body: JSON.stringify({ path, content })
@@ -5127,42 +6441,201 @@ function App() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         setFileEditor((current) => current ? { ...current, saving: false, error: data.error || "Не получилось сохранить файл." } : current);
+        setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: false, error: data.error || "Не получилось сохранить файл." } : tab));
         return;
       }
+      const patchSaved = (current: ProjectFileEditor) => ({
+        ...current,
+        path: data.path || path,
+        originalContent: content,
+        saving: false,
+        notice: data.size !== undefined ? `Сохранено: ${formatBytes(data.size)}` : "Файл сохранён.",
+        error: ""
+      });
       setFileEditor((current) => current
         ? {
-            ...current,
-            path: data.path || path,
-            originalContent: content,
-            saving: false,
-            notice: data.size !== undefined ? `Сохранено: ${formatBytes(data.size)}` : "Файл сохранён.",
-            error: ""
+            ...patchSaved(current),
+            content
           }
         : current);
+      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...patchSaved(tab), content } : tab));
       await refresh();
     } catch (error) {
       setFileEditor((current) => current
         ? { ...current, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." }
         : current);
+      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." } : tab));
     }
   }
 
-  function closeProjectFileEditor() {
-    if (!fileEditor) return;
+  function closeProjectFileTab(tab = fileEditor) {
+    if (!tab) return;
     if (
-      !fileEditor.loading
-      && !fileEditor.saving
-      && fileEditor.content !== fileEditor.originalContent
+      !tab.loading
+      && !tab.saving
+      && !tab.binary
+      && tab.content !== tab.originalContent
       && !window.confirm("Закрыть редактор без сохранения?")
     ) {
       return;
     }
+    const key = editorFileKey(tab);
+    setFileEditorTabs((current) => {
+      const nextTabs = current.filter((item) => editorFileKey(item) !== key);
+      if (fileEditor && editorFileKey(fileEditor) === key) {
+        const nextActive = nextTabs.at(-1) ?? null;
+        setFileEditor(nextActive);
+        if (nextActive) expandProjectFoldersForFile(nextActive.path);
+      }
+      return nextTabs;
+    });
+  }
+
+  function closeProjectFileEditor() {
+    const dirtyTabs = fileEditorTabs.filter((tab) => !tab.loading && !tab.saving && !tab.binary && tab.content !== tab.originalContent);
+    if (dirtyTabs.length && !window.confirm("Закрыть редактор без сохранения?")) return;
+    if (selectedRepo && fileEditor && fileEditor.agentId === selectedRepo.agentId && fileEditor.repoId === selectedRepo.id) {
+      saveIdeProjectState(selectedRepo, {
+        activeFilePath: fileEditor.path,
+        openFilePaths: fileEditorOpenPathSignature.split("\n").filter(Boolean),
+        expandedFolders: Object.entries(expandedProjectFolders).filter(([, isOpen]) => isOpen).map(([path]) => path)
+      });
+    }
     setFileEditor(null);
+    setFileEditorTabs([]);
+    setFileContextMenu(null);
+  }
+
+  async function copyProjectFileContent(entry: ProjectFileEntry) {
+    if (!selectedRepo) return;
+    try {
+      const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/read?path=${encodeURIComponent(entry.path)}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "File read failed.");
+      const text = data.binary ? fileShareUrl(selectedRepo, entry.path) : String(data.content ?? "");
+      await navigator.clipboard?.writeText(text);
+      setIdeChatNotice(data.binary ? "Ссылка на файл скопирована." : "Содержимое файла скопировано.");
+    } catch (error) {
+      setIdeChatNotice(error instanceof Error ? error.message : "Не получилось скопировать файл.");
+    }
+  }
+
+  async function pasteClipboardIntoFile(entry: ProjectFileEntry) {
+    if (!selectedRepo || !csrf) return;
+    const text = await navigator.clipboard?.readText().catch(() => "");
+    if (!text) {
+      setIdeChatNotice("В буфере обмена нет текста для вставки.");
+      return;
+    }
+    if (!window.confirm(`Заменить содержимое ${entry.path} текстом из буфера обмена?`)) return;
+    try {
+      const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/write`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ path: entry.path, content: text })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "File write failed.");
+      const patch = (tab: ProjectFileEditor): ProjectFileEditor => (
+        tab.path === entry.path && tab.agentId === selectedRepo.agentId && tab.repoId === selectedRepo.id
+          ? {
+              ...tab,
+              content: text,
+              originalContent: text,
+              binary: false,
+              mimeType: undefined,
+              dataBase64: undefined,
+              size: typeof data.size === "number" ? data.size : tab.size,
+              mtimeMs: typeof data.mtimeMs === "number" ? data.mtimeMs : tab.mtimeMs,
+              notice: "Вставлено из буфера обмена.",
+              error: ""
+            }
+          : tab
+      );
+      setFileEditor((current) => current ? patch(current) : current);
+      setFileEditorTabs((current) => current.map(patch));
+      setIdeChatNotice("Файл обновлён из буфера обмена.");
+      await loadProjectFileList(selectedRepo);
+    } catch (error) {
+      setIdeChatNotice(error instanceof Error ? error.message : "Не получилось вставить в файл.");
+    }
+  }
+
+  async function shareProjectFile(entry: ProjectFileEntry) {
+    if (!selectedRepo) return;
+    const url = fileShareUrl(selectedRepo, entry.path);
+    await navigator.clipboard?.writeText(url).catch(() => undefined);
+    setIdeChatNotice(`Ссылка на файл скопирована: ${url}`);
+  }
+
+  function openProjectFileInNewWindow(entry: ProjectFileEntry) {
+    if (!selectedRepo) return;
+    window.open(fileShareUrl(selectedRepo, entry.path), "_blank", "noopener,noreferrer");
+  }
+
+  function runIdeMenuAction(action?: () => void | Promise<void>) {
+    setIdeMenuOpen("");
+    if (action) void action();
+  }
+
+  function focusEditorFind() {
+    setIdeFindOpen(true);
+    window.setTimeout(() => editorFindInputRef.current?.focus(), 30);
+  }
+
+  function triggerEditorCommand(command: IdeEditorCommand) {
+    setIdeEditorCommand({ id: Date.now(), command });
+  }
+
+  function copyEditorPath(path: string) {
+    void navigator.clipboard?.writeText(path).catch(() => undefined);
+  }
+
+  function ideWorkspaceClassName() {
+    return [
+      "file-editor-workspace",
+      ideExplorerOpen ? "" : "without-explorer",
+      ideChatPanelOpen ? "with-chat" : ""
+    ].filter(Boolean).join(" ");
+  }
+
+  function runIdeCommandItem(item: { disabled?: boolean; run: () => void | Promise<void> }) {
+    if (item.disabled) return;
+    setIdeMenuOpen("");
+    setIdeCommandPaletteOpen(false);
+    setIdeCommandQuery("");
+    void item.run();
   }
 
   async function syncGit(event: React.FormEvent) {
     event.preventDefault();
     await runGitSync();
+  }
+
+  async function buildProject() {
+    if (!selectedRepo || !csrf || buildBusy) return;
+    setBuildBusy(true);
+    setBuildNotice("Build started...");
+    setActionMenuOpen(false);
+    setProjectActionsOpen(false);
+    try {
+      const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/build`, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: "{}"
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setBuildNotice(data.output || data.error || "Build failed.");
+        return;
+      }
+      setBuildNotice(data.output || "Build completed.");
+      await refresh();
+    } catch (error) {
+      setBuildNotice(error instanceof Error ? error.message : "Build failed.");
+    } finally {
+      setBuildBusy(false);
+    }
   }
 
   async function deployProject() {
@@ -5296,7 +6769,7 @@ function App() {
             "GitHub + push",
             `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`,
             {
-              message: gitMessage.trim() || `Launch ${selectedRepo.name}`,
+              message: effectiveGitMessage.trim() || `Launch ${selectedRepo.name}`,
               remoteUrl,
               createRemote: true,
               remoteVisibility: "private"
@@ -5735,23 +7208,7 @@ function App() {
           {searchType === "projects" ? (
             <div className="public-result-list">
               {searchProjects.map((project) => (
-                <article className="public-project-card" key={`${project.agentId}:${project.id}`}>
-                  <div>
-                    <h3>{project.name}</h3>
-                    <p>{project.domain || project.githubUrl || "Без публичного домена"}</p>
-                  </div>
-                  <div className="public-project-meta">
-                    <a href={project.author.profileUrl}><UserCircle size={15} /> {project.author.nickname || project.author.email}</a>
-                    <span>{project.chatCount} chats</span>
-                    {project.url && <a href={project.url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open result</a>}
-                  </div>
-                  <div className="public-chat-pills">
-                    {project.latestChats.map((chat) => (
-                      <button key={chat.id} type="button" onClick={() => void openPublicChat(chat)}>{chat.title}</button>
-                    ))}
-                    {!project.latestChats.length && <span className="small-empty">У проекта пока нет публичных чатов.</span>}
-                  </div>
-                </article>
+                <PublicProjectCard key={`${project.agentId}:${project.id}`} project={project} onOpenChat={openPublicChat} showAuthor />
               ))}
               {!searchProjects.length && <div className="empty">{emptyLabel}</div>}
             </div>
@@ -5794,7 +7251,7 @@ function App() {
         <header className="admin-header">
           <div>
             <span><ShieldCheck size={18} /> Admin</span>
-            <h1>codex.rodion.pro</h1>
+            <h1>xedoc.ru</h1>
             <p>{currentUser?.email}</p>
           </div>
           <div className="admin-header-actions">
@@ -6155,6 +7612,49 @@ function App() {
     if (projectWizardStep === "project") {
       return (
         <div className="wizard-step-panel">
+          <div className="wizard-hero">
+            <span>Fast start</span>
+            <strong>Создай проект на выбранном агенте и сразу открой его в IDE.</strong>
+            <small>По умолчанию Linux-проекты складываются в <code>/srv/codex-agent/projects/{defaultProjectOwnerSegment(currentUser)}/{projectSlug(projectName || "new-project")}</code>.</small>
+          </div>
+          <div className="wizard-mode-grid">
+            <button
+              className={!projectGithubUrl.trim() && projectDeployEnabled ? "active" : ""}
+              type="button"
+              onClick={() => {
+                setProjectGithubUrl("");
+                setProjectDeployEnabled(true);
+              }}
+            >
+              <FolderGit2 size={17} />
+              <span>
+                <strong>Blank server project</strong>
+                <small>Папка проекта создаётся на агенте, Git можно подключить позже.</small>
+              </span>
+            </button>
+            <button
+              className={projectGithubUrl.trim() ? "active" : ""}
+              type="button"
+              onClick={() => setProjectWizardStep("git")}
+            >
+              <Github size={17} />
+              <span>
+                <strong>Clone Git repo</strong>
+                <small>Укажи URL, агент склонирует репозиторий в выбранную папку.</small>
+              </span>
+            </button>
+            <button
+              className={!projectDeployEnabled ? "active" : ""}
+              type="button"
+              onClick={() => setProjectDeployEnabled(false)}
+            >
+              <Terminal size={17} />
+              <span>
+                <strong>Work only</strong>
+                <small>Без деплоя: удобно для библиотек, скриптов и экспериментов.</small>
+              </span>
+            </button>
+          </div>
           <label>
             Name
             <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
@@ -6186,6 +7686,11 @@ function App() {
     if (projectWizardStep === "git") {
       return (
         <div className="wizard-step-panel">
+          <div className="wizard-hero subtle">
+            <span>Optional</span>
+            <strong>Git URL нужен только если проект надо склонировать.</strong>
+            <small>Если оставить поле пустым, агент создаст пустую Git-папку. Commit & push можно настроить позже в меню проекта.</small>
+          </div>
           <label>
             GitHub repository
             <input placeholder="https://github.com/WizardJIOCb/project.git" value={projectGithubUrl} onChange={(event) => setProjectGithubUrl(event.target.value)} />
@@ -6323,6 +7828,16 @@ function App() {
           <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
         </label>
         <label>
+          Project agent
+          <select value={projectAgentId || selectedRepo?.agentId || ""} onChange={(event) => handleProjectAgentChange(event.target.value)}>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name} · {agent.status}{isLinuxAgent(agent) ? " · Linux" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           Folder on selected agent
           <input value={projectPath} onChange={(event) => handleProjectPathChange(event.target.value)} />
         </label>
@@ -6354,11 +7869,11 @@ function App() {
           ))}
         </div>
         {projectNotice && <div className="notice danger">{projectNotice}</div>}
-        {projectPanel === "settings" && selectedRepoAgent?.status !== "online" && (
+        {projectPanel === "settings" && !projectSaveAgentOnline && (
           <div className="notice">
             {projectSettingsNeedsAgent
-              ? "Агент проекта offline: сейчас можно сохранить только Public/Private для Search. Локальные поля сохранятся после подключения агента."
-              : "Агент проекта offline: Public/Private для Search можно сохранить прямо сейчас."}
+              ? "Выбранный агент offline: перенос проекта, имя, путь, GitHub, домен и sandbox сохранятся после подключения агента. Public/Private, Deploy и Data можно сохранить сейчас."
+              : "Агент проекта offline: Public/Private, Deploy и Data можно сохранить прямо сейчас."}
           </div>
         )}
         <div className="project-form-actions">
@@ -6404,6 +7919,31 @@ function App() {
                   {uiTheme === option.value && <Check size={16} />}
                 </button>
               ))}
+            </div>
+            <div className="editor-theme-setting">
+              <div className="settings-subhead">
+                <strong>Editor syntax theme</strong>
+                <small>{EDITOR_THEME_OPTIONS.find((option) => option.value === editorTheme)?.label}</small>
+              </div>
+              <div className="theme-grid editor-theme-grid">
+                {EDITOR_THEME_OPTIONS.map((option) => (
+                  <button
+                    className={editorTheme === option.value ? "theme-option active" : "theme-option"}
+                    key={option.value}
+                    type="button"
+                    onClick={() => setEditorTheme(option.value)}
+                  >
+                    <span className="theme-swatches" aria-hidden="true">
+                      {option.swatches.map((color) => <i key={color} style={{ background: color }} />)}
+                    </span>
+                    <span>
+                      <strong>{option.label}</strong>
+                      <small>{option.note}</small>
+                    </span>
+                    {editorTheme === option.value && <Check size={16} />}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <form className="settings-card" onSubmit={createAgent}>
@@ -6519,8 +8059,7 @@ function App() {
       reposByAgent.set(repo.agentId, current);
     });
     const repoKeyValue = syncRepo ? `${syncRepo.agentId}:${syncRepo.id}` : "";
-    const syncRepoAgent = syncRepo ? agents.find((agent) => agent.id === syncRepo.agentId) : undefined;
-    const controlAgent = syncRepoAgent ?? selectedAgent;
+    const controlAgent = syncControlAgent;
     const controlIsLinux = isLinuxAgent(controlAgent);
     const linuxAgent = agents.find((agent) => agent.id === "agent-linux") ?? agents.find((agent) => isLinuxAgent(agent));
     const agentSeenAt = formatDateTime(controlAgent?.last_seen_at);
@@ -6539,7 +8078,7 @@ function App() {
       {
         label: "Web service",
         ok: true,
-        value: "codex.rodion.pro отвечает"
+        value: "xedoc.ru отвечает"
       },
       {
         label: controlIsLinux ? "Linux server agent" : "Windows agent",
@@ -6573,7 +8112,7 @@ function App() {
         <section className="project-form wide">
           <div className="section-head">
             <h2><PlugZap size={18} /> Sync</h2>
-            <button className="secondary" type="button" onClick={refresh}><RefreshCw size={16} /> Refresh</button>
+            <button className="secondary" type="button" onClick={() => void refresh()}><RefreshCw size={16} /> Refresh</button>
           </div>
 
           <div className="settings-card sync-setup-card">
@@ -6636,11 +8175,13 @@ function App() {
                 const lastSeen = formatDateTime(agent.last_seen_at);
                 const canDeleteAgent = !agentOnline && agentRepos.length === 0;
                 const projectAgent = syncRepo?.agentId === agent.id;
+                const currentProjectAgent = selectedRepo?.agentId === agent.id;
                 return (
                   <article className={`agent-connection ${agentOnline ? "online" : "offline"} ${projectAgent ? "project-active" : ""}`} key={agent.id}>
                     <div className="agent-connection-title">
                       <span className={`status ${agentOnline ? "ok" : "bad"}`}>{agentOnline ? <Wifi size={14} /> : <WifiOff size={14} />} {agentOnline ? "Online" : "Offline"}</span>
-                      {projectAgent && <span className="agent-project-badge"><CheckCircle2 size={14} /> Активен для проекта</span>}
+                      {projectAgent && <span className="agent-project-badge"><CheckCircle2 size={14} /> Выбран для Sync</span>}
+                      {currentProjectAgent && <span className="agent-project-badge"><FolderGit2 size={14} /> Агент проекта</span>}
                       <strong>{agent.name}</strong>
                     </div>
                     <div className="agent-connection-meta">
@@ -6655,6 +8196,15 @@ function App() {
                         if (firstRepo) setSyncRepoKey(`${firstRepo.agentId}:${firstRepo.id}`);
                       }}>
                         <Check size={14} /> {projectAgent ? "Выбран" : "Выбрать"}
+                      </button>
+                      <button
+                        className="secondary compact"
+                        disabled={busy || !selectedRepo || currentProjectAgent || !agentOnline}
+                        title={selectedRepo ? `Перенести ${selectedRepo.name} на ${agent.name}` : "Сначала выбери проект слева"}
+                        type="button"
+                        onClick={() => void moveSelectedProjectToAgent(agent)}
+                      >
+                        <UploadCloud size={14} /> Агент проекта
                       </button>
                       <button className="secondary compact" disabled={busy || agentOnline} type="button" onClick={() => void downloadAgentSetup(agent)}>
                         <Download size={14} /> Setup
@@ -7053,10 +8603,11 @@ function App() {
 
   function renderProjectActionNotices(className = "cockpit-notices") {
     if (activeChat) return null;
-    if (!(gitNotice || launchNotice || deployNotice || nginxNotice || sslNotice)) return null;
+    if (!(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice)) return null;
     return (
       <div className={className}>
         {gitNotice && <pre>{gitNotice}</pre>}
+        {buildNotice && <pre>{buildNotice}</pre>}
         {launchNotice && <pre>{launchNotice}</pre>}
         {deployNotice && <pre>{deployNotice}</pre>}
         {nginxNotice && <pre>{nginxNotice}</pre>}
@@ -7161,6 +8712,8 @@ function App() {
     const currentModelOptions = modelOptionsForKind(jobKind);
     const selectedModel = modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel);
     const selectedModelLabel = currentModelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel;
+    const selectedRunner = RUNNER_OPTIONS.find((option) => option.value === jobKind)
+      ?? { value: "codex" as const, label: "Codex", note: "OpenAI Codex CLI" };
     const selectedReasoningLabel = REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label ?? reasoningEffort;
     const selectedSpeedLabel = SPEED_OPTIONS.find((option) => option.value === codexSpeed)?.label ?? codexSpeed;
     const currentModeSummary = runnerSettingsSummary(jobKind, selectedModelLabel, selectedReasoningLabel, selectedSpeedLabel);
@@ -7249,16 +8802,17 @@ function App() {
           <div className="action-control" ref={actionControlRef}>
             <button
               aria-expanded={actionMenuOpen}
-              aria-label="Message actions"
-              className="action-trigger"
-              title="Actions"
+              aria-label={`Selected agent: ${selectedRunner.label}`}
+              className="runner-indicator"
+              title={currentModeSummary}
               type="button"
               onClick={() => {
                 setSandboxMenuOpen(false);
                 setActionMenuOpen((value) => !value);
               }}
             >
-              <MoreHorizontal size={18} />
+              <Bot size={16} />
+              <span>{selectedRunner.label}</span>
             </button>
             {actionMenuOpen && (
               <div className="action-menu" role="menu">
@@ -7349,18 +8903,48 @@ function App() {
                 </button>
                 {actionGitOptionsOpen && (
                   <div className="action-menu-fields" role="none">
-                    <label>
-                      <span>Commit message</span>
-                      <input
-                        aria-label="Commit message"
-                        placeholder="Commit message"
-                        value={gitMessage}
-                        onChange={(event) => setGitMessage(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") event.preventDefault();
-                        }}
-                      />
-                    </label>
+                    <div className="git-message-mode" role="group" aria-label="Commit message mode">
+                      <button className={gitMessageMode === "auto" ? "active" : ""} type="button" onClick={() => setGitMessageMode("auto")}>
+                        Auto
+                      </button>
+                      <button className={gitMessageMode === "custom" ? "active" : ""} type="button" onClick={() => setGitMessageMode("custom")}>
+                        Custom
+                      </button>
+                    </div>
+                    <div className="git-message-preview" title={effectiveGitMessage}>
+                      <span>Commit</span>
+                      <strong>{effectiveGitMessage || "Message is empty"}</strong>
+                    </div>
+                    {gitMessageMode === "auto" ? (
+                      <>
+                        <label>
+                          <span>Template</span>
+                          <input
+                            aria-label="Commit message template"
+                            placeholder="{project}: {summary}"
+                            value={gitMessageTemplate}
+                            onChange={(event) => setGitMessageTemplate(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") event.preventDefault();
+                            }}
+                          />
+                        </label>
+                        <div className="menu-summary">Variables: {"{project}"}, {"{summary}"}, {"{branch}"}, {"{chat}"}</div>
+                      </>
+                    ) : (
+                      <label>
+                        <span>Commit message</span>
+                        <input
+                          aria-label="Commit message"
+                          placeholder="Commit message"
+                          value={gitMessage}
+                          onChange={(event) => setGitMessage(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") event.preventDefault();
+                          }}
+                        />
+                      </label>
+                    )}
                     <label>
                       <span>Remote URL</span>
                       <input
@@ -7376,15 +8960,20 @@ function App() {
                   </div>
                 )}
                 <div className="menu-divider" />
-                <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
+                <button className="project-menu-action" disabled={launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
                   <Rocket size={16} />
                   <span className="step-badge">1-4</span>
                   <span>Launch</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || gitBusy || !gitMessage.trim()} role="menuitem" type="button" onClick={runGitSync}>
+                <button className="project-menu-action" disabled={launchBusy || gitBusy || !effectiveGitMessage.trim()} role="menuitem" type="button" onClick={runGitSync}>
                   <UploadCloud size={16} />
                   <span className="step-badge">1</span>
                   <span>Commit & push</span>
+                </button>
+                <button className="project-menu-action" disabled={launchBusy || buildBusy} role="menuitem" type="button" onClick={buildProject}>
+                  <Terminal size={16} />
+                  <span className="step-badge">B</span>
+                  <span>Build</span>
                 </button>
                 <button className="project-menu-action" disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={deployProject}>
                   <UploadCloud size={16} />
@@ -7448,12 +9037,554 @@ function App() {
     );
   }
 
+  function renderIdeMenuItem({
+    icon,
+    label,
+    shortcut,
+    checked,
+    disabled,
+    onClick
+  }: {
+    icon?: React.ReactNode;
+    label: string;
+    shortcut?: string;
+    checked?: boolean;
+    disabled?: boolean;
+    onClick?: () => void | Promise<void>;
+  }) {
+    return (
+      <button
+        className={checked ? "ide-menu-item checked" : "ide-menu-item"}
+        disabled={disabled}
+        role="menuitem"
+        type="button"
+        onClick={() => runIdeMenuAction(onClick)}
+      >
+        <span className="ide-menu-check">{checked ? <Check size={14} /> : icon}</span>
+        <span>{label}</span>
+        {shortcut && <kbd>{shortcut}</kbd>}
+      </button>
+    );
+  }
+
+  function renderIdeMenuGroup(id: string, label: string, children: React.ReactNode) {
+    return (
+      <div className="ide-menu" key={id}>
+        <button
+          className={ideMenuOpen === id ? "ide-menu-trigger active" : "ide-menu-trigger"}
+          type="button"
+          onClick={() => setIdeMenuOpen((current) => current === id ? "" : id)}
+        >
+          {label}
+        </button>
+        {ideMenuOpen === id && (
+          <div className="ide-menu-dropdown" role="menu">
+            {children}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderIdeMenubar(editor: ProjectFileEditor) {
+    const outputAvailable = Boolean(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice);
+    return (
+      <nav className="file-editor-menubar" ref={ideMenuRef} aria-label="Xedoc IDE menu">
+        <div className="ide-menu-brand">
+          <img src="/favicon.svg" alt="" />
+          <span>Xedoc IDE</span>
+        </div>
+        {renderIdeMenuGroup("file", "File", (
+          <>
+            {renderIdeMenuItem({
+              icon: <Save size={14} />,
+              label: "Save",
+              shortcut: "Ctrl+S",
+              disabled: !csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent,
+              onClick: saveProjectFile
+            })}
+            {renderIdeMenuItem({
+              icon: <RefreshCw size={14} />,
+              label: "Reload File",
+              disabled: editor.loading || editor.saving,
+              onClick: () => openProjectFile(editor.path)
+            })}
+            {renderIdeMenuItem({
+              icon: <FilePenLine size={14} />,
+              label: "Copy File Path",
+              onClick: () => copyEditorPath(editor.path)
+            })}
+            <div className="ide-menu-divider" />
+            {renderIdeMenuItem({
+              icon: <ExternalLink size={14} />,
+              label: "Open Project Site",
+              disabled: !selectedProjectUrl,
+              onClick: () => {
+                if (selectedProjectUrl) window.open(selectedProjectUrl, "_blank", "noopener,noreferrer");
+              }
+            })}
+            {renderIdeMenuItem({
+              icon: <Settings size={14} />,
+              label: "Project Settings",
+              disabled: !selectedRepo,
+              onClick: () => selectedRepo && openProjectSettings(selectedRepo)
+            })}
+            <div className="ide-menu-divider" />
+            {renderIdeMenuItem({
+              icon: <X size={14} />,
+              label: "Close Editor",
+              onClick: closeProjectFileEditor
+            })}
+          </>
+        ))}
+        {renderIdeMenuGroup("edit", "Edit", (
+          <>
+            {renderIdeMenuItem({
+              icon: <Search size={14} />,
+              label: "Find in File",
+              shortcut: "Ctrl+F",
+              onClick: focusEditorFind
+            })}
+            {renderIdeMenuItem({
+              icon: <ArrowDown size={14} />,
+              label: "Next Match",
+              shortcut: "Enter",
+              disabled: !editorFindMatches.length,
+              onClick: () => goToEditorFindMatch(editorFindIndex + 1)
+            })}
+            {renderIdeMenuItem({
+              icon: <ArrowUp size={14} />,
+              label: "Previous Match",
+              shortcut: "Shift+Enter",
+              disabled: !editorFindMatches.length,
+              onClick: () => goToEditorFindMatch(editorFindIndex - 1)
+            })}
+            <div className="ide-menu-divider" />
+            {renderIdeMenuItem({
+              icon: <FilePenLine size={14} />,
+              label: "Select All",
+              shortcut: "Ctrl+A",
+              onClick: () => triggerEditorCommand("selectAll")
+            })}
+            {renderIdeMenuItem({
+              icon: <SlidersHorizontal size={14} />,
+              label: "Format Document",
+              shortcut: "Shift+Alt+F",
+              onClick: () => triggerEditorCommand("format")
+            })}
+          </>
+        ))}
+        {renderIdeMenuGroup("selection", "Selection", (
+          <>
+            {renderIdeMenuItem({
+              icon: <FilePenLine size={14} />,
+              label: "Focus Editor",
+              onClick: () => triggerEditorCommand("focus")
+            })}
+            {renderIdeMenuItem({
+              icon: <FilePenLine size={14} />,
+              label: "Select All",
+              shortcut: "Ctrl+A",
+              onClick: () => triggerEditorCommand("selectAll")
+            })}
+          </>
+        ))}
+        {renderIdeMenuGroup("view", "View", (
+          <>
+            {renderIdeMenuItem({
+              icon: <Terminal size={14} />,
+              label: "Command Palette...",
+              shortcut: "Ctrl+Shift+P",
+              onClick: () => setIdeCommandPaletteOpen(true)
+            })}
+            <div className="ide-menu-divider" />
+            {renderIdeMenuItem({
+              icon: <FolderGit2 size={14} />,
+              label: "Explorer",
+              checked: ideExplorerOpen,
+              onClick: () => setIdeExplorerOpen((value) => !value)
+            })}
+            {renderIdeMenuItem({
+              icon: <Search size={14} />,
+              label: "Search",
+              checked: ideFindOpen,
+              onClick: () => {
+                setIdeFindOpen((value) => !value);
+                if (!ideFindOpen) window.setTimeout(() => editorFindInputRef.current?.focus(), 30);
+              }
+            })}
+            {renderIdeMenuItem({
+              icon: <MessageSquare size={14} />,
+              label: "Codex Chat",
+              checked: ideChatPanelOpen,
+              onClick: () => setIdeChatPanelOpen((value) => !value)
+            })}
+            {renderIdeMenuItem({
+              icon: <Terminal size={14} />,
+              label: "Output",
+              checked: ideOutputOpen,
+              disabled: !outputAvailable,
+              onClick: () => setIdeOutputOpen((value) => !value)
+            })}
+            <div className="ide-menu-divider" />
+            {renderIdeMenuItem({
+              icon: fileEditorFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />,
+              label: fileEditorFullscreen ? "Exit Full Screen" : "Full Screen",
+              shortcut: "F11",
+              checked: fileEditorFullscreen,
+              onClick: () => setFileEditorFullscreen((value) => !value)
+            })}
+            <div className="ide-menu-divider" />
+            <span className="ide-menu-title">Syntax Theme</span>
+            {EDITOR_THEME_OPTIONS.map((option) => (
+              <button
+                className={editorTheme === option.value ? "ide-menu-item checked theme" : "ide-menu-item theme"}
+                key={option.value}
+                role="menuitemradio"
+                aria-checked={editorTheme === option.value}
+                type="button"
+                onClick={() => {
+                  setEditorTheme(option.value);
+                  setIdeMenuOpen("");
+                }}
+              >
+                <span className="ide-theme-swatch" aria-hidden="true">
+                  {option.swatches.slice(0, 3).map((color) => <i key={color} style={{ background: color }} />)}
+                </span>
+                <span>{option.label}</span>
+                {editorTheme === option.value && <Check size={14} />}
+              </button>
+            ))}
+          </>
+        ))}
+        {renderIdeMenuGroup("go", "Go", (
+          <>
+            {renderIdeMenuItem({
+              icon: <ArrowUp size={14} />,
+              label: "Previous Search Match",
+              disabled: !editorFindMatches.length,
+              onClick: () => goToEditorFindMatch(editorFindIndex - 1)
+            })}
+            {renderIdeMenuItem({
+              icon: <ArrowDown size={14} />,
+              label: "Next Search Match",
+              disabled: !editorFindMatches.length,
+              onClick: () => goToEditorFindMatch(editorFindIndex + 1)
+            })}
+            <div className="ide-menu-divider" />
+            {renderIdeMenuItem({
+              icon: <FolderGit2 size={14} />,
+              label: "Refresh Explorer",
+              disabled: projectFilesLoading || !selectedRepo,
+              onClick: () => {
+                if (selectedRepo) void loadProjectFileList(selectedRepo);
+              }
+            })}
+          </>
+        ))}
+        {renderIdeMenuGroup("run", "Run", (
+          <>
+            {renderIdeMenuItem({
+              icon: <Terminal size={14} />,
+              label: "Build",
+              disabled: buildBusy || !selectedRepo,
+              onClick: buildProject
+            })}
+            {renderIdeMenuItem({
+              icon: <Rocket size={14} />,
+              label: "Launch",
+              disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo),
+              onClick: launchProject
+            })}
+            <div className="ide-menu-divider" />
+            {renderIdeMenuItem({
+              icon: <GitBranch size={14} />,
+              label: "Commit & Push",
+              disabled: !selectedRepo || gitBusy || !effectiveGitMessage.trim(),
+              onClick: runGitSync
+            })}
+            {renderIdeMenuItem({
+              icon: <UploadCloud size={14} />,
+              label: "Deploy",
+              disabled: deployBusy || !selectedRepo || !hasDeployConfig(selectedRepo),
+              onClick: deployProject
+            })}
+            {renderIdeMenuItem({
+              icon: <Settings size={14} />,
+              label: "Configure Nginx",
+              disabled: nginxBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain,
+              onClick: configureNginx
+            })}
+            {renderIdeMenuItem({
+              icon: <ShieldCheck size={14} />,
+              label: "Issue SSL",
+              disabled: sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain,
+              onClick: configureSsl
+            })}
+          </>
+        ))}
+        {renderIdeMenuGroup("terminal", "Terminal", (
+          <>
+            {renderIdeMenuItem({
+              icon: <Terminal size={14} />,
+              label: "Show Output",
+              checked: ideOutputOpen,
+              disabled: !outputAvailable,
+              onClick: () => setIdeOutputOpen(true)
+            })}
+            {renderIdeMenuItem({
+              icon: <Terminal size={14} />,
+              label: "Run Build",
+              disabled: buildBusy || !selectedRepo,
+              onClick: buildProject
+            })}
+            <div className="ide-menu-divider" />
+            {renderIdeMenuItem({
+              icon: <PanelLeftOpen size={14} />,
+              label: "Open VS Code Codex",
+              disabled: vscodeBusy,
+              onClick: () => runVscodeCommand("openSidebar")
+            })}
+          </>
+        ))}
+        {renderIdeMenuGroup("help", "Help", (
+          <>
+            {renderIdeMenuItem({
+              icon: <Terminal size={14} />,
+              label: "Command Palette...",
+              onClick: () => setIdeCommandPaletteOpen(true)
+            })}
+            {renderIdeMenuItem({
+              icon: <ExternalLink size={14} />,
+              label: "Open xedoc.ru",
+              onClick: () => {
+                window.open("https://xedoc.ru", "_blank", "noopener,noreferrer");
+              }
+            })}
+            <div className="ide-menu-divider" />
+            <span className="ide-menu-title">Xedoc service menu</span>
+            <div className="ide-menu-note">Project files, Codex chat, deploy, nginx and SSL live here.</div>
+          </>
+        ))}
+        <span className="ide-menu-spacer" />
+        <button className="ide-menu-pill" type="button" onClick={() => setIdeChatPanelOpen((value) => !value)}>
+          <MessageSquare size={13} />
+          {ideChatPanelOpen ? "Chat on" : "Chat off"}
+        </button>
+        <span className="ide-menu-status">{editorThemeLabel(editorTheme)}</span>
+      </nav>
+    );
+  }
+
+  function renderIdeCommandPalette(editor: ProjectFileEditor) {
+    if (!ideCommandPaletteOpen) return null;
+    const commandItems = [
+      { group: "File", label: "Save current file", shortcut: "Ctrl+S", disabled: !csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent, run: saveProjectFile },
+      { group: "File", label: "Reload current file", run: () => openProjectFile(editor.path) },
+      { group: "File", label: "Copy file path", run: () => copyEditorPath(editor.path) },
+      { group: "Edit", label: "Find in file", shortcut: "Ctrl+F", run: focusEditorFind },
+      { group: "Edit", label: "Format document", shortcut: "Shift+Alt+F", run: () => triggerEditorCommand("format") },
+      { group: "View", label: ideExplorerOpen ? "Hide Explorer" : "Show Explorer", run: () => setIdeExplorerOpen((value) => !value) },
+      { group: "View", label: ideChatPanelOpen ? "Hide Codex Chat" : "Show Codex Chat", run: () => setIdeChatPanelOpen((value) => !value) },
+      { group: "View", label: "Show Output", disabled: !(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice), run: () => setIdeOutputOpen(true) },
+      { group: "View", label: fileEditorFullscreen ? "Exit Full Screen" : "Full Screen", shortcut: "F11", run: () => setFileEditorFullscreen((value) => !value) },
+      { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo, run: buildProject },
+      { group: "Run", label: "Launch project", disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: launchProject },
+      { group: "Project", label: "Commit & Push", disabled: !selectedRepo || gitBusy || !effectiveGitMessage.trim(), run: runGitSync },
+      { group: "Project", label: "Deploy", disabled: deployBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: deployProject },
+      { group: "Project", label: "Configure Nginx", disabled: nginxBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureNginx },
+      { group: "Project", label: "Issue SSL", disabled: sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureSsl },
+      { group: "Help", label: "Open xedoc.ru", run: () => window.open("https://xedoc.ru", "_blank", "noopener,noreferrer") }
+    ];
+    const query = ideCommandQuery.trim().toLowerCase();
+    const visibleItems = query
+      ? commandItems.filter((item) => `${item.group} ${item.label}`.toLowerCase().includes(query))
+      : commandItems;
+    return (
+      <div className="ide-command-backdrop" role="dialog" aria-modal="true" aria-label="Command Palette" onClick={() => setIdeCommandPaletteOpen(false)}>
+        <div className="ide-command-palette" onClick={(event) => event.stopPropagation()}>
+          <label>
+            <Terminal size={16} />
+            <input
+              ref={ideCommandInputRef}
+              placeholder="Type a command"
+              value={ideCommandQuery}
+              onChange={(event) => setIdeCommandQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                const firstEnabled = visibleItems.find((item) => !item.disabled);
+                if (firstEnabled) runIdeCommandItem(firstEnabled);
+              }}
+            />
+          </label>
+          <div className="ide-command-list">
+            {visibleItems.map((item) => (
+              <button
+                disabled={item.disabled}
+                key={`${item.group}:${item.label}`}
+                type="button"
+                onClick={() => runIdeCommandItem(item)}
+              >
+                <span>
+                  <strong>{item.label}</strong>
+                  <small>{item.group}</small>
+                </span>
+                {item.shortcut && <kbd>{item.shortcut}</kbd>}
+              </button>
+            ))}
+            {!visibleItems.length && <div className="ide-command-empty">No commands found</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderFileEditorTabs() {
+    if (!fileEditorTabs.length || !fileEditor) return null;
+    return (
+      <div className="file-editor-tabs" role="tablist" aria-label="Open files">
+        {fileEditorTabs.map((tab) => {
+          const active = editorFileKey(tab) === editorFileKey(fileEditor);
+          const dirty = !tab.binary && tab.content !== tab.originalContent;
+          return (
+            <button
+              className={active ? "file-editor-tab active" : "file-editor-tab"}
+              key={editorFileKey(tab)}
+              role="tab"
+              aria-selected={active}
+              title={tab.path}
+              type="button"
+              onClick={() => {
+                setFileEditor(tab);
+                expandProjectFoldersForFile(tab.path);
+                setEditorFindQuery("");
+                setEditorFindIndex(0);
+              }}
+            >
+              {tab.binary ? <Camera size={13} /> : <FilePenLine size={13} />}
+              <span>{tab.path.split("/").pop() || tab.path}</span>
+              {dirty && <i aria-label="Unsaved changes" />}
+              <span
+                className="tab-close"
+                role="button"
+                tabIndex={0}
+                title="Close tab"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  closeProjectFileTab(tab);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  closeProjectFileTab(tab);
+                }}
+              >
+                <X size={12} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderImagePreview(editor: ProjectFileEditor) {
+    const src = imageDataUrl(editor);
+    if (!src) {
+      return (
+        <div className="image-preview-pane empty-preview">
+          <Camera size={26} />
+          <strong>Preview недоступен</strong>
+          <small>{editor.mimeType || "Unknown image type"}</small>
+        </div>
+      );
+    }
+    return (
+      <figure className="image-preview-pane">
+        <img alt={editor.path} src={src} />
+        <figcaption>
+          <strong>{editor.path}</strong>
+          <span>{editor.mimeType} · {editor.size !== undefined ? formatBytes(editor.size) : "image"}</span>
+        </figcaption>
+      </figure>
+    );
+  }
+
+  function renderFileContextMenu() {
+    if (!fileContextMenu || !selectedRepo) return null;
+    const { entry, x, y } = fileContextMenu;
+    const image = Boolean(imageMimeTypeFromPath(entry.path));
+    return (
+      <div
+        className="file-context-menu"
+        style={{ left: x, top: y }}
+        role="menu"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void openProjectFile(entry.path); }}>
+          <FilePenLine size={14} /> Open
+        </button>
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void openProjectFile(entry.path); }}>
+          <PanelLeftOpen size={14} /> Open in tab
+        </button>
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); openProjectFileInNewWindow(entry); }}>
+          <ExternalLink size={14} /> Open in new window
+        </button>
+        <div className="ide-menu-divider" />
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void navigator.clipboard?.writeText(entry.path); }}>
+          <FilePenLine size={14} /> Copy path
+        </button>
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void copyProjectFileContent(entry); }}>
+          <FilePenLine size={14} /> {image ? "Copy share link" : "Copy content"}
+        </button>
+        <button type="button" role="menuitem" disabled={image} onClick={() => { setFileContextMenu(null); void pasteClipboardIntoFile(entry); }}>
+          <UploadCloud size={14} /> Paste into file
+        </button>
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void shareProjectFile(entry); }}>
+          <Link2 size={14} /> Share file link
+        </button>
+        <div className="ide-menu-divider" />
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); setFileProperties(entry); }}>
+          <Settings size={14} /> Properties
+        </button>
+      </div>
+    );
+  }
+
+  function renderFileProperties() {
+    if (!fileProperties) return null;
+    return (
+      <div className="file-properties-popover" role="dialog" aria-label="File properties">
+        <div>
+          <header>
+            <strong>{fileProperties.name}</strong>
+            <button className="icon tiny" type="button" onClick={() => setFileProperties(null)}><X size={14} /></button>
+          </header>
+          <dl>
+            <dt>Path</dt>
+            <dd>{fileProperties.path}</dd>
+            <dt>Type</dt>
+            <dd>{fileProperties.type}</dd>
+            <dt>Size</dt>
+            <dd>{fileProperties.size !== undefined ? formatBytes(fileProperties.size) : "n/a"}</dd>
+            <dt>Modified</dt>
+            <dd>{fileProperties.mtimeMs ? new Date(fileProperties.mtimeMs).toLocaleString() : "n/a"}</dd>
+            <dt>Preview</dt>
+            <dd>{imageMimeTypeFromPath(fileProperties.path) || "text/file"}</dd>
+          </dl>
+        </div>
+      </div>
+    );
+  }
+
   if (!csrf) {
     return (
       <main className="login">
         <section className="login-panel">
           <img className="brand-logo large" src="/favicon.svg" alt="" />
-          <h1>Codex Control</h1>
+          <h1>xedoc.ru</h1>
           <p>Домашний Codex, управляемый с iPhone.</p>
           <div className={`auth-tabs ${registrationOpen ? "" : "single"}`}>
             <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>Вход</button>
@@ -7506,7 +9637,7 @@ function App() {
       <aside className={`app-nav ${mobileMenuOpen ? "open" : ""}`}>
         <div className="nav-brand">
           <img className="brand-logo" src="/favicon.svg" alt="" />
-          <strong>codex.rodion.pro</strong>
+          <strong>xedoc.ru</strong>
           <button className="icon mobile-nav-close" type="button" onClick={() => setMobileMenuOpen(false)} title="Закрыть меню">
             <X size={18} />
           </button>
@@ -7515,6 +9646,13 @@ function App() {
           <div className="nav-group">
             <button className={view === "projects" ? "nav-item active" : "nav-item"} onClick={clearProjectSelection}><FolderGit2 size={17} /> Projects</button>
             <div className="nav-subtree">
+              <button className={view === "projects" && projectPanel === "new" ? "nav-leaf project nav-create-project active" : "nav-leaf project nav-create-project"} type="button" onClick={openNewProject}>
+                <span className="nav-project-title">
+                  <Plus size={14} />
+                  <span>New Project</span>
+                </span>
+                <small>Wizard: Git, deploy, IDE</small>
+              </button>
               <button className={view === "search" ? "nav-leaf project active" : "nav-leaf project"} type="button" onClick={openSearchView}>
                 <span className="nav-project-title">
                   <Search size={14} />
@@ -7598,6 +9736,7 @@ function App() {
                                 </button>
                                 {chatMenuId === chat.id && (
                                   <div className="nav-chat-menu">
+                                    <button type="button" onClick={() => openProjectIde(chat)}>Открыть IDE</button>
                                     <button type="button" onClick={() => startRenameChat(chat)}>Переименовать</button>
                                     <button type="button" onClick={() => openChatProperties(chat)}>Свойства</button>
                                     <button type="button" disabled={shareBusy} onClick={() => shareChat(chat)}>Ссылка</button>
@@ -7629,10 +9768,10 @@ function App() {
             <button className="nav-item" onClick={() => { window.location.href = "/admin"; }}><ShieldCheck size={17} /> Admin</button>
           )}
         </nav>
-        <div className={`nav-agent ${online ? "online" : "offline"}`}>
-          <span>{online ? "Online" : "Offline"}</span>
-          <strong>{selectedAgent?.name ?? "Home Windows Agent"}</strong>
-          <small>{selectedAgent?.hostname ?? "Waiting for heartbeat"}</small>
+        <div className={`nav-agent ${chromeOnline ? "online" : "offline"}`}>
+          <span>{chromeOnline ? "Online" : "Offline"}</span>
+          <strong>{chromeAgent?.name ?? "Home Windows Agent"}</strong>
+          <small>{chromeAgent?.hostname ?? "Waiting for heartbeat"}</small>
         </div>
       </aside>
       {mobileMenuOpen && <button className="mobile-menu-backdrop" aria-label="Закрыть меню" type="button" onClick={() => setMobileMenuOpen(false)} />}
@@ -7654,7 +9793,7 @@ function App() {
             </button>
           </div>
           <div className="top-title">
-            <span className={`status ${online ? "ok" : "bad"}`}>{online ? <Wifi size={16} /> : <WifiOff size={16} />} {selectedAgentStatusLabel}</span>
+            <span className={`status ${chromeOnline ? "ok" : "bad"}`}>{chromeOnline ? <Wifi size={16} /> : <WifiOff size={16} />} {chromeAgentStatusLabel}</span>
             <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : view === "search" ? "Search" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
           </div>
           <div className="top-actions">
@@ -7662,18 +9801,18 @@ function App() {
             <button
               aria-label="Обновить данные интерфейса"
               className="icon"
-              onClick={refresh}
+              onClick={() => void refresh()}
               title="Обновить данные: заново загрузить агентов, проекты и текущий чат"
               type="button"
             >
               <RefreshCw size={18} />
             </button>
-            {selectedRepo && (
+            {chromeRepo && (
               <button
                 aria-label="Синхронизировать локальные чаты проекта"
                 className="icon"
-                disabled={localChatSyncing || !online}
-                onClick={() => syncLocalChats(selectedRepo).catch(() => {
+                disabled={localChatSyncing || !chromeOnline}
+                onClick={() => syncLocalChats(chromeRepo).catch(() => {
                   setChatNoticeOk(false);
                   setChatNotice("Не получилось синхронизировать локальные чаты.");
                 })}
@@ -7687,12 +9826,12 @@ function App() {
           </div>
         </div>
 
-        {selectedAgent && (
+        {chromeAgent && (
           <section className="machine-strip">
             <article className="machine">
-              <strong>{selectedAgent.name}</strong>
-              <span>{selectedAgent.hostname || selectedAgent.id}</span>
-              <small>{selectedAgent.codex_version || "codex not probed"} · {selectedAgent.git_version || "git not probed"}</small>
+              <strong>{chromeAgent.name}</strong>
+              <span>{chromeAgent.hostname || chromeAgent.id}</span>
+              <small>{chromeAgent.codex_version || "codex not probed"} · {chromeAgent.git_version || "git not probed"}</small>
             </article>
           </section>
         )}
@@ -7790,6 +9929,15 @@ function App() {
                 )}
               </div>
               <div className="section-actions">
+                <button
+                  aria-label="Открыть IDE проекта"
+                  className="icon tiny"
+                  onClick={() => openProjectIde(activeChat ?? undefined)}
+                  title="Открыть IDE проекта"
+                  type="button"
+                >
+                  <FilePenLine size={16} />
+                </button>
                 {activeChat && (
                   <button
                     aria-label="Скопировать ссылку на чат"
@@ -7836,7 +9984,7 @@ function App() {
                   </div>
                   <button
                     className="cockpit-launch"
-                    disabled={launchBusy || gitBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)}
+                    disabled={launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)}
                     type="button"
                     onClick={() => {
                       setProjectActionsOpen(false);
@@ -7857,10 +10005,18 @@ function App() {
                     </button>
                     {projectActionsOpen && (
                       <div className="project-action-menu" role="menu">
-                        <button disabled={launchBusy || gitBusy || !gitMessage.trim()} role="menuitem" type="submit" onClick={() => setProjectActionsOpen(false)}>
+                        <button disabled={launchBusy || gitBusy || !effectiveGitMessage.trim()} role="menuitem" type="submit" onClick={() => setProjectActionsOpen(false)}>
                           <UploadCloud size={16} />
                           <span className="step-badge">1</span>
                           <span>Commit & push</span>
+                        </button>
+                        <button disabled={launchBusy || buildBusy} role="menuitem" type="button" onClick={() => {
+                          setProjectActionsOpen(false);
+                          void buildProject();
+                        }}>
+                          <Terminal size={16} />
+                          <span className="step-badge">B</span>
+                          <span>Build</span>
                         </button>
                         <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
@@ -7898,6 +10054,13 @@ function App() {
                         <div className="menu-divider" />
                         <button role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
+                          void openProjectIde();
+                        }}>
+                          <FilePenLine size={16} />
+                          <span>Open IDE</span>
+                        </button>
+                        <button role="menuitem" type="button" onClick={() => {
+                          setProjectActionsOpen(false);
                           openProjectSettings(selectedRepo);
                         }}>
                           <Settings size={16} />
@@ -7907,9 +10070,21 @@ function App() {
                     )}
                   </div>
                 </div>
-                <div className="cockpit-fields">
-                  <input aria-label="Commit message" value={gitMessage} onChange={(event) => setGitMessage(event.target.value)} />
-                  <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
+                <div className="cockpit-fields cockpit-fields-with-labels">
+                  <label>
+                    <span>Commit</span>
+                    <input
+                      aria-label="Commit message"
+                      readOnly={gitMessageMode === "auto"}
+                      title={gitMessageMode === "auto" ? "Generated from Git options template" : undefined}
+                      value={gitMessageMode === "auto" ? effectiveGitMessage : gitMessage}
+                      onChange={(event) => setGitMessage(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Remote</span>
+                    <input aria-label="Remote URL" placeholder="origin URL, optional" value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} />
+                  </label>
                 </div>
                 {renderProjectActionNotices()}
               </form>
@@ -7966,7 +10141,16 @@ function App() {
                               : undefined;
                             const richTextOptions: RichTextOptions = {
                               onFileReference: openProjectFile,
-                              projectRoot: selectedRepo.pathMasked
+                              projectRoot: selectedRepo.pathMasked,
+                              projectRoots: [
+                                selectedRepo.pathMasked,
+                                selectedRepo.serverPath
+                              ],
+                              projectReferenceNames: [
+                                selectedRepo.id,
+                                selectedRepo.name,
+                                selectedRepo.domain
+                              ]
                             };
                             return (
                               <article
@@ -8111,40 +10295,232 @@ function App() {
         </section>
       </aside>
       {fileEditor && (
-        <div className="file-editor-modal" role="dialog" aria-modal="true" aria-label={fileEditor.path} onClick={closeProjectFileEditor}>
-          <section className="file-editor-panel" onClick={(event) => event.stopPropagation()}>
+        <div className={`file-editor-modal${fileEditorFullscreen ? " fullscreen" : ""}`} role="dialog" aria-modal="true" aria-label={fileEditor.path} onClick={closeProjectFileEditor}>
+          <section className={`file-editor-panel ide ${editorThemeIsDark(editorTheme) ? "editor-shell-dark" : "editor-shell-light"}${fileEditorFullscreen ? " fullscreen" : ""}`} onClick={(event) => event.stopPropagation()}>
             <header className="file-editor-head">
               <div>
                 <strong title={fileEditor.path}>{fileEditor.path}</strong>
-                <small>{selectedRepo?.name ?? "Project file"}</small>
+                <small>{fileEditor.repoName}</small>
               </div>
               <div className="file-editor-actions">
                 <button
                   className="secondary compact"
-                  disabled={!csrf || fileEditor.loading || fileEditor.saving || fileEditor.content === fileEditor.originalContent}
+                  disabled={!csrf || fileEditor.binary || fileEditor.loading || fileEditor.saving || fileEditor.content === fileEditor.originalContent}
                   onClick={saveProjectFile}
                   type="button"
                 >
                   <Save size={15} />
                   {fileEditor.saving ? "Saving" : "Save"}
                 </button>
+                <button
+                  aria-label={fileEditorFullscreen ? "Exit full screen" : "Open editor full screen"}
+                  aria-pressed={fileEditorFullscreen}
+                  className="icon tiny"
+                  onClick={() => setFileEditorFullscreen((value) => !value)}
+                  title={fileEditorFullscreen ? "Exit full screen (F11)" : "Full screen (F11)"}
+                  type="button"
+                >
+                  {fileEditorFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
                 <button aria-label="Close file editor" className="icon tiny" onClick={closeProjectFileEditor} type="button">
                   <X size={16} />
                 </button>
               </div>
             </header>
-            {fileEditor.error && <div className="notice danger">{fileEditor.error}</div>}
-            {fileEditor.notice && <div className="notice success">{fileEditor.notice}</div>}
-            {fileEditor.loading ? (
-              <div className="empty">Загружаю файл...</div>
-            ) : (
-              <textarea
-                className="file-editor-textarea"
-                onChange={(event) => setFileEditor((current) => current ? { ...current, content: event.target.value, notice: "" } : current)}
-                spellCheck={false}
-                value={fileEditor.content}
-              />
+            {renderIdeMenubar(fileEditor)}
+            {renderIdeCommandPalette(fileEditor)}
+            {renderFileEditorTabs()}
+            {(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice) && (
+              <details
+                className="file-editor-output"
+                open={ideOutputOpen || buildBusy || launchBusy || deployBusy || nginxBusy || sslBusy || gitBusy}
+                onToggle={(event) => setIdeOutputOpen(event.currentTarget.open)}
+              >
+                <summary>Output</summary>
+                {gitNotice && <pre>{gitNotice}</pre>}
+                {buildNotice && <pre>{buildNotice}</pre>}
+                {launchNotice && <pre>{launchNotice}</pre>}
+                {deployNotice && <pre>{deployNotice}</pre>}
+                {nginxNotice && <pre>{nginxNotice}</pre>}
+                {sslNotice && <pre>{sslNotice}</pre>}
+              </details>
             )}
+            <div className={ideWorkspaceClassName()}>
+              {ideExplorerOpen && <aside className="file-explorer" aria-label="Project files">
+                <div className="file-explorer-head">
+                  <strong>Files</strong>
+                  <button
+                    aria-label="Refresh files"
+                    className="icon tiny"
+                    disabled={projectFilesLoading}
+                    onClick={() => {
+                      if (selectedRepo) void loadProjectFileList(selectedRepo);
+                    }}
+                    title="Refresh files"
+                    type="button"
+                  >
+                    <RefreshCw className={projectFilesLoading ? "spin" : ""} size={15} />
+                  </button>
+                </div>
+                <label className="file-tree-search">
+                  <Search size={15} />
+                  <input
+                    aria-label="Search project files"
+                    placeholder="Search files"
+                    value={fileTreeQuery}
+                    onChange={(event) => setFileTreeQuery(event.target.value)}
+                  />
+                </label>
+                {projectFilesError && <div className="file-explorer-notice danger">{projectFilesError}</div>}
+                <div className="file-tree" role="tree">
+                  {projectFilesLoading && <div className="file-tree-empty">Loading files...</div>}
+                  {!projectFilesLoading && !visibleProjectFiles.length && (
+                    <div className="file-tree-empty">{fileTreeQuery.trim() ? "No matches" : "No files loaded"}</div>
+                  )}
+                  {!projectFilesLoading && visibleProjectFiles.map((entry) => entry.type === "file" ? (
+                    <button
+                      className={`file-tree-row file${entry.path === fileEditor.path ? " active" : ""}`}
+                      key={entry.path}
+                      role="treeitem"
+                      style={{ paddingLeft: `${8 + entry.depth * 18}px` }}
+                      title={entry.path}
+                      type="button"
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setFileContextMenu({
+                          entry,
+                          x: Math.min(event.clientX, window.innerWidth - 240),
+                          y: Math.min(event.clientY, window.innerHeight - 260)
+                        });
+                      }}
+                      onClick={() => openProjectFile(entry.path)}
+                    >
+                      <span className="file-tree-caret-spacer" aria-hidden="true" />
+                      <FilePenLine size={14} />
+                      <span>{entry.name}</span>
+                      {entry.size !== undefined && <small>{formatBytes(entry.size)}</small>}
+                    </button>
+                  ) : (
+                    <button
+                      aria-expanded={Boolean(expandedProjectFolders[entry.path])}
+                      className={`file-tree-row directory${expandedProjectFolders[entry.path] ? " open" : ""}`}
+                      key={entry.path}
+                      onClick={() => toggleProjectFolder(entry.path)}
+                      role="treeitem"
+                      style={{ paddingLeft: `${8 + entry.depth * 18}px` }}
+                      title={entry.path}
+                      type="button"
+                    >
+                      <ChevronDown className="file-tree-caret" size={13} />
+                      <FolderGit2 size={14} />
+                      <span>{entry.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </aside>}
+              <section className="file-editor-main">
+                {ideFindOpen && !fileEditor.binary && <div className="file-editor-search">
+                  <label>
+                    <Search size={15} />
+                    <input
+                      ref={editorFindInputRef}
+                      aria-label="Find in file"
+                      placeholder="Find in file"
+                      value={editorFindQuery}
+                      onChange={(event) => setEditorFindQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        event.stopPropagation();
+                        if (event.key !== "Enter") return;
+                        event.preventDefault();
+                        goToEditorFindMatch(editorFindIndex + (event.shiftKey ? -1 : 1));
+                      }}
+                    />
+                  </label>
+                  <span>{editorFindQuery.trim() ? `${editorFindMatches.length ? editorFindIndex + 1 : 0} / ${editorFindMatches.length}` : "Ready"}</span>
+                  <button className="icon tiny" disabled={!editorFindMatches.length} onClick={() => goToEditorFindMatch(editorFindIndex - 1)} title="Previous match" type="button">
+                    <ArrowUp size={15} />
+                  </button>
+                  <button className="icon tiny" disabled={!editorFindMatches.length} onClick={() => goToEditorFindMatch(editorFindIndex + 1)} title="Next match" type="button">
+                    <ArrowDown size={15} />
+                  </button>
+                </div>}
+                {fileEditor.error && <div className="notice danger">{fileEditor.error}</div>}
+                {fileEditor.notice && <div className="notice success">{fileEditor.notice}</div>}
+                {fileEditor.loading ? (
+                  <div className="empty">Загружаю файл...</div>
+                ) : fileEditor.binary && fileEditor.mimeType?.startsWith("image/") ? (
+                  renderImagePreview(fileEditor)
+                ) : fileEditor.binary ? (
+                  <div className="image-preview-pane empty-preview">
+                    <FilePenLine size={26} />
+                    <strong>Binary preview unavailable</strong>
+                    <small>{fileEditor.mimeType || fileEditor.path}</small>
+                  </div>
+                ) : (
+                  <MonacoCodeEditor
+                    findIndex={editorFindIndex}
+                    findQuery={editorFindQuery}
+                    command={ideEditorCommand}
+                    key={`${fileEditor.agentId}:${fileEditor.repoId}:${fileEditor.path}`}
+                    path={fileEditor.path}
+                    theme={editorTheme}
+                    value={fileEditor.content}
+                    onChange={(value) => {
+                      setFileEditor((current) => current ? { ...current, content: value, notice: "" } : current);
+                      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, content: value, notice: "" } : tab));
+                    }}
+                  />
+                )}
+              </section>
+              {ideChatPanelOpen && (
+                <aside className="ide-chat-panel" aria-label="IDE chat">
+                  <header>
+                    <div>
+                      <strong>{activeChat?.title || "Project chat"}</strong>
+                      <small>{selectedRepo?.name || fileEditor.repoName}</small>
+                    </div>
+                    <button className="icon tiny" type="button" onClick={() => setIdeChatPanelOpen(false)} title="Hide chat">
+                      <X size={15} />
+                    </button>
+                  </header>
+                  <div className="ide-chat-feed">
+                    {activeChat ? (
+                      ideChatMessages.length ? ideChatMessages.map((message) => (
+                        <article className={`ide-chat-message ${message.role}`} key={message.id}>
+                          <span>{message.role === "user" ? (currentUser?.nickname || "You") : message.role === "assistant" ? "Codex" : message.role}</span>
+                          <p>{truncateCommitPart(cleanCommitSummary(message.content) || normalizeDisplayText(message.content), 260)}</p>
+                        </article>
+                      )) : <div className="ide-chat-empty">В этом чате пока нет сообщений.</div>
+                    ) : (
+                      <div className="ide-chat-empty">Выбери чат или отправь первую задачу прямо из IDE.</div>
+                    )}
+                  </div>
+                  {ideChatNotice && <div className="ide-chat-notice">{ideChatNotice}</div>}
+                  <form className="ide-chat-composer" onSubmit={submitIdeChat}>
+                    <textarea
+                      placeholder={activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту"}
+                      value={ideChatPrompt}
+                      onChange={(event) => {
+                        setIdeChatPrompt(event.target.value);
+                        setIdeChatNotice("");
+                      }}
+                      onKeyDown={(event) => {
+                        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                          event.preventDefault();
+                          event.currentTarget.form?.requestSubmit();
+                        }
+                      }}
+                    />
+                    <button disabled={!ideChatPrompt.trim() || ideChatSending || localCodexBusy || activeRunBusy} type="submit">
+                      {ideChatSending || localCodexBusy || activeRunBusy ? <RefreshCw className="spin" size={15} /> : <Play size={15} />}
+                      Send
+                    </button>
+                  </form>
+                </aside>
+              )}
+              {renderFileContextMenu()}
+              {renderFileProperties()}
+            </div>
           </section>
         </div>
       )}

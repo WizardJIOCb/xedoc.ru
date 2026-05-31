@@ -45,7 +45,7 @@ async function main() {
 
 function printHelp() {
   console.log([
-    "codex-toolbelt: helpers for codex.rodion.pro Windows agent jobs",
+    "codex-toolbelt: helpers for xedoc.ru Windows agent jobs",
     "",
     "Commands:",
     "  doctor                         Print local tool availability and project hints.",

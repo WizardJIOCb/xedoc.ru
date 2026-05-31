@@ -1,6 +1,6 @@
 # Codex Agent Desktop
 
-Native tray manager for `codex.rodion.pro`.
+Native tray manager for `xedoc.ru`.
 
 The desktop app is intentionally a manager shell around the existing compact Node agent package. The Node agent keeps the WebSocket protocol handling in TypeScript, where server messages are already validated with Zod. The native app owns the user experience: tray, settings, OS keychain token storage, process start/stop, and logs.
 

@@ -53,7 +53,7 @@ if ($TransportProxy) {
     Set-Item -Path "Env:$Name" -Value $TransportProxy
   }
 
-  $NoProxyDefaults = @("127.0.0.1", "localhost", "::1", "codex.rodion.pro", "82.146.42.213", "100.64.0.0/10", "100.87.116.56")
+  $NoProxyDefaults = @("127.0.0.1", "localhost", "::1", "xedoc.ru", "82.146.42.213", "100.64.0.0/10", "100.87.116.56")
   $ExistingNoProxy = @($env:NO_PROXY, $env:no_proxy) |
     Where-Object { $_ } |
     ForEach-Object { $_ -split "," } |

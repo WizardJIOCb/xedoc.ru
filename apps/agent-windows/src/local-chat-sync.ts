@@ -503,7 +503,7 @@ function titleFromContent(value: string | undefined | null): string | undefined 
   if (!content || isCodexContextMessage(content) || /^# Context from my IDE setup:/i.test(content)) return undefined;
   const normalized = content.toLowerCase();
   if (
-    normalized.includes("новый чат для https://codex.rodion.pro")
+    (normalized.includes("https://xedoc.ru") || normalized.includes("https://codex.rodion.pro"))
     && (normalized.includes("sync") || normalized.includes("синхрон"))
   ) {
     return "Синхронизировать новый чат";

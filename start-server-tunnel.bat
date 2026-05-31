@@ -11,7 +11,7 @@ if /I "%~1"=="/nopause" (
 cd /d "%SCRIPT_DIR%"
 set "REPO_ROOT=%CD%"
 
-echo Starting codex.rodion.pro server tunnel...
+echo Starting xedoc.ru server tunnel...
 echo Repo root: %REPO_ROOT%
 echo.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\ensure-server-openai-tunnel.ps1"

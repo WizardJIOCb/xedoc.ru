@@ -1,6 +1,6 @@
 # Codex Mobile Controller
 
-`codex.rodion.pro` - личная панель управления Codex CLI на домашнем Windows ПК через web/PWA. Сервер живет на VPS, Windows агент подключается к нему только исходящим WebSocket, а web-интерфейс позволяет запускать Codex-задачи, смотреть логи, синхронизировать локальные чаты и управлять проектами.
+`xedoc.ru` - личная панель управления Codex CLI на домашнем Windows ПК через web/PWA. Сервер живет на VPS, Windows агент подключается к нему только исходящим WebSocket, а web-интерфейс позволяет запускать Codex-задачи, смотреть логи, синхронизировать локальные чаты и управлять проектами.
 
 ```text
 Browser/PWA
@@ -24,14 +24,14 @@ Windows agent
 - Web app `apps/web`: проекты, чаты, jobs, live logs, sync/status, profile, OAuth UI, mobile-friendly layout.
 - Server `apps/server`: Fastify API, WebSocket для UI и агента, SQLite, auth/sessions, agent package download, job queue.
 - Windows agent `apps/agent-windows`: outbound WSS агент, allowlisted repos, Codex CLI runner, local chat sync, VS Code bridge client.
-- VS Code bridge `apps/vscode-bridge`: локальное расширение VS Code с named pipe API и отдельной панелью `codex.rodion.pro -> Chats`.
+- VS Code bridge `apps/vscode-bridge`: локальное расширение VS Code с named pipe API и отдельной панелью `xedoc.ru -> Chats`.
 - Desktop agent `apps/desktop-agent`: Tauri tray app/manager для compact Node agent package.
 - Protocol package `packages/protocol`: Zod-схемы для WebSocket payloads и shared types.
 - Compact setup: web может выдать `setup-agent.bat`, который скачивает `agent-package.zip` без клонирования всего репозитория.
 
 ## Основной Поток
 
-1. Пользователь открывает `https://codex.rodion.pro`.
+1. Пользователь открывает `https://xedoc.ru`.
 2. Web ходит в REST API и держит `/api/ui/ws` для live-событий.
 3. Windows agent держит исходящее подключение к `/api/agent/ws`.
 4. Job из web попадает в SQLite queue.
@@ -96,10 +96,10 @@ pnpm server:agent   # create agent/token
 ```dotenv
 NODE_ENV=production
 PORT=3000
-PUBLIC_BASE_URL=https://codex.rodion.pro
+PUBLIC_BASE_URL=https://xedoc.ru
 DATABASE_URL=file:/app/data/cmc.db
 SESSION_SECRET=change_me_64_random_chars
-# Keep empty for host-only auth cookies when user projects live on *.codex.rodion.pro.
+# Keep empty for host-only auth cookies when user projects live on *.xedoc.ru.
 COOKIE_DOMAIN=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
@@ -241,7 +241,7 @@ Repo root `start-agent.bat` делает то же для локальной р�
 
 Есть три источника чатов:
 
-- `web`: чаты, созданные на `codex.rodion.pro`.
+- `web`: чаты, созданные на `xedoc.ru`.
 - `codex`: локальные Codex CLI threads из Windows профиля.
 - `vscode`: локальные VS Code chat sessions.
 
@@ -300,7 +300,7 @@ Bridge умеет:
 - открыть новый Codex panel
 - открыть локальный Codex thread по id
 - переоткрыть thread, чтобы подтянуть свежие сообщения
-- показать отдельную Activity Bar панель `codex.rodion.pro -> Chats`
+- показать отдельную Activity Bar панель `xedoc.ru -> Chats`
 
 Панель `Chats` читает локальные rollout-файлы из `%USERPROFILE%\.codex\sessions`, показывает нормализованные title/date и кнопки `Открыть` / `Переоткрыть`.
 
@@ -402,8 +402,8 @@ systemctl is-active codex-controller.service
 Smoke check:
 
 ```bash
-curl -I https://codex.rodion.pro
-curl https://codex.rodion.pro/api/health
+curl -I https://xedoc.ru
+curl https://xedoc.ru/api/health
 ```
 
 Production service currently runs as:
@@ -435,7 +435,7 @@ node --no-warnings=ExperimentalWarning dist/index.js
 `infra/Caddyfile`:
 
 ```caddyfile
-codex.rodion.pro {
+xedoc.ru {
   encode zstd gzip
   reverse_proxy 127.0.0.1:3000
 }
@@ -507,7 +507,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-vscode-bridg
 1. Убедиться, что agent online.
 2. Открыть проект в web.
 3. Нажать `Sync` в левом списке проекта или в меню `Sync`.
-4. При необходимости нажать `Обновить` в VS Code bridge панели `codex.rodion.pro -> Chats`.
+4. При необходимости нажать `Обновить` в VS Code bridge панели `xedoc.ru -> Chats`.
 
 
 Для простого сценария “VS Code открыт с Codex, хочу включить/выключить агента для сайта” используй вот эти:
@@ -518,7 +518,7 @@ C:\Projects\codex.rodion.pro\start-agent.bat
 Остановить агента:
 
 C:\Projects\codex.rodion.pro\stop-agent.bat
-start-agent.bat запускает обычного фонового Windows-агента, который видит VS Code bridge и синхронизирует чаты с codex.rodion.pro. Окна/трея у него может не быть, он работает скрытым процессом. Логи здесь:
+start-agent.bat запускает обычного фонового Windows-агента, который видит VS Code bridge и синхронизирует чаты с xedoc.ru. Окна/трея у него может не быть, он работает скрытым процессом. Логи здесь:
 
 C:\Projects\codex.rodion.pro\data\prod-agent.log
 C:\Projects\codex.rodion.pro\data\prod-agent.err.log
