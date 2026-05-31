@@ -1,97 +1,106 @@
-# Codex Mobile Controller
+# xedoc.ru
 
-`xedoc.ru` - личная панель управления Codex CLI на домашнем Windows ПК через web/PWA. Сервер живет на VPS, Windows агент подключается к нему только исходящим WebSocket, а web-интерфейс позволяет запускать Codex-задачи, смотреть логи, синхронизировать локальные чаты и управлять проектами.
+`xedoc.ru` is a private web workbench for running Codex-driven development from a browser. The production site, GitHub repository, local workspace, and server folder now all use the `xedoc.ru` name.
+
+## Canonical Project
+
+- Production site: `https://xedoc.ru`
+- GitHub repository: `https://github.com/WizardJIOCb/xedoc.ru`
+- Local workspace on Windows: `C:\Projects\xedoc.ru`
+- Production server alias: `myserver`
+- Production server folder: `/var/www/xedoc.ru`
+- Production service: `codex-controller.service`
+- Production database: `/var/www/xedoc.ru/data/cmc.db`
+- Nginx site: `/etc/nginx/sites-available/xedoc.ru`
+- Primary Git remote: `origin -> https://github.com/WizardJIOCb/xedoc.ru.git`
+- Legacy Git remote kept for history: `codex-origin -> https://github.com/WizardJIOCb/codex.rodion.pro`
+
+Do new work from `C:\Projects\xedoc.ru`. Do not use old `codex.rodion.pro` folders for active development.
+
+## What This App Does
+
+- Shows a browser/PWA interface for projects, chats, jobs, live logs, files, diffs, profile, sync, and admin controls.
+- Runs a Fastify API with SQLite storage on the VPS.
+- Serves the built React/Vite frontend from the same server app.
+- Accepts UI WebSocket connections at `/api/ui/ws`.
+- Accepts agent WebSocket connections at `/api/agent/ws`.
+- Lets configured agents run Codex CLI tasks only inside allowlisted project folders.
+- Syncs local Codex and VS Code chats into the server database.
+- Can package and install a compact Windows agent from the web UI.
+- Supports OAuth providers, public project/profile pages, and public chat share links.
+
+## Architecture
 
 ```text
-Browser/PWA
+Browser / PWA
   |
-  | HTTPS + /api/ui/ws
+  | HTTPS + REST + /api/ui/ws
   v
-VPS: Fastify server + SQLite + React web
+VPS: nginx -> Fastify server -> SQLite
   ^
   | outbound WSS /api/agent/ws
   |
-Windows agent
-  |-- allowlisted repos
+Windows or Linux agent
+  |-- allowlisted project folders
   |-- Codex CLI jobs
-  |-- Git / deploy / Nginx / SSL commands declared per project
-  |-- local Codex/VS Code chat sync
-  `-- VS Code bridge over local named pipe
+  |-- Git / build / deploy helper commands
+  |-- local Codex chat sync
+  `-- VS Code bridge integration
 ```
 
-## Что Есть
+The Windows agent does not need inbound ports. It connects outward to `https://xedoc.ru`.
 
-- Web app `apps/web`: проекты, чаты, jobs, live logs, sync/status, profile, OAuth UI, mobile-friendly layout.
-- Server `apps/server`: Fastify API, WebSocket для UI и агента, SQLite, auth/sessions, agent package download, job queue.
-- Windows agent `apps/agent-windows`: outbound WSS агент, allowlisted repos, Codex CLI runner, local chat sync, VS Code bridge client.
-- VS Code bridge `apps/vscode-bridge`: локальное расширение VS Code с named pipe API и отдельной панелью `xedoc.ru -> Chats`.
-- Desktop agent `apps/desktop-agent`: Tauri tray app/manager для compact Node agent package.
-- Protocol package `packages/protocol`: Zod-схемы для WebSocket payloads и shared types.
-- Compact setup: web может выдать `setup-agent.bat`, который скачивает `agent-package.zip` без клонирования всего репозитория.
-
-## Основной Поток
-
-1. Пользователь открывает `https://xedoc.ru`.
-2. Web ходит в REST API и держит `/api/ui/ws` для live-событий.
-3. Windows agent держит исходящее подключение к `/api/agent/ws`.
-4. Job из web попадает в SQLite queue.
-5. Agent забирает job, запускает Codex CLI в allowlisted repo и отправляет progress/log/done обратно.
-6. Server сохраняет результат и рассылает обновления web-клиентам.
-7. Local chat sync подтягивает локальные Codex/VS Code чаты из Windows профиля в server DB.
-8. VS Code bridge открывает/переоткрывает локальные Codex threads в VS Code и показывает отдельный список локальных threads.
-
-## Монорепозиторий
+## Repository Layout
 
 ```text
 apps/
-  agent-windows/   Windows Node agent
-  desktop-agent/   Tauri native tray manager
-  server/          Fastify API + static web serving
+  agent-windows/   Node agent for Windows and compact agent package
+  desktop-agent/   Tauri tray/manager app
+  server/          Fastify API, auth, SQLite, WebSockets, static web serving
   vscode-bridge/   Local VS Code companion extension
   web/             React/Vite frontend
 packages/
   protocol/        Zod schemas and shared protocol types
 scripts/
-  prepare-vscode-bridge.ps1
-  run-agent.ps1
-  stop-desktop-agent-dev-server.ps1
-  stop-legacy-agent-processes.ps1
+  *.ps1            Windows helper scripts for agent, bridge, and tunnel setup
 infra/
   docker-compose.yml
   Caddyfile
 ```
 
-Root scripts:
+## Requirements
+
+- Node.js LTS with `node` available in PATH
+- Corepack
+- pnpm through Corepack
+- Git
+- Codex CLI on machines that actually run Codex jobs
+- Rust/Cargo only when building the native Tauri desktop agent
+
+## Root Commands
+
+Run these from `C:\Projects\xedoc.ru`.
 
 ```powershell
-pnpm build          # protocol + all apps build
-pnpm typecheck      # protocol + all apps typecheck
-pnpm server:dev     # Fastify dev server
-pnpm web:dev        # Vite web dev server
-pnpm agent:dev      # Windows agent dev entry
-pnpm server:seed    # create user
-pnpm server:agent   # create agent/token
+corepack pnpm install --frozen-lockfile
+corepack pnpm typecheck
+corepack pnpm build
+corepack pnpm server:dev
+corepack pnpm web:dev
+corepack pnpm agent:dev
+corepack pnpm server:seed
+corepack pnpm server:agent
 ```
 
-## Требования
+`pnpm build` builds `packages/protocol` and all apps. On the production server, use a larger Node heap:
 
-Для web/server/agent:
-
-- Node.js LTS
-- Corepack
-- pnpm через Corepack
-- Git
-- Codex CLI на Windows машине, если нужен настоящий runner
-
-Для native desktop app:
-
-- Все выше
-- Rust toolchain (`cargo`, `rustc`)
-- Tauri prerequisites для Windows
+```bash
+NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm build
+```
 
 ## Environment
 
-`.env.example`:
+Example production-like `.env`:
 
 ```dotenv
 NODE_ENV=production
@@ -99,7 +108,6 @@ PORT=3000
 PUBLIC_BASE_URL=https://xedoc.ru
 DATABASE_URL=file:/app/data/cmc.db
 SESSION_SECRET=change_me_64_random_chars
-# Keep empty for host-only auth cookies when user projects live on *.xedoc.ru.
 COOKIE_DOMAIN=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
@@ -111,28 +119,47 @@ MAILRU_CLIENT_ID=
 MAILRU_CLIENT_SECRET=
 ```
 
-Локально обычно достаточно:
+Current production uses:
+
+```dotenv
+NODE_ENV=production
+PORT=3020
+PUBLIC_BASE_URL=https://xedoc.ru
+DATABASE_URL=file:/var/www/xedoc.ru/data/cmc.db
+COOKIE_DOMAIN=
+```
+
+Keep real secrets only in `.env`. Do not commit `.env`, agent tokens, OAuth secrets, or database files.
+
+## Local Development
+
+Install dependencies:
+
+```powershell
+cd C:\Projects\xedoc.ru
+corepack enable
+corepack pnpm install --frozen-lockfile
+```
+
+Start the API server:
 
 ```powershell
 $env:NODE_ENV="development"
 $env:PORT="3000"
 $env:PUBLIC_BASE_URL="http://localhost:3000"
-$env:DATABASE_URL="file:./data/cmc.db"
+$env:DATABASE_URL="file:C:\Projects\xedoc.ru\data\cmc.db"
 $env:SESSION_SECRET="dev_secret_64_chars_minimum_change_me_please_123456"
+corepack pnpm server:dev
 ```
 
-OAuth callback URLs описаны в `docs/OAUTH.md`.
-
-## Локальный Запуск Web + Server
+Start the web app in another terminal:
 
 ```powershell
-corepack enable
-pnpm install
-pnpm build
-pnpm server:dev
+cd C:\Projects\xedoc.ru
+corepack pnpm web:dev -- --port 5173
 ```
 
-Server отдает API и, после `pnpm build`, собранный web из `apps/web/dist`.
+The Vite dev server proxies `/api` and WebSocket traffic to `http://localhost:3000`.
 
 Health check:
 
@@ -140,74 +167,165 @@ Health check:
 Invoke-WebRequest http://localhost:3000/api/health -UseBasicParsing
 ```
 
-Создать пользователя:
+Create a local user:
 
 ```powershell
-pnpm --filter @cmc/server seed:user --email you@example.com --password "change-me"
+corepack pnpm --filter @cmc/server seed:user --email you@example.com --password "change-me"
 ```
 
-Создать агента и получить token:
+Create or rotate an agent token:
 
 ```powershell
-pnpm --filter @cmc/server agents:create --id home-windows --name "Home Windows"
+corepack pnpm --filter @cmc/server agents:create --id home-windows --name "Home Windows"
+corepack pnpm --filter @cmc/server agents:rotate-token --id home-windows
 ```
 
-Повернуть token:
+## Production
+
+Current production folder:
+
+```text
+/var/www/xedoc.ru
+```
+
+Current systemd unit shape:
+
+```ini
+[Service]
+WorkingDirectory=/var/www/xedoc.ru
+EnvironmentFile=/var/www/xedoc.ru/.env
+ExecStart=/usr/bin/node --no-warnings=ExperimentalWarning apps/server/dist/index.js
+Restart=always
+```
+
+Nginx serves `xedoc.ru` and `www.xedoc.ru`, terminates TLS, and proxies to the Node server:
+
+```text
+https://xedoc.ru -> 127.0.0.1:3020
+```
+
+Deploy production from the local machine:
 
 ```powershell
-pnpm --filter @cmc/server agents:rotate-token --id home-windows
+git push origin master
+ssh myserver "set -e; cd /var/www/xedoc.ru; git pull --ff-only; corepack pnpm install --frozen-lockfile; NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm build; systemctl restart codex-controller.service; systemctl is-active codex-controller.service"
 ```
+
+Smoke checks:
+
+```powershell
+Invoke-WebRequest https://xedoc.ru/api/health -UseBasicParsing
+Invoke-WebRequest https://xedoc.ru -UseBasicParsing
+```
+
+Useful server commands:
+
+```bash
+cd /var/www/xedoc.ru
+git status --short --branch
+systemctl status codex-controller.service --no-pager
+journalctl -u codex-controller.service -n 100 --no-pager
+nginx -t
+systemctl reload nginx
+```
+
+Before manual database edits on production, make a backup:
+
+```bash
+cd /var/www/xedoc.ru
+sqlite3 data/cmc.db 'PRAGMA wal_checkpoint(TRUNCATE);'
+cp data/cmc.db "data/cmc.db.bak-$(date +%Y%m%d-%H%M%S)"
+```
+
+## Codex Project Settings
+
+The `Codex` project inside the web UI should point to the current canonical locations:
+
+```text
+Name: Codex
+Local folder: C:\Projects\xedoc.ru
+GitHub repository: https://github.com/WizardJIOCb/xedoc.ru
+Server project folder: /var/www/xedoc.ru
+Domain: xedoc.ru
+Data location: Server
+Data folder: /var/www/xedoc.ru/data
+```
+
+For the controller itself, production deploy is the manual server deploy command above. The generic UI Deploy action is mainly for ordinary static/full-stack projects with a configured build output folder.
 
 ## Windows Agent
 
-Agent config пример: `apps/agent-windows/agent.config.example.json`.
+Example config:
 
-Важные поля:
+```text
+apps/agent-windows/agent.config.example.json
+```
 
-- `agentId`: id агента на сервере.
-- `serverUrl`: `ws://.../api/agent/ws` или `wss://.../api/agent/ws`.
-- `tokenEnv`: имя env-переменной с agent token, обычно `CMC_AGENT_TOKEN`.
-- `heartbeatIntervalMs`: heartbeat/status интервал.
-- `fakeRunner`: тестовый режим без реального Codex CLI.
-- `repos`: allowlist проектов. Agent работает только с ними.
-- `defaultSandbox` / `allowedSandboxes`: sandbox policy для Codex jobs.
-- `testCommands`: разрешенные команды тестов/проверок, отображаются в web.
-- `redactPatterns`: маски для секретов в логах.
+Important fields:
 
-Dev запуск:
+- `agentId`: server-side agent id, for example `home-windows`.
+- `serverUrl`: `wss://xedoc.ru/api/agent/ws` in production.
+- `tokenEnv`: environment variable that contains the agent token, usually `CMC_AGENT_TOKEN`.
+- `fakeRunner`: test mode without real Codex CLI execution.
+- `repos`: allowlist of project folders the agent can work with.
+- `defaultSandbox` and `allowedSandboxes`: sandbox choices exposed to the UI.
+- `testCommands`: visible project check commands.
+- `redactPatterns`: secret masks for logs.
+
+Local dev run:
 
 ```powershell
 Copy-Item apps/agent-windows/agent.config.example.json apps/agent-windows/agent.config.json
 $env:CMC_AGENT_TOKEN="token_from_agents_create"
-pnpm --filter @cmc/agent-windows dev -- --config apps/agent-windows/agent.config.json
+corepack pnpm --filter @cmc/agent-windows dev -- --config apps/agent-windows/agent.config.json
 ```
 
-Doctor/scan:
+Doctor and repo scan:
 
 ```powershell
-pnpm --filter @cmc/agent-windows doctor -- --config apps/agent-windows/agent.config.json
-pnpm --filter @cmc/agent-windows scan-repos -- --config apps/agent-windows/agent.config.json
+corepack pnpm --filter @cmc/agent-windows doctor -- --config apps/agent-windows/agent.config.json
+corepack pnpm --filter @cmc/agent-windows scan-repos -- --config apps/agent-windows/agent.config.json
 ```
 
-Fake runner:
+Installed compact agent location on Windows:
+
+```text
+%USERPROFILE%\codex-agent
+```
+
+Start and stop installed agent:
 
 ```powershell
-$env:CMC_FAKE_RUNNER="1"
-pnpm --filter @cmc/agent-windows dev -- --config apps/agent-windows/agent.config.json
+%USERPROFILE%\codex-agent\start-agent.bat
+%USERPROFILE%\codex-agent\stop-agent.bat
+```
+
+Start and stop the repo-local agent:
+
+```powershell
+C:\Projects\xedoc.ru\start-agent.bat
+C:\Projects\xedoc.ru\stop-agent.bat
+```
+
+Repo-local logs:
+
+```text
+C:\Projects\xedoc.ru\data\prod-agent.log
+C:\Projects\xedoc.ru\data\prod-agent.err.log
 ```
 
 ## Compact Agent Package
 
-Production web отдает компактный zip:
+Production exposes the compact agent package here:
 
 ```text
-GET /api/agent/package.zip
+GET https://xedoc.ru/api/agent/package.zip
 ```
 
-В zip входят только нужные runtime/build artifacts:
+The package contains only runtime/build artifacts needed by the agent:
 
-- root `package.json`, lockfile, workspace file
-- `start-agent.bat`, `stop-agent.bat`
+- root `package.json`, lockfile, and workspace file
+- `start-agent.bat` and `stop-agent.bat`
 - `scripts/run-agent.ps1`
 - `scripts/prepare-vscode-bridge.ps1`
 - `apps/agent-windows/dist`
@@ -215,311 +333,134 @@ GET /api/agent/package.zip
 - `apps/vscode-bridge/resources`
 - `packages/protocol/dist`
 
-Sync menu в web может выдать персональный `setup-agent.bat`. Он:
-
-1. Скачивает `agent-package.zip`.
-2. Распаковывает его в `%USERPROFILE%\codex-agent`.
-3. Создает `apps/agent-windows/agent.config.json`.
-4. Сохраняет `CMC_AGENT_TOKEN` в user env.
-5. Запускает `start-agent.bat`.
-
-Установленный агент запускается так:
-
-```powershell
-%USERPROFILE%\codex-agent\start-agent.bat
-```
-
-Остановить:
-
-```powershell
-%USERPROFILE%\codex-agent\stop-agent.bat
-```
-
-Repo root `start-agent.bat` делает то же для локальной разработки: готовит VS Code bridge, останавливает старый node-agent процесс и стартует agent в фоне через `scripts/run-agent.ps1`.
-
-## Sync и Чаты
-
-Есть три источника чатов:
-
-- `web`: чаты, созданные на `xedoc.ru`.
-- `codex`: локальные Codex CLI threads из Windows профиля.
-- `vscode`: локальные VS Code chat sessions.
-
-Public chat export:
-
-- Any synced/web chat can be published from the web UI with the `Ссылка` action.
-- The server stores a snapshot in `chat_shares`, so `/share/<token>` is readable without login and contains the whole chat plus the latest assistant answer as `finalAnswer`.
-- The VS Code bridge panel also has `Ссылка` next to local Codex threads. It reads the local rollout file, posts it to `POST /api/agent/shared-chats` with the local agent token, copies the public URL, and can open it in the browser.
-- VS Code direct export needs the bridge process to see `CMC_AGENT_TOKEN` or the configured `tokenEnv`, and it discovers the server from `CMC_PUBLIC_BASE_URL` or `apps/agent-windows/agent.config.json`.
-
-Sync local chats:
-
-```text
-POST /api/agents/:agentId/sync-local-chats
-```
-
-Endpoint отвечает быстро `202 Accepted`, а реальная синхронизация идет через agent WebSocket. Agent читает локальные данные, нормализует title/date/messages и отправляет `chat.sync` события серверу.
-
-В web:
-
-- слева у выбранного проекта есть кнопка `Sync`;
-- в `Sync` меню есть общая кнопка синхронизации;
-- скрытые локальные чаты можно вернуть или связать с текущим web-чатом через свойства чата.
-
-Названия и даты нормализуются одинаково:
-
-- служебные `AGENTS.md instructions`, `<INSTRUCTIONS>`, IDE-context не становятся title;
-- дата списка = последнее реальное сообщение, если оно доступно;
-- формат UI дат: `ru-RU`, `dd.mm.yyyy, hh:mm:ss`.
+The Sync page can generate a personal `setup-agent.bat`. It downloads the package, writes `agent.config.json`, saves `CMC_AGENT_TOKEN` to the user environment, and starts the agent.
 
 ## VS Code Bridge
 
-`apps/vscode-bridge` - локальное VS Code расширение. Оно ставится скриптом:
+The VS Code bridge lives in `apps/vscode-bridge`. It installs a local extension and exposes a named pipe used by the Windows agent.
+
+Install or refresh it:
 
 ```powershell
+cd C:\Projects\xedoc.ru
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-vscode-bridge.ps1
 ```
 
-Скрипт:
-
-1. При необходимости собирает bridge.
-2. Копирует extension в `%USERPROFILE%\.vscode\extensions\local.codex-rodion-bridge-0.0.1`.
-3. Открывает workspace в VS Code.
-4. Проверяет named pipe `codex-rodion-vscode-bridge`.
-
-Если VS Code уже был открыт до первой установки, сделай:
+If VS Code was already open during first install, run:
 
 ```text
 Developer: Reload Window
 ```
 
-Bridge умеет:
+The bridge can:
 
-- `ping`
-- открыть Codex sidebar
-- открыть новый Codex panel
-- открыть локальный Codex thread по id
-- переоткрыть thread, чтобы подтянуть свежие сообщения
-- показать отдельную Activity Bar панель `xedoc.ru -> Chats`
+- ping the local VS Code extension
+- open Codex sidebar or a new Codex panel
+- open or reopen a local Codex thread by id
+- show the separate Activity Bar panel `xedoc.ru -> Chats`
+- export local Codex threads as public share links through the server
 
-Панель `Chats` читает локальные rollout-файлы из `%USERPROFILE%\.codex\sessions`, показывает нормализованные title/date и кнопки `Открыть` / `Переоткрыть`.
+## Chats And Sync
 
-Важно: официальный Codex VS Code extension не дает публичный API, чтобы добавить thread в его внутренний список `Tasks`. Поэтому у нас отдельная панель со списком локальных threads.
+Chat sources:
+
+- `web`: chats created in the xedoc.ru UI.
+- `codex`: local Codex CLI session files from the Windows profile.
+- `vscode`: local VS Code chat/session data.
+
+Sync endpoint:
+
+```text
+POST /api/agents/:agentId/sync-local-chats
+```
+
+The endpoint responds quickly with `202 Accepted`; the actual sync happens through the agent WebSocket.
+
+Public shares:
+
+- `POST /api/chats/:id/share`
+- `GET /api/shared/chats/:token`
+- `POST /api/agent/shared-chats`
+- `/share/<token>` renders the public page.
+
+## Server API
+
+Main endpoint groups:
+
+- Auth/profile: `/api/login`, `/api/register`, `/api/logout`, `/api/me`, `/api/profile`
+- OAuth: `/api/oauth/providers`, `/api/oauth/:provider/start`, `/api/oauth/:provider/callback`
+- Agents: `/api/agents`, `/api/agents/:agentId/setup`, `/api/agent/package.zip`
+- Projects: `/api/repos`, `/api/projects`, `/api/projects/:agentId/:repoId`
+- Project actions: `git-sync`, `build`, `deploy`, `nginx`, `ssl`
+- VS Code: `/api/agents/:agentId/vscode-command`
+- Chat sync: `/api/agents/:agentId/sync-local-chats`
+- Chats/messages: `/api/chats`, `/api/chats/:id`, attachments/details endpoints
+- Public shares: `/api/chats/:id/share`, `/api/shared/chats/:token`, `/api/agent/shared-chats`
+- Jobs: `/api/jobs`, `/api/jobs/:id`, `/api/jobs/:id/cancel`
+- WebSockets: `/api/ui/ws`, `/api/agent/ws`
+- Health: `/api/health`
 
 ## Native Desktop Agent
 
-`apps/desktop-agent` - Tauri app для удобного управления агентом.
+The native desktop app lives in `apps/desktop-agent`. It is a Tauri tray/manager shell around the compact Node agent package.
 
-Запуск в dev:
+Dev and build commands:
 
 ```powershell
 .\start-native-agent.bat
-```
-
-Режимы:
-
-```powershell
 .\start-native-agent.bat check
 .\start-native-agent.bat dev
 .\start-native-agent.bat release
-```
-
-Сборка exe:
-
-```powershell
 .\build-native-agent.bat
 ```
 
-Готовый exe копируется в:
+Built executable:
 
 ```text
 dist-native\CodexAgent.exe
 ```
 
-Native app сейчас является manager shell вокруг compact Node agent package. Он умеет:
+For everyday start/stop, prefer `start-agent.bat` and `stop-agent.bat`; the native Tauri app is heavier and needs Rust/Cargo.
 
-- хранить server URL, agent ID, папку агента и token;
-- импортировать существующий compact setup;
-- хранить token в OS keychain, если доступно;
-- генерировать local `agent.config.json`;
-- стартовать/останавливать managed Node agent фиксированными аргументами;
-- показывать логи;
-- работать из tray.
+## Docker And Caddy
 
-## Web UI
+The Docker/Caddy setup is secondary. Production currently uses systemd + nginx, not Docker.
 
-Основные разделы:
+`infra/docker-compose.yml` builds `apps/server/Dockerfile`, loads `../.env`, stores SQLite in a Docker volume, and exposes the server on localhost.
 
-- `Projects`: проекты, repo allowlist, project chats, jobs, commit/push/deploy/nginx/ssl actions.
-- `Settings`: пользователи/агенты/проекты и настройки.
-- `Sync`: состояние web service, Windows agent, Codex CLI, Git, VS Code bridge, sync target, setup agent download.
-- `Profile`: профиль, пароль, OAuth providers.
+`infra/Caddyfile` reverse-proxies `xedoc.ru` to the app.
 
-Project chat:
-
-- первое сообщение создает chat;
-- следующие сообщения продолжают выбранный chat;
-- вложения-изображения поддерживаются до лимитов protocol;
-- Codex progress/logs/git diff/actions показываются в timeline;
-- active local Codex activity может блокировать отправку, чтобы не наложить два запуска на один локальный thread.
-
-## Server API
-
-Основные группы endpoint'ов:
-
-- Auth/profile: `/api/login`, `/api/register`, `/api/logout`, `/api/me`, `/api/profile`.
-- OAuth: `/api/oauth/providers`, `/api/oauth/:provider/start`, `/api/oauth/:provider/callback`.
-- Agents: `/api/agents`, `/api/agents/:agentId/setup`, `/api/agent/package.zip`.
-- Projects: `/api/repos`, `/api/projects`, `/api/projects/:agentId/:repoId`.
-- Project actions: `git-sync`, `deploy`, `nginx`, `ssl`.
-- VS Code: `/api/agents/:agentId/vscode-command`.
-- Chat sync: `/api/agents/:agentId/sync-local-chats`.
-- Chats/messages: `/api/chats`, `/api/chats/:id`, attachments/details endpoints.
-- Public chat shares: `POST /api/chats/:id/share`, `GET /api/shared/chats/:token`, `POST /api/agent/shared-chats`.
-- Jobs: `/api/jobs`, `/api/jobs/:id`, `/api/jobs/:id/cancel`.
-- WebSockets: `/api/ui/ws`, `/api/agent/ws`.
-- Health: `/api/health`.
-
-## Production Deploy
-
-Current production path:
-
-```text
-/var/www/xedoc.ru
-```
-
-Manual deploy:
-
-```bash
-cd /var/www/xedoc.ru
-git pull --ff-only
-corepack pnpm install --frozen-lockfile
-NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm build
-systemctl restart codex-controller.service
-systemctl is-active codex-controller.service
-```
-
-Smoke check:
-
-```bash
-curl -I https://xedoc.ru
-curl https://xedoc.ru/api/health
-```
-
-Production service currently runs as:
-
-```text
-codex-controller.service
-```
-
-Server start command from package:
-
-```bash
-pnpm --filter @cmc/server start
-```
-
-That runs:
-
-```bash
-node --no-warnings=ExperimentalWarning dist/index.js
-```
-
-## Docker/Caddy
-
-`infra/docker-compose.yml` builds `apps/server/Dockerfile`, loads `../.env`, stores DB in Docker volume `cmc_data`, and exposes server only on localhost:
-
-```text
-127.0.0.1:3000:3000
-```
-
-`infra/Caddyfile`:
-
-```caddyfile
-xedoc.ru {
-  encode zstd gzip
-  reverse_proxy 127.0.0.1:3000
-}
-```
-
-## Проверки Перед Коммитом
+## Checks Before Commit
 
 ```powershell
-pnpm typecheck
-pnpm build
+cd C:\Projects\xedoc.ru
+git status --short --branch
+git diff --check
+corepack pnpm typecheck
+corepack pnpm build
 ```
 
-Для bridge отдельно:
+Focused checks:
 
 ```powershell
-pnpm --filter @cmc/vscode-bridge typecheck
-pnpm --filter @cmc/vscode-bridge build
-```
-
-Для agent отдельно:
-
-```powershell
-pnpm --filter @cmc/agent-windows typecheck
-pnpm --filter @cmc/agent-windows build
+corepack pnpm --filter @cmc/server typecheck
+corepack pnpm --filter @cmc/web typecheck
+corepack pnpm --filter @cmc/agent-windows typecheck
+corepack pnpm --filter @cmc/vscode-bridge typecheck
 ```
 
 ## Security Notes
 
-- Windows agent делает только outbound WebSocket, входящие порты на домашнем ПК не нужны.
-- Agent работает только с repos из allowlist.
-- WebSocket payloads валидируются через Zod в `packages/protocol`.
-- Agent token хранится в `CMC_AGENT_TOKEN`/keychain, не должен попадать в logs.
-- `redactPatterns` в agent config маскируют секреты.
-- Не добавлять произвольное shell execution.
-- Child process calls должны использовать args arrays и `shell:false`, если нет явной причины.
-- Не включать `danger-full-access`, `--yolo`, `--dangerously-bypass-approvals-and-sandbox` по умолчанию.
-- Для production использовать HTTPS reverse proxy и длинный `SESSION_SECRET`.
+- Keep all agent/project execution allowlisted.
+- Do not add arbitrary shell execution endpoints.
+- Do not log secrets, tokens, cookies, or full environment variables.
+- Validate WebSocket payloads with Zod schemas from `packages/protocol`.
+- Prefer child process argument arrays and avoid shell string composition.
+- Keep Windows agent networking outbound-only.
+- Keep `COOKIE_DOMAIN` empty for host-only cookies while user projects live on `*.xedoc.ru`.
+- Use HTTPS in production.
+- Use long random `SESSION_SECRET` values in production.
 
-## Частые Сценарии
+## Legacy Names
 
-Обновить prod:
-
-```powershell
-git push origin master
-ssh myserver "set -e; cd /var/www/xedoc.ru; git pull --ff-only; corepack pnpm install --frozen-lockfile; NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm build; systemctl restart codex-controller.service; systemctl is-active codex-controller.service"
-```
-
-Обновить локальный VS Code bridge:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-vscode-bridge.ps1
-```
-
-Перезапустить локальный compact agent:
-
-```powershell
-%USERPROFILE%\codex-agent\stop-agent.bat
-%USERPROFILE%\codex-agent\start-agent.bat
-```
-
-Пересобрать native agent exe:
-
-```powershell
-.\build-native-agent.bat
-```
-
-Синхронизировать чаты:
-
-1. Убедиться, что agent online.
-2. Открыть проект в web.
-3. Нажать `Sync` в левом списке проекта или в меню `Sync`.
-4. При необходимости нажать `Обновить` в VS Code bridge панели `xedoc.ru -> Chats`.
-
-
-Для простого сценария “VS Code открыт с Codex, хочу включить/выключить агента для сайта” используй вот эти:
-
-Запустить агента:
-
-C:\Projects\xedoc.ru\start-agent.bat
-Остановить агента:
-
-C:\Projects\xedoc.ru\stop-agent.bat
-start-agent.bat запускает обычного фонового Windows-агента, который видит VS Code bridge и синхронизирует чаты с xedoc.ru. Окна/трея у него может не быть, он работает скрытым процессом. Логи здесь:
-
-C:\Projects\xedoc.ru\data\prod-agent.log
-C:\Projects\xedoc.ru\data\prod-agent.err.log
-start-native-agent.bat сейчас не нужен для простого запуска. Это dev/release запуск нативного Tauri-приложения с UI, он тяжелее и требует Rust/Cargo. Для ежедневного “включить/выключить агента” лучше start-agent.bat / stop-agent.bat.
+`codex.rodion.pro` may still appear in compatibility code, historical remotes, old backups, or old browser sessions. New repository, docs, project settings, deploy commands, and production folder should use `xedoc.ru`.
