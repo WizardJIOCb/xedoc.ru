@@ -3,6 +3,7 @@ dist/
 .env
 .env.local
 data/
+tmp/
 *.db
 *.db-shm
 *.db-wal
