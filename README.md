@@ -394,7 +394,7 @@ Manual deploy:
 cd /var/www/xedoc.ru
 git pull --ff-only
 corepack pnpm install --frozen-lockfile
-corepack pnpm build
+NODE_OPTIONS=--max-old-space-size=4096 corepack pnpm build
 systemctl restart codex-controller.service
 systemctl is-active codex-controller.service
 ```
