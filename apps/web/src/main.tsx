@@ -4812,6 +4812,11 @@ function App() {
     const defaults = defaultProjectValues("New Project", selectedAgent, currentUser);
     setMobileMenuOpen(false);
     setView("projects");
+    setRepoKey("");
+    setChatListLoadingRepoKey("");
+    setChatListSyncingRepoKey("");
+    setChats([]);
+    resetActiveChatView();
     setChatProperties(null);
     setChatMenuId("");
     setProjectActionsOpen(false);
@@ -9794,7 +9799,7 @@ function App() {
           </div>
           <div className="top-title">
             <span className={`status ${chromeOnline ? "ok" : "bad"}`}>{chromeOnline ? <Wifi size={16} /> : <WifiOff size={16} />} {chromeAgentStatusLabel}</span>
-            <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : view === "search" ? "Search" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
+            <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : view === "search" ? "Search" : projectPanel === "new" ? "New project" : projectPanel === "settings" ? "Project settings" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
           </div>
           <div className="top-actions">
             {selectedRepo && <button className="icon" onClick={clearProjectSelection} title="Проекты"><ArrowLeft size={18} /></button>}
@@ -9842,7 +9847,7 @@ function App() {
       {view === "sync" && renderSync()}
       {view === "search" && renderSearch()}
 
-      {view === "projects" && !selectedRepo && (
+      {view === "projects" && !selectedRepo && !projectPanel && (
         <section className="project-picker">
           <div className="section-head">
             <h2><FolderGit2 size={18} /> Projects</h2>
