@@ -534,8 +534,10 @@ function canAccessChat(user: AuthUser, chatId: string): boolean {
   const row = db.prepare(`
     SELECT 1 FROM chats c
     JOIN agents a ON a.id = c.agent_id
-    WHERE c.id = ? ${isAdmin(user) ? "" : "AND a.user_id = ?"}
-  `).get(chatId, ...(isAdmin(user) ? [] : [user.id])) as { 1: number } | undefined;
+    WHERE c.id = ?
+      AND (c.user_id IS NULL OR c.user_id = ?)
+      ${isAdmin(user) ? "" : "AND a.user_id = ?"}
+  `).get(chatId, user.id, ...(isAdmin(user) ? [] : [user.id])) as { 1: number } | undefined;
   return Boolean(row);
 }
 
@@ -543,8 +545,11 @@ function canAccessJob(user: AuthUser, jobId: string): boolean {
   const row = db.prepare(`
     SELECT 1 FROM jobs j
     JOIN agents a ON a.id = j.agent_id
-    WHERE j.id = ? ${isAdmin(user) ? "" : "AND a.user_id = ?"}
-  `).get(jobId, ...(isAdmin(user) ? [] : [user.id])) as { 1: number } | undefined;
+    LEFT JOIN chats c ON c.id = j.chat_id
+    WHERE j.id = ?
+      AND (j.chat_id IS NULL OR c.user_id IS NULL OR c.user_id = ?)
+      ${isAdmin(user) ? "" : "AND a.user_id = ?"}
+  `).get(jobId, user.id, ...(isAdmin(user) ? [] : [user.id])) as { 1: number } | undefined;
   return Boolean(row);
 }
 
@@ -1042,8 +1047,10 @@ function projectOperationChat(user: AuthUser, agentId: string, repoId: string, c
   return db.prepare(`
     SELECT c.* FROM chats c
     JOIN agents a ON a.id = c.agent_id
-    WHERE c.id = ? AND c.agent_id = ? AND c.repo_id = ? ${isAdmin(user) ? "" : "AND a.user_id = ?"}
-  `).get(chatId, agentId, repoId, ...(isAdmin(user) ? [] : [user.id])) as ChatRow | undefined;
+    WHERE c.id = ? AND c.agent_id = ? AND c.repo_id = ?
+      AND (c.user_id IS NULL OR c.user_id = ?)
+      ${isAdmin(user) ? "" : "AND a.user_id = ?"}
+  `).get(chatId, agentId, repoId, user.id, ...(isAdmin(user) ? [] : [user.id])) as ChatRow | undefined;
 }
 
 function safeInlineCode(value: string): string {
@@ -1585,6 +1592,7 @@ function chatMessageAttachmentsChanged(
 function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: "chat.sync" }>): void {
   const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?").get(agentId, sync.repoId) as RepoRow | undefined;
   if (!repo) return;
+  const agentOwner = db.prepare("SELECT user_id FROM agents WHERE id = ?").get(agentId) as { user_id: string | null } | undefined;
   const syncedMessages = sanitizeSyncedMessages(sync.messages);
   if (!syncedMessages.length) return;
   const syncTitle = syncedChatTitle(sync, syncedMessages).slice(0, 300);
@@ -1649,8 +1657,8 @@ function upsertSyncedChat(agentId: string, sync: Extract<AgentToServer, { type: 
     }
   } else {
     const chatId = id("chat");
-    db.prepare("INSERT INTO chats (id,agent_id,repo_id,title,source,external_id,cwd,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
-      .run(chatId, agentId, sync.repoId, syncTitle, sync.source, sync.externalId, sync.cwd ?? null, sync.updatedAt, sync.updatedAt);
+    db.prepare("INSERT INTO chats (id,user_id,agent_id,repo_id,title,source,external_id,cwd,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run(chatId, agentOwner?.user_id ?? null, agentId, sync.repoId, syncTitle, sync.source, sync.externalId, sync.cwd ?? null, sync.updatedAt, sync.updatedAt);
     chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow;
     changed = true;
   }
@@ -4107,8 +4115,8 @@ async function createApp(): Promise<FastifyInstance> {
     const query = request.query as { agentId?: string; repoId?: string; includeHidden?: string; localOnly?: string };
     if (!query.agentId || !query.repoId) return reply.code(400).send({ error: "agent_and_repo_required" });
     if (!canAccessRepo(auth.user, query.agentId, query.repoId)) return reply.code(404).send({ error: "repo_not_found" });
-    const filters = ["agent_id = ?", "repo_id = ?"];
-    const args = [query.agentId, query.repoId];
+    const filters = ["agent_id = ?", "repo_id = ?", "(user_id IS NULL OR user_id = ?)"];
+    const args = [query.agentId, query.repoId, auth.user.id];
     if (query.includeHidden !== "1") filters.push("hidden_at IS NULL");
     if (query.localOnly === "1") filters.push("source IN ('codex','vscode')");
     const rows = db.prepare(`SELECT * FROM chats WHERE ${filters.join(" AND ")} ORDER BY updated_at DESC`)
@@ -4127,8 +4135,8 @@ async function createApp(): Promise<FastifyInstance> {
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
     const chatId = id("chat");
     const stamp = nowIso();
-    db.prepare("INSERT INTO chats (id,agent_id,repo_id,title,created_at,updated_at) VALUES (?,?,?,?,?,?)")
-      .run(chatId, parsed.data.agentId, parsed.data.repoId, parsed.data.title, stamp, stamp);
+    db.prepare("INSERT INTO chats (id,user_id,agent_id,repo_id,title,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+      .run(chatId, auth.user.id, parsed.data.agentId, parsed.data.repoId, parsed.data.title, stamp, stamp);
     appendChatMessage({
       chat_id: chatId,
       role: "system",
@@ -4224,8 +4232,11 @@ async function createApp(): Promise<FastifyInstance> {
     if (!chat) return reply.code(404).send({ error: "not_found" });
     const stamp = nowIso();
     if (body.linkedChatId) {
-      const linked = db.prepare("SELECT * FROM chats WHERE id = ? AND agent_id = ? AND repo_id = ? AND source IN ('codex','vscode')")
-        .get(body.linkedChatId, chat.agent_id, chat.repo_id) as ChatRow | undefined;
+      const linked = db.prepare(`
+        SELECT * FROM chats
+        WHERE id = ? AND agent_id = ? AND repo_id = ? AND source IN ('codex','vscode')
+          AND (user_id IS NULL OR user_id = ?)
+      `).get(body.linkedChatId, chat.agent_id, chat.repo_id, auth.user.id) as ChatRow | undefined;
       if (!linked) return reply.code(404).send({ error: "linked_chat_not_found" });
       const nextTitle = body.title ?? linked.title;
       db.prepare("UPDATE chats SET title=?, title_override=?, hidden_at=NULL, updated_at=? WHERE id=?")
@@ -4308,9 +4319,11 @@ async function createApp(): Promise<FastifyInstance> {
       : db.prepare(`
           SELECT j.* FROM jobs j
           JOIN agents a ON a.id = j.agent_id
-          ${isAdmin(auth.user) ? "" : "WHERE a.user_id = ?"}
+          LEFT JOIN chats c ON c.id = j.chat_id
+          WHERE (j.chat_id IS NULL OR c.user_id IS NULL OR c.user_id = ?)
+          ${isAdmin(auth.user) ? "" : "AND a.user_id = ?"}
           ORDER BY j.created_at DESC LIMIT 50
-        `).all(...(isAdmin(auth.user) ? [] : [auth.user.id])) as JobRow[];
+        `).all(auth.user.id, ...(isAdmin(auth.user) ? [] : [auth.user.id])) as JobRow[];
     return { jobs: rows.map((row) => serializeJob(row)) };
   });
 
@@ -4343,12 +4356,12 @@ async function createApp(): Promise<FastifyInstance> {
     if (chatId) {
       const chat = db.prepare("SELECT * FROM chats WHERE id = ? AND agent_id = ? AND repo_id = ?")
         .get(chatId, parsed.data.agentId, parsed.data.repoId) as ChatRow | undefined;
-      if (!chat) return reply.code(404).send({ error: "chat_not_found" });
+      if (!chat || !canAccessChat(auth.user, chat.id)) return reply.code(404).send({ error: "chat_not_found" });
     } else {
       chatId = id("chat");
       const stamp = nowIso();
-      db.prepare("INSERT INTO chats (id,agent_id,repo_id,title,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
-        .run(chatId, parsed.data.agentId, parsed.data.repoId, parsed.data.prompt.slice(0, 80), "web", stamp, stamp);
+      db.prepare("INSERT INTO chats (id,user_id,agent_id,repo_id,title,source,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
+        .run(chatId, auth.user.id, parsed.data.agentId, parsed.data.repoId, parsed.data.prompt.slice(0, 80), "web", stamp, stamp);
       broadcast({ type: "chats.updated", agentId: parsed.data.agentId, repoId: parsed.data.repoId });
     }
     const jobId = id("job");

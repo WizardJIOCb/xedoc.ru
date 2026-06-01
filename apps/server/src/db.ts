@@ -120,6 +120,7 @@ export type JobRow = {
 
 export type ChatRow = {
   id: string;
+  user_id: string | null;
   agent_id: string;
   repo_id: string;
   title: string;
@@ -276,6 +277,7 @@ export function openDb(path: string): DatabaseSync {
     );
     CREATE TABLE IF NOT EXISTS chats (
       id TEXT PRIMARY KEY,
+      user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
       agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
       repo_id TEXT NOT NULL,
       title TEXT NOT NULL,
@@ -385,6 +387,7 @@ export function openDb(path: string): DatabaseSync {
       PRIMARY KEY (user_id, day)
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_agent_status ON jobs(agent_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_chats_user_repo_updated ON chats(user_id, agent_id, repo_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_chats_repo_updated ON chats(agent_id, repo_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_logs_job_at ON job_logs(job_id, at);
     CREATE INDEX IF NOT EXISTS idx_messages_chat_at ON chat_messages(chat_id, created_at);
@@ -486,6 +489,18 @@ export function openDb(path: string): DatabaseSync {
     db.exec("ALTER TABLE agents ADD COLUMN local_activity_json TEXT");
   }
   const chatColumns = db.prepare("PRAGMA table_info(chats)").all() as Array<{ name: string }>;
+  if (!chatColumns.some((column) => column.name === "user_id")) {
+    db.exec("ALTER TABLE chats ADD COLUMN user_id TEXT");
+    db.prepare(`
+      UPDATE chats
+      SET user_id = (
+        SELECT a.user_id
+        FROM agents a
+        WHERE a.id = chats.agent_id
+      )
+      WHERE user_id IS NULL
+    `).run();
+  }
   if (!chatColumns.some((column) => column.name === "source")) {
     db.exec("ALTER TABLE chats ADD COLUMN source TEXT NOT NULL DEFAULT 'web'");
   }
@@ -502,6 +517,7 @@ export function openDb(path: string): DatabaseSync {
     db.exec("ALTER TABLE chats ADD COLUMN title_override TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_chat_created ON jobs(chat_id, created_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_chats_user_repo_updated ON chats(user_id, agent_id, repo_id, updated_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_at ON chat_messages(chat_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_attachments_job ON job_attachments(job_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_attachments_message ON job_attachments(chat_message_id)");
