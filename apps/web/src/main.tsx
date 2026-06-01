@@ -1731,14 +1731,29 @@ const CommandActions = React.memo(function CommandActions({
   && sameCodexActions(previous.actions, next.actions));
 
 function normalizeDisplayText(value: string) {
-  return value
+  return stripCliNoiseLines(value
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .replace(/\\r\\n/g, "\n")
     .replace(/\\n/g, "\n")
     .replace(/\\r/g, "\n")
     .replace(/\\t/g, "  ")
-    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, ""));
+}
+
+function isCliNoiseLine(line: string) {
+  const text = line.trim();
+  return /^YOLO mode is enabled\. All tool calls will be automatically approved\.$/i.test(text)
+    || /^Warning:\s*256-color support not detected\./i.test(text)
+    || /^Ripgrep is not available\. Falling back to GrepTool\.$/i.test(text);
+}
+
+function stripCliNoiseLines(value: string) {
+  return value
+    .split("\n")
+    .filter((line) => !isCliNoiseLine(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
 }
 
 function isEscaped(text: string, index: number) {

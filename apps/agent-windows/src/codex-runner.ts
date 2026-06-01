@@ -380,6 +380,7 @@ export class Runner {
       const streamBuffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
       const emitLine = (stream: "stdout" | "stderr", line: string) => {
         if (!line) return;
+        if (isIgnorableToolLine(toolName, line)) return;
         if (stream === "stdout") {
           const handled = options.handleJsonLine
             ? options.handleJsonLine(context, line)
@@ -692,6 +693,17 @@ function isIgnorableCodexWarning(line: string): boolean {
 
 function isIgnorableGrokWarning(line: string): boolean {
   return /BatchSpanProcessor\.ExportError|git_cli: Command::output\(\) FAILED/i.test(line);
+}
+
+function isIgnorableGeminiWarning(line: string): boolean {
+  const text = line.trim();
+  return /^YOLO mode is enabled\. All tool calls will be automatically approved\.$/i.test(text)
+    || /^Warning:\s*256-color support not detected\./i.test(text)
+    || /^Ripgrep is not available\. Falling back to GrepTool\.$/i.test(text);
+}
+
+function isIgnorableToolLine(toolName: string, line: string): boolean {
+  return toolName === "Gemini" && isIgnorableGeminiWarning(line);
 }
 
 function normalizeCodexNetworkFailure(line: string, activeFailure: string): string | null {
