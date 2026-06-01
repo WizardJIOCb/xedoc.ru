@@ -21,6 +21,8 @@ const MAX_EDITOR_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_PREVIEW_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_TREE_ENTRIES = 900;
 const MAX_FILE_TREE_DEPTH = 8;
+const LOCAL_DEPLOY_ROOT = "/var/www";
+const SERVER_PROJECTS_ROOT = "/srv/codex-agent/projects";
 const FILE_TREE_IGNORED_DIRS = new Set([
   ".git",
   ".next",
@@ -641,9 +643,7 @@ async function deployProject(repoId: string): Promise<string> {
   if (!repo) throw new Error("Project not found in agent config.");
   if (!repo.serverPath) throw new Error("Project server folder is not configured.");
   if (!repo.deploy) throw new Error("Project deploy settings are not configured.");
-  if (!repo.serverPath.replace(/\\/g, "/").startsWith("/var/www/")) {
-    throw new Error("Refusing to deploy outside /var/www.");
-  }
+  ensureLocalDeployPathIsSafe(repo.serverPath);
 
   const output: string[] = [];
   const runStep = async (label: string, command: string, args: string[], cwd = repo.path, timeoutMs = 120000) => {
@@ -713,6 +713,13 @@ async function deployProjectLocal(sourceDir: string, deployPath: string, cleanRe
   if (!existsSync(sourceDir) || !statSync(sourceDir).isDirectory()) {
     throw new Error([...output, `Build output folder does not exist: ${sourceDir}`].join("\n"));
   }
+  const sameDirectory = resolve(sourceDir) === resolve(deployPath);
+  if (sameDirectory) {
+    output.push(`$ local publish ${deployPath}`);
+    output.push("Project folder is already the web root; copy step skipped.");
+    if (cleanRemote) output.push("Clean skipped because deploy target is the project folder.");
+    return;
+  }
   mkdirSync(deployPath, { recursive: true });
   if (isProtectedDeployDirectory(deployPath)) {
     throw new Error([...output, `Refusing to deploy into protected controller directory: ${deployPath}`].join("\n"));
@@ -746,9 +753,7 @@ async function configureNginx(repoId: string): Promise<string> {
   if (!repo.deploy) throw new Error("Project deploy settings are not configured.");
   if ((repo.deploy.mode ?? "ssh") === "ssh" && !repo.deploy.sshTarget) throw new Error("Project deploy SSH target is not configured.");
   if (!isSafeDomain(repo.domain)) throw new Error("Project domain is not safe for nginx config.");
-  if (!repo.serverPath.replace(/\\/g, "/").startsWith("/var/www/")) {
-    throw new Error("Refusing to configure nginx outside /var/www.");
-  }
+  ensureLocalDeployPathIsSafe(repo.serverPath);
 
   const remotePath = repo.serverPath.replace(/\/+$/g, "");
   const remoteSubdir = normalizeRemoteSubdir(repo.deploy.remoteSubdir);
@@ -878,9 +883,24 @@ function resolveProjectPath(projectPath: string, childPath: string): string {
 }
 
 function ensureLocalDeployPathIsSafe(path: string): void {
-  const normalized = path.replace(/\\/g, "/").replace(/\/+$/g, "");
-  if (!normalized.startsWith("/var/www/")) throw new Error("Refusing to deploy outside /var/www.");
+  const normalized = normalizeDeployPath(path);
   if (normalized.split("/").some((part) => part === "..")) throw new Error("Deploy path is not safe.");
+  const allowed =
+    isPathBelowRoot(normalized, LOCAL_DEPLOY_ROOT, 1)
+    || isPathBelowRoot(normalized, SERVER_PROJECTS_ROOT, 2);
+  if (!allowed) {
+    throw new Error(`Refusing to deploy outside ${LOCAL_DEPLOY_ROOT} or ${SERVER_PROJECTS_ROOT}/{user}/{project}.`);
+  }
+}
+
+function normalizeDeployPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
+}
+
+function isPathBelowRoot(path: string, root: string, minSegments: number): boolean {
+  if (!path.startsWith(`${root}/`)) return false;
+  const segments = path.slice(root.length + 1).split("/").filter(Boolean);
+  return segments.length >= minSegments && segments.every((segment) => segment !== "." && segment !== "..");
 }
 
 function isProtectedDeployDirectory(path: string): boolean {
@@ -1182,6 +1202,11 @@ function optionalText(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function optionalServerPath(projectPath: string, value: string | undefined): string | undefined {
+  const trimmed = optionalText(value);
+  return trimmed === "." ? projectPath : trimmed;
+}
+
 async function hello(): Promise<AgentToServer> {
   const [repos, codexVersion, grokVersion, gitVersion, codexUsage, grokUsage] = await Promise.all([
     scanRepos(config),
@@ -1362,7 +1387,7 @@ function connect() {
           name: message.project.name,
           path: message.project.path,
           githubUrl: optionalText(message.project.githubUrl),
-          serverPath: optionalText(message.project.serverPath),
+          serverPath: optionalServerPath(message.project.path, message.project.serverPath),
           domain: optionalText(message.project.domain),
           deploy: message.project.deploy ?? undefined,
           data: message.project.data ?? undefined,
@@ -1392,7 +1417,7 @@ function connect() {
             name: message.patch.name,
             path: message.patch.path,
             githubUrl: optionalText(message.patch.githubUrl),
-            serverPath: optionalText(message.patch.serverPath),
+            serverPath: optionalServerPath(message.patch.path, message.patch.serverPath),
             domain: optionalText(message.patch.domain),
             deploy: message.patch.deploy ?? undefined,
             data: message.patch.data ?? undefined,
@@ -1408,7 +1433,7 @@ function connect() {
           }
           if (message.patch.name) repo.name = message.patch.name;
           if ("githubUrl" in message.patch) repo.githubUrl = optionalText(message.patch.githubUrl);
-          if ("serverPath" in message.patch) repo.serverPath = optionalText(message.patch.serverPath);
+          if ("serverPath" in message.patch) repo.serverPath = optionalServerPath(repo.path, message.patch.serverPath);
           if ("domain" in message.patch) repo.domain = optionalText(message.patch.domain);
           if ("deploy" in message.patch) repo.deploy = message.patch.deploy ?? undefined;
           if ("data" in message.patch) repo.data = message.patch.data ?? undefined;

@@ -1016,10 +1016,12 @@ function defaultProjectValues(name: string, agent?: Agent | null, user?: Pick<Us
   const domain = defaultProjectDomain(name);
   const safeSlug = projectSlug(name);
   const linuxPath = `/srv/codex-agent/projects/${defaultProjectOwnerSegment(user)}/${safeSlug}`;
+  const path = isLinuxAgent(agent) ? linuxPath : defaultProjectPath(name, agent);
+  const deployMode = defaultDeployModeForAgent(agent);
   return {
-    path: isLinuxAgent(agent) ? linuxPath : defaultProjectPath(name, agent),
+    path,
     domain,
-    serverPath: defaultServerPathForDomain(domain),
+    serverPath: defaultProjectServerPath(agent, deployMode, path, domain),
     githubUrl: defaultGithubUrlForDomain(domain)
   };
 }
@@ -1097,8 +1099,36 @@ function isLinuxAgent(agent?: Agent | null) {
   return /linux|ubuntu|debian|server/.test(text);
 }
 
+function defaultDeployModeForAgent(agent?: Agent | null): "ssh" | "local" {
+  return isLinuxAgent(agent) ? "local" : "ssh";
+}
+
+function isUnifiedProjectFolderMode(agent?: Agent | null, deployMode?: "ssh" | "local") {
+  return isLinuxAgent(agent) && deployMode === "local";
+}
+
+function defaultProjectServerPath(agent: Agent | null | undefined, deployMode: "ssh" | "local", projectPath: string, domain: string) {
+  return isUnifiedProjectFolderMode(agent, deployMode) ? projectPath : defaultServerPathForDomain(domain);
+}
+
+function normalizeProjectServerPathForSave(agent: Agent | null | undefined, deployMode: "ssh" | "local", projectPath: string, serverPath: string) {
+  const path = projectPath.trim();
+  const server = serverPath.trim();
+  if (isUnifiedProjectFolderMode(agent, deployMode)) return path;
+  if (server === ".") return path;
+  return server;
+}
+
 function defaultBuildCommandForAgent(agent?: Agent | null) {
   return isLinuxAgent(agent) ? "npm run build" : "npm.cmd run build";
+}
+
+function defaultDeploySourceDirForAgent(agent: Agent | null | undefined, deployMode: "ssh" | "local") {
+  return isUnifiedProjectFolderMode(agent, deployMode) ? "." : "dist";
+}
+
+function defaultDeployBuildCommandForAgent(agent: Agent | null | undefined, deployMode: "ssh" | "local") {
+  return isUnifiedProjectFolderMode(agent, deployMode) ? "" : defaultBuildCommandForAgent(agent);
 }
 
 function hasDeployConfig(repo?: Repo | null) {
@@ -1106,14 +1136,14 @@ function hasDeployConfig(repo?: Repo | null) {
   return (repo.deploy.mode ?? "ssh") === "local" || Boolean(repo.deploy.sshTarget);
 }
 
-function buildDeployConfig(mode: "ssh" | "local", sshTarget: string, sourceDir: string, remoteSubdir: string, cleanRemote: boolean, buildCommand: string): DeployConfig | undefined {
+function buildDeployConfig(mode: "ssh" | "local", sshTarget: string, sourceDir: string, remoteSubdir: string, cleanRemote: boolean, buildCommand: string, defaultSourceDir = "dist"): DeployConfig | undefined {
   const target = sshTarget.trim();
   if (mode === "ssh" && !target) return undefined;
   const parts = splitCommandLine(buildCommand.trim());
   return {
     mode,
     sshTarget: mode === "ssh" ? target : undefined,
-    sourceDir: sourceDir.trim() || "dist",
+    sourceDir: sourceDir.trim() || defaultSourceDir,
     remoteSubdir: remoteSubdir.trim() || undefined,
     cleanRemote,
     buildCommand: parts[0] ? {
@@ -3642,18 +3672,31 @@ function App() {
   const chromeAgent = view === "sync" ? syncControlAgent : selectedAgent;
   const chromeRepo = view === "sync" ? syncRepo : selectedRepo;
   const projectFormAgent = agents.find((agent) => agent.id === projectAgentId) ?? selectedAgent;
+  const projectUsesUnifiedFolder = isUnifiedProjectFolderMode(projectFormAgent, projectDeployMode);
+  const effectiveProjectServerPath = normalizeProjectServerPathForSave(projectFormAgent, projectDeployMode, projectPath, projectServerPath);
+  const effectiveProjectDataPath = projectUsesUnifiedFolder && projectDataLocation === "server"
+    ? defaultProjectDataPath("server", projectPath, effectiveProjectServerPath)
+    : projectDataPath;
   const online = Boolean(selectedAgent && selectedAgent.status === "online");
   const chromeOnline = Boolean(chromeAgent && chromeAgent.status === "online");
   const chromeAgentStatusLabel = chromeAgent ? `${chromeAgent.name} ${chromeOnline ? "online" : "offline"}` : (chromeOnline ? "Agent online" : "Agent offline");
   const projectTargetAgentChanged = Boolean(projectPanel === "settings" && selectedRepo && projectAgentId && projectAgentId !== selectedRepo.agentId);
   const projectDraftDeployConfig = useMemo(() => (
     projectDeployEnabled
-      ? buildDeployConfig(projectDeployMode, projectDeploySshTarget, projectDeploySourceDir, projectDeployRemoteSubdir, projectDeployCleanRemote, projectDeployBuildCommand) ?? null
+      ? buildDeployConfig(
+        projectDeployMode,
+        projectDeploySshTarget,
+        projectDeploySourceDir,
+        projectUsesUnifiedFolder ? "" : projectDeployRemoteSubdir,
+        projectUsesUnifiedFolder ? false : projectDeployCleanRemote,
+        projectDeployBuildCommand,
+        defaultDeploySourceDirForAgent(projectFormAgent, projectDeployMode)
+      ) ?? null
       : null
-  ), [projectDeployBuildCommand, projectDeployCleanRemote, projectDeployEnabled, projectDeployMode, projectDeployRemoteSubdir, projectDeploySourceDir, projectDeploySshTarget]);
+  ), [projectDeployBuildCommand, projectDeployCleanRemote, projectDeployEnabled, projectDeployMode, projectDeployRemoteSubdir, projectDeploySourceDir, projectDeploySshTarget, projectFormAgent, projectUsesUnifiedFolder]);
   const projectDraftDataConfig = useMemo(() => (
-    buildProjectDataConfig(projectDataLocation, projectDataPath) ?? null
-  ), [projectDataLocation, projectDataPath]);
+    buildProjectDataConfig(projectDataLocation, effectiveProjectDataPath) ?? null
+  ), [effectiveProjectDataPath, projectDataLocation]);
   const projectWizardStepIndex = PROJECT_WIZARD_STEPS.findIndex((step) => step.id === projectWizardStep);
   const projectWizardCanContinue = projectWizardStep === "project"
     ? Boolean(projectName.trim() && projectPath.trim() && projectFormAgent)
@@ -3676,11 +3719,11 @@ function App() {
       || projectPath.trim() !== originalProjectPath
       || projectTargetAgentChanged
       || projectGithubUrl.trim() !== (selectedRepo.githubUrl ?? "")
-      || projectServerPath.trim() !== (selectedRepo.serverPath ?? "")
+      || effectiveProjectServerPath !== (selectedRepo.serverPath ?? "")
       || normalizedDomain !== (selectedRepo.domain ?? "")
       || sandbox !== selectedRepo.defaultSandbox
     );
-  }, [originalProjectPath, projectDomain, projectGithubUrl, projectName, projectPanel, projectPath, projectServerPath, projectTargetAgentChanged, sandbox, selectedRepo]);
+  }, [effectiveProjectServerPath, originalProjectPath, projectDomain, projectGithubUrl, projectName, projectPanel, projectPath, projectTargetAgentChanged, sandbox, selectedRepo]);
   const projectSaveAgentOnline = projectPanel === "new"
     ? projectFormAgent?.status === "online"
     : projectTargetAgentChanged
@@ -4479,15 +4522,16 @@ function App() {
       return;
     }
     const defaults = defaultProjectValues(selectedRepo.name, agent, currentUser);
-    const sourceDir = selectedRepo.deploy?.sourceDir ?? "dist";
-    const deployMode = isLinuxAgent(agent) ? "local" : "ssh";
+    const deployMode = defaultDeployModeForAgent(agent);
+    const sourceDir = selectedRepo.deploy?.sourceDir ?? defaultDeploySourceDirForAgent(agent, deployMode);
     const deployConfig = buildDeployConfig(
       deployMode,
       deployMode === "ssh" ? selectedRepo.deploy?.sshTarget ?? DEFAULT_DEPLOY_SSH_TARGET : "",
       sourceDir,
-      selectedRepo.deploy?.remoteSubdir ?? "",
-      selectedRepo.deploy?.cleanRemote ?? false,
-      defaultBuildCommandForAgent(agent)
+      isUnifiedProjectFolderMode(agent, deployMode) ? "" : selectedRepo.deploy?.remoteSubdir ?? "",
+      isUnifiedProjectFolderMode(agent, deployMode) ? false : selectedRepo.deploy?.cleanRemote ?? false,
+      defaultDeployBuildCommandForAgent(agent, deployMode),
+      defaultDeploySourceDirForAgent(agent, deployMode)
     ) ?? selectedRepo.deploy ?? null;
     setBusy(true);
     setSyncNotice("");
@@ -4498,10 +4542,11 @@ function App() {
         body: JSON.stringify({
           targetAgentId: agent.id,
           path: defaults.path,
+          serverPath: defaults.serverPath,
           deploy: deployConfig,
           data: selectedRepo.data ?? {
             location: isLinuxAgent(agent) ? "server" : "local",
-            path: defaultProjectDataPath(isLinuxAgent(agent) ? "server" : "local", defaults.path, selectedRepo.serverPath ?? defaults.serverPath)
+            path: defaultProjectDataPath(isLinuxAgent(agent) ? "server" : "local", defaults.path, defaults.serverPath)
           }
         })
       });
@@ -4906,24 +4951,35 @@ function App() {
 
   function applyProjectDefaultsToForm(options: { includePath: boolean }) {
     const defaults = defaultProjectValues(projectName, projectFormAgent, currentUser);
+    const defaultMode = defaultDeployModeForAgent(projectFormAgent);
+    const defaultSourceDir = defaultDeploySourceDirForAgent(projectFormAgent, defaultMode);
+    const defaultBuildCommand = defaultDeployBuildCommandForAgent(projectFormAgent, defaultMode);
+    const nextProjectPath = options.includePath ? defaults.path : projectPath;
+    const nextServerPath = isUnifiedProjectFolderMode(projectFormAgent, defaultMode) ? nextProjectPath : defaults.serverPath;
     if (options.includePath) setProjectPath(defaults.path);
     setProjectDomain(defaults.domain);
-    setProjectServerPath(defaults.serverPath);
+    setProjectServerPath(nextServerPath);
     setProjectGithubUrl(defaults.githubUrl);
-    setProjectDataPath(defaultProjectDataPath(projectDataLocation, options.includePath ? defaults.path : projectPath, defaults.serverPath));
+    setProjectDataPath(defaultProjectDataPath(projectDataLocation, nextProjectPath, nextServerPath));
     setProjectDeployEnabled(true);
-    const defaultMode = isLinuxAgent(projectFormAgent) ? "local" : "ssh";
     setProjectDeployMode(defaultMode);
-    if (!projectDeploySshTarget.trim()) setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
-    if (!projectDeploySourceDir.trim()) setProjectDeploySourceDir("dist");
-    if (!projectDeployBuildCommand.trim()) setProjectDeployBuildCommand(defaultBuildCommandForAgent(projectFormAgent));
+    setProjectDeploySshTarget(defaultMode === "ssh" ? projectDeploySshTarget.trim() || DEFAULT_DEPLOY_SSH_TARGET : "");
+    setProjectDeploySourceDir(defaultSourceDir);
+    setProjectDeployRemoteSubdir("");
+    setProjectDeployBuildCommand(defaultBuildCommand);
+    if (isUnifiedProjectFolderMode(projectFormAgent, defaultMode)) {
+      setProjectDataLocation("server");
+      setProjectDataPath(defaultProjectDataPath("server", nextProjectPath, nextServerPath));
+    }
   }
 
   function handleProjectAgentChange(agentId: string) {
     const agent = agents.find((item) => item.id === agentId) ?? selectedAgent;
     const previousAgent = agents.find((item) => item.id === projectAgentId) ?? selectedAgent;
-    const previousDefaultBuild = defaultBuildCommandForAgent(previousAgent);
+    const previousDefaultBuild = defaultDeployBuildCommandForAgent(previousAgent, projectDeployMode);
+    const previousDefaultSourceDir = defaultDeploySourceDirForAgent(previousAgent, projectDeployMode);
     setProjectAgentId(agentId);
+    const defaultMode = defaultDeployModeForAgent(agent);
     const defaults = defaultProjectValues(projectName, agent, currentUser);
     if (projectPanel === "new") {
       setProjectPath(defaults.path);
@@ -4932,15 +4988,20 @@ function App() {
       setProjectDomain(defaults.domain);
     } else {
       setProjectPath(defaults.path);
+      if (isUnifiedProjectFolderMode(agent, defaultMode)) setProjectServerPath(defaults.path);
     }
     const nextDataLocation = isLinuxAgent(agent) ? "server" : "local";
     setProjectDataLocation(nextDataLocation);
-    setProjectDataPath(defaultProjectDataPath(nextDataLocation, defaults.path, projectPanel === "new" ? defaults.serverPath : projectServerPath));
-    const defaultMode = isLinuxAgent(agent) ? "local" : "ssh";
+    setProjectDataPath(defaultProjectDataPath(nextDataLocation, defaults.path, isUnifiedProjectFolderMode(agent, defaultMode) || projectPanel === "new" ? defaults.serverPath : projectServerPath));
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
+    const nextDefaultSourceDir = defaultDeploySourceDirForAgent(agent, defaultMode);
+    if (!projectDeploySourceDir.trim() || projectDeploySourceDir.trim() === previousDefaultSourceDir || projectDeploySourceDir.trim() === "dist") {
+      setProjectDeploySourceDir(nextDefaultSourceDir);
+    }
+    if (isUnifiedProjectFolderMode(agent, defaultMode)) setProjectDeployRemoteSubdir("");
     if (!projectDeployBuildCommand.trim() || projectDeployBuildCommand.trim() === previousDefaultBuild) {
-      setProjectDeployBuildCommand(defaultBuildCommandForAgent(agent));
+      setProjectDeployBuildCommand(defaultDeployBuildCommandForAgent(agent, defaultMode));
     }
   }
 
@@ -4972,7 +5033,7 @@ function App() {
     const nextDomain = normalizeProjectDomain(value);
     if (!nextDomain) return;
     const nextServerPath = defaultServerPathForDomain(nextDomain);
-    if (!projectServerPath.trim() || projectServerPath.trim() === previousServerPath) {
+    if (!projectUsesUnifiedFolder && (!projectServerPath.trim() || projectServerPath.trim() === previousServerPath)) {
       setProjectServerPath(nextServerPath);
       if (projectDataLocation === "server" && (!projectDataPath.trim() || projectDataPath === previousDataPath)) {
         setProjectDataPath(defaultProjectDataPath("server", projectPath, nextServerPath));
@@ -4986,6 +5047,13 @@ function App() {
   function handleProjectPathChange(value: string) {
     const previousDataPath = defaultProjectDataPath(projectDataLocation, projectPath, projectServerPath);
     setProjectPath(value);
+    if (projectUsesUnifiedFolder) {
+      setProjectServerPath(value);
+      if (projectDataLocation === "server" && (!projectDataPath.trim() || projectDataPath === previousDataPath)) {
+        setProjectDataPath(defaultProjectDataPath("server", value, value));
+      }
+      return;
+    }
     if (projectPanel === "new" && projectDataLocation === "local" && (!projectDataPath.trim() || projectDataPath === previousDataPath)) {
       setProjectDataPath(defaultProjectDataPath("local", value, projectServerPath));
     }
@@ -5001,11 +5069,12 @@ function App() {
 
   function handleProjectDataLocationChange(location: ProjectDataLocation) {
     setProjectDataLocation(location);
-    setProjectDataPath(defaultProjectDataPath(location, projectPath, projectServerPath));
+    setProjectDataPath(defaultProjectDataPath(location, projectPath, effectiveProjectServerPath));
   }
 
   function openNewProject() {
     const defaults = defaultProjectValues("New Project", selectedAgent, currentUser);
+    const defaultMode = defaultDeployModeForAgent(selectedAgent);
     setMobileMenuOpen(false);
     setView("projects");
     setRepoKey("");
@@ -5027,13 +5096,12 @@ function App() {
     setProjectServerPath(defaults.serverPath);
     setProjectDomain(defaults.domain);
     setProjectVisibility("private");
-    const defaultMode = isLinuxAgent(selectedAgent) ? "local" : "ssh";
     setProjectDeployEnabled(true);
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
-    setProjectDeploySourceDir("dist");
+    setProjectDeploySourceDir(defaultDeploySourceDirForAgent(selectedAgent, defaultMode));
     setProjectDeployRemoteSubdir("");
-    setProjectDeployBuildCommand(defaultBuildCommandForAgent(selectedAgent));
+    setProjectDeployBuildCommand(defaultDeployBuildCommandForAgent(selectedAgent, defaultMode));
     setProjectDeployCleanRemote(false);
     setProjectDataLocation(isLinuxAgent(selectedAgent) ? "server" : "local");
     setProjectDataPath(defaultProjectDataPath(isLinuxAgent(selectedAgent) ? "server" : "local", defaults.path, defaults.serverPath));
@@ -5044,6 +5112,11 @@ function App() {
   }
 
   function openProjectSettings(repo: Repo) {
+    const repoAgent = agents.find((agent) => agent.id === repo.agentId);
+    const deployMode = repo.deploy?.mode ?? defaultDeployModeForAgent(repoAgent);
+    const unifiedFolder = isUnifiedProjectFolderMode(repoAgent, deployMode);
+    const formServerPath = normalizeProjectServerPathForSave(repoAgent, deployMode, repo.pathMasked, repo.serverPath ?? "");
+    const dataLocation = unifiedFolder ? "server" : repo.data?.location ?? "local";
     setProjectName(repo.name);
     setProjectAgentId(repo.agentId);
     setProjectPath(repo.pathMasked);
@@ -5052,18 +5125,18 @@ function App() {
     setProjectGithubOwner(githubConnection.login ?? "");
     setProjectGithubRepoName(githubRepoNameFromProject(repo.name));
     setProjectGithubVisibility(repo.visibility ?? "private");
-    setProjectServerPath(repo.serverPath ?? "");
+    setProjectServerPath(formServerPath);
     setProjectDomain(repo.domain ?? "");
     setProjectVisibility(repo.visibility ?? "private");
-    setProjectDeployMode(repo.deploy?.mode ?? "ssh");
+    setProjectDeployMode(deployMode);
     setProjectDeploySshTarget(repo.deploy?.sshTarget ?? "");
-    setProjectDeploySourceDir(repo.deploy?.sourceDir ?? "dist");
-    setProjectDeployRemoteSubdir(repo.deploy?.remoteSubdir ?? "");
-    setProjectDeployBuildCommand(formatBuildCommand(repo.deploy) || defaultBuildCommandForAgent(agents.find((agent) => agent.id === repo.agentId)));
-    setProjectDeployCleanRemote(repo.deploy?.cleanRemote ?? false);
+    setProjectDeploySourceDir(repo.deploy?.sourceDir ?? defaultDeploySourceDirForAgent(repoAgent, deployMode));
+    setProjectDeployRemoteSubdir(unifiedFolder ? "" : repo.deploy?.remoteSubdir ?? "");
+    setProjectDeployBuildCommand(formatBuildCommand(repo.deploy) || defaultDeployBuildCommandForAgent(repoAgent, deployMode));
+    setProjectDeployCleanRemote(unifiedFolder ? false : repo.deploy?.cleanRemote ?? false);
     setProjectDeployEnabled(Boolean(repo.deploy));
-    setProjectDataLocation(repo.data?.location ?? "local");
-    setProjectDataPath(repo.data?.path ?? defaultProjectDataPath(repo.data?.location ?? "local", repo.pathMasked, repo.serverPath ?? ""));
+    setProjectDataLocation(dataLocation);
+    setProjectDataPath(unifiedFolder ? defaultProjectDataPath("server", repo.pathMasked, formServerPath) : repo.data?.path ?? defaultProjectDataPath(dataLocation, repo.pathMasked, formServerPath));
     setProjectStartPrompt("");
     setOriginalProjectPath(repo.pathMasked);
     setSandbox(repo.defaultSandbox);
@@ -5863,7 +5936,7 @@ function App() {
       `Project: ${projectName.trim() || "Untitled"}`,
       `Folder: ${projectPath.trim() || "not set"}`,
       projectGithubUrl.trim() ? `GitHub: ${projectGithubUrl.trim()}` : "",
-      projectServerPath.trim() ? `Server folder: ${projectServerPath.trim()}` : "",
+      effectiveProjectServerPath ? `Web root: ${effectiveProjectServerPath}` : "",
       normalizeProjectDomain(projectDomain) ? `Domain: ${normalizeProjectDomain(projectDomain)}` : "",
       projectDraftDeployConfig ? `Deploy: ${projectDraftDeployConfig.mode}${projectDraftDeployConfig.mode === "ssh" ? ` via ${projectDraftDeployConfig.sshTarget}` : ""}, source ${projectDraftDeployConfig.sourceDir}` : "Deploy: not configured",
       projectDraftDataConfig ? `Data storage: ${projectDraftDataConfig.location}, ${projectDraftDataConfig.path}` : "",
@@ -5959,7 +6032,7 @@ function App() {
         name: projectGithubRepoName.trim(),
         visibility: projectGithubVisibility
       } : undefined,
-      serverPath: projectServerPath.trim(),
+      serverPath: effectiveProjectServerPath,
       domain: normalizedDomain,
       visibility: projectVisibility,
       deploy: deployConfig,
@@ -5973,7 +6046,7 @@ function App() {
       if (projectName.trim() !== selectedRepo?.name) body.name = projectName.trim();
       if (projectPath.trim() !== originalProjectPath) body.path = projectPath.trim();
       if (projectGithubUrl.trim() !== (selectedRepo?.githubUrl ?? "")) body.githubUrl = projectGithubUrl.trim();
-      if (projectServerPath.trim() !== (selectedRepo?.serverPath ?? "")) body.serverPath = projectServerPath.trim();
+      if (effectiveProjectServerPath !== (selectedRepo?.serverPath ?? "")) body.serverPath = effectiveProjectServerPath;
       if (normalizedDomain !== (selectedRepo?.domain ?? "")) body.domain = normalizedDomain;
       if (JSON.stringify(deployConfig) !== JSON.stringify(selectedRepo?.deploy ?? null)) body.deploy = deployConfig;
       if (JSON.stringify(dataConfig) !== JSON.stringify(selectedRepo?.data ?? null)) body.data = dataConfig;
@@ -7912,6 +7985,20 @@ function App() {
             setProjectDeployEnabled(true);
             setProjectDeployMode(value);
             if (value === "ssh" && !projectDeploySshTarget.trim()) setProjectDeploySshTarget(DEFAULT_DEPLOY_SSH_TARGET);
+            if (value === "local") setProjectDeploySshTarget("");
+            const nextSourceDir = defaultDeploySourceDirForAgent(projectFormAgent, value);
+            if (!projectDeploySourceDir.trim() || projectDeploySourceDir.trim() === "dist" || projectDeploySourceDir.trim() === ".") {
+              setProjectDeploySourceDir(nextSourceDir);
+            }
+            if (isUnifiedProjectFolderMode(projectFormAgent, value)) {
+              setProjectServerPath(projectPath);
+              setProjectDeployRemoteSubdir("");
+              setProjectDeployCleanRemote(false);
+              if (projectDataLocation === "server") setProjectDataPath(defaultProjectDataPath("server", projectPath, projectPath));
+              if (!projectDeployBuildCommand.trim() || projectDeployBuildCommand.trim() === defaultBuildCommandForAgent(projectFormAgent)) {
+                setProjectDeployBuildCommand(defaultDeployBuildCommandForAgent(projectFormAgent, value));
+              }
+            }
           }}
         >
           <option value="none">No deploy yet</option>
@@ -7925,10 +8012,17 @@ function App() {
   function renderDeployFields() {
     return (
       <>
-        <label>
-          Server project folder
-          <input placeholder="/var/www/project.domain" value={projectServerPath} onChange={(event) => handleProjectServerPathChange(event.target.value)} />
-        </label>
+        {projectUsesUnifiedFolder ? (
+          <div className="project-preview">
+            <span>Project folder / web root</span>
+            <strong>{effectiveProjectServerPath || "not set"}</strong>
+          </div>
+        ) : (
+          <label>
+            Server project folder
+            <input placeholder="/var/www/project.domain" value={projectServerPath} onChange={(event) => handleProjectServerPathChange(event.target.value)} />
+          </label>
+        )}
         <label>
           Domain or subdomain
           <input
@@ -7951,28 +8045,39 @@ function App() {
         )}
         {projectDeployEnabled && (
           <>
-        <label>
-          Deploy SSH target
-          <input disabled={projectDeployMode === "local"} placeholder="myserver" value={projectDeployMode === "local" ? "" : projectDeploySshTarget} onChange={(event) => setProjectDeploySshTarget(event.target.value)} />
-        </label>
-        <div className="wizard-two-col">
+        {projectDeployMode === "ssh" && (
           <label>
-            Deploy source folder
-            <input placeholder="dist" value={projectDeploySourceDir} onChange={(event) => setProjectDeploySourceDir(event.target.value)} />
+            Deploy SSH target
+            <input placeholder="myserver" value={projectDeploySshTarget} onChange={(event) => setProjectDeploySshTarget(event.target.value)} />
           </label>
+        )}
+        {projectUsesUnifiedFolder ? (
           <label>
-            Deploy target subfolder
-            <input placeholder="dist, optional" value={projectDeployRemoteSubdir} onChange={(event) => setProjectDeployRemoteSubdir(event.target.value)} />
+            Web files inside project
+            <input placeholder="." value={projectDeploySourceDir} onChange={(event) => setProjectDeploySourceDir(event.target.value)} />
           </label>
-        </div>
+        ) : (
+          <div className="wizard-two-col">
+            <label>
+              Deploy source folder
+              <input placeholder="dist" value={projectDeploySourceDir} onChange={(event) => setProjectDeploySourceDir(event.target.value)} />
+            </label>
+            <label>
+              Deploy target subfolder
+              <input placeholder="dist, optional" value={projectDeployRemoteSubdir} onChange={(event) => setProjectDeployRemoteSubdir(event.target.value)} />
+            </label>
+          </div>
+        )}
         <label>
-          Build command
+          Build command{projectUsesUnifiedFolder ? " (optional)" : ""}
           <input placeholder={defaultBuildCommandForAgent(projectPanel === "new" ? projectFormAgent : selectedAgent)} value={projectDeployBuildCommand} onChange={(event) => setProjectDeployBuildCommand(event.target.value)} />
         </label>
-        <label className="checkbox-row">
-          <input checked={projectDeployCleanRemote} type="checkbox" onChange={(event) => setProjectDeployCleanRemote(event.target.checked)} />
-          Clean server folder before upload
-        </label>
+        {!projectUsesUnifiedFolder && (
+          <label className="checkbox-row">
+            <input checked={projectDeployCleanRemote} type="checkbox" onChange={(event) => setProjectDeployCleanRemote(event.target.checked)} />
+            Clean server folder before upload
+          </label>
+        )}
           </>
         )}
       </>
@@ -7980,6 +8085,14 @@ function App() {
   }
 
   function renderDataFields() {
+    if (projectUsesUnifiedFolder) {
+      return (
+        <div className="project-preview">
+          <span>Data folder</span>
+          <strong>{effectiveProjectDataPath || "not set"}</strong>
+        </div>
+      );
+    }
     return (
       <>
         <div className="storage-choice" role="group" aria-label="Data storage location">
@@ -8092,7 +8205,7 @@ function App() {
             </select>
           </label>
           <label>
-            Folder on selected agent
+            Project folder on server
             <input value={projectPath} onChange={(event) => handleProjectPathChange(event.target.value)} />
           </label>
           <label>
@@ -8212,7 +8325,7 @@ function App() {
           <div><span>Agent</span><strong>{projectFormAgent?.name || "No agent"}</strong></div>
           <div><span>Folder</span><strong>{projectPath || "not set"}</strong></div>
           <div><span>GitHub</span><strong>{projectGitMode === "github-create" && projectGithubOwner.trim() && projectGithubRepoName.trim() ? `https://github.com/${projectGithubOwner.trim()}/${projectGithubRepoName.trim()}.git` : projectGithubUrl || "not connected"}</strong></div>
-          <div><span>Deploy</span><strong>{projectDraftDeployConfig ? `${projectDraftDeployConfig.mode} · ${projectServerPath || "server path"}` : "not configured"}</strong></div>
+          <div><span>Deploy</span><strong>{projectDraftDeployConfig ? `${projectDraftDeployConfig.mode} · ${effectiveProjectServerPath || "project folder"}` : "not configured"}</strong></div>
           <div><span>Data</span><strong>{projectDraftDataConfig ? `${projectDraftDataConfig.location} · ${projectDraftDataConfig.path}` : "not configured"}</strong></div>
           <div><span>Domain</span><strong>{normalizeProjectDomain(projectDomain) || "not set"}</strong></div>
           <div><span>Visibility</span><strong>{projectVisibility}</strong></div>
@@ -8322,7 +8435,7 @@ function App() {
           </select>
         </label>
         <label>
-          Folder on selected agent
+          Project folder on server
           <input value={projectPath} onChange={(event) => handleProjectPathChange(event.target.value)} />
         </label>
         <label>
@@ -10624,7 +10737,7 @@ function App() {
             <div className="repo-meta">
               <GitBranch size={16} /> {selectedRepo.currentBranch || "no branch"} · {selectedRepo.dirty ? "dirty" : "clean"} · {selectedRepo.pathMasked}
               {selectedRepo.domain && <> · {selectedRepo.domain}</>}
-              {selectedRepo.serverPath && <> · {selectedRepo.serverPath}</>}
+              {selectedRepo.serverPath && selectedRepo.serverPath !== selectedRepo.pathMasked && <> · {selectedRepo.serverPath}</>}
             </div>
             {selectedRepoAgent && selectedRepoAgent.status !== "online" && (
               <div className="notice warning agent-bind-notice">
