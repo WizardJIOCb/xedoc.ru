@@ -2972,9 +2972,9 @@ async function createApp(): Promise<FastifyInstance> {
     if (!auth || !requireCsrf(db, request, reply)) return;
     const parsed = ProfileUpdateSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_profile", details: parsed.error.flatten() });
-    const nickname = parsed.data.nickname ? parsed.data.nickname.trim().toLowerCase() : null;
+    const nickname = parsed.data.nickname ? parsed.data.nickname.trim() : null;
     if (nickname) {
-      const existing = db.prepare("SELECT id FROM users WHERE nickname = ? AND id != ?").get(nickname, auth.user.id) as { id: string } | undefined;
+      const existing = db.prepare("SELECT id FROM users WHERE lower(nickname) = lower(?) AND id != ?").get(nickname, auth.user.id) as { id: string } | undefined;
       if (existing) return reply.code(409).send({ error: "nickname_taken" });
     }
     const stamp = nowIso();
@@ -3034,9 +3034,9 @@ async function createApp(): Promise<FastifyInstance> {
     const email = parsed.data.email.trim().toLowerCase();
     const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email) as { id: string } | undefined;
     if (existing) return reply.code(409).send({ error: "user_exists" });
-    const nickname = parsed.data.nickname ? parsed.data.nickname.trim().toLowerCase() : null;
+    const nickname = parsed.data.nickname ? parsed.data.nickname.trim() : null;
     if (nickname) {
-      const nicknameOwner = db.prepare("SELECT id FROM users WHERE nickname = ?").get(nickname) as { id: string } | undefined;
+      const nicknameOwner = db.prepare("SELECT id FROM users WHERE lower(nickname) = lower(?)").get(nickname) as { id: string } | undefined;
       if (nicknameOwner) return reply.code(409).send({ error: "nickname_taken" });
     }
     const userId = id("usr");
