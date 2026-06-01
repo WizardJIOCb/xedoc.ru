@@ -1193,6 +1193,49 @@ function modelValueForKind(kind: JobKind, codexModel: string, grokModel: string,
   return codexModel;
 }
 
+type MentionedAgentJob = {
+  kind: JobKind;
+  prompt: string;
+};
+
+function kindForMention(mention: string, currentKind: JobKind): JobKind {
+  const normalized = mention.toLowerCase();
+  if (normalized === "codex") return "codex";
+  if (normalized === "grok") return "grok";
+  if (normalized === "gemini") return currentKind === "gemini" || currentKind === "gemini-cli" ? currentKind : "gemini-cli";
+  return currentKind;
+}
+
+function cleanMentionPrompt(value: string) {
+  return value
+    .replace(/^[\s,;:.-]+/g, "")
+    .replace(/[\s,;:.-]+$/g, "")
+    .trim();
+}
+
+function parseMentionedAgentJobs(value: string, currentKind: JobKind): MentionedAgentJob[] {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  const matches = [...trimmed.matchAll(/(^|[\s,;:()"'[\]{}])@(codex|grok|gemini)\b/gi)]
+    .map((match) => ({
+      start: (match.index ?? 0) + (match[1]?.length ?? 0),
+      mention: match[2] ?? ""
+    }));
+  if (!matches.length) return [{ kind: currentKind, prompt: trimmed }];
+  const intro = cleanMentionPrompt(trimmed.slice(0, matches[0]!.start));
+  const jobs = matches.flatMap((match, index) => {
+    const next = matches[index + 1]?.start ?? trimmed.length;
+    const bodyStart = match.start + match.mention.length + 1;
+    const body = cleanMentionPrompt(trimmed.slice(bodyStart, next));
+    if (!body) return [];
+    return [{
+      kind: kindForMention(match.mention, currentKind),
+      prompt: intro ? `${intro}\n\n${body}` : body
+    }];
+  });
+  return jobs.length ? jobs : [{ kind: currentKind, prompt: trimmed }];
+}
+
 function runnerSettingsSummary(kind: JobKind, modelLabel: string, reasoningLabel: string, speedLabel: string) {
   if (kind === "grok") return [modelLabel, reasoningLabel].filter(Boolean).join(" · ");
   if (kind === "gemini-cli") return ["Gemini CLI", modelLabel, reasoningLabel].filter(Boolean).join(" · ");
@@ -5816,6 +5859,13 @@ function App() {
     }
     let targetChatId = activeChatId;
     const promptText = prompt.trim() || "Посмотри вложенные файлы.";
+    const requestedJobs = parseMentionedAgentJobs(promptText, jobKind);
+    const jobAttachments = attachments.map((attachment) => ({
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      dataBase64: attachment.dataBase64
+    }));
     setBusy(true);
     if (!targetChatId) {
       const chatResponse = await api("/api/chats", {
@@ -5834,36 +5884,42 @@ function App() {
       targetChatId = (await chatResponse.json()).chatId;
       setActiveChatId(targetChatId);
     }
-    const response = await api("/api/jobs", {
-      method: "POST",
-      headers: { "x-csrf-token": csrf },
-      body: JSON.stringify({
-        agentId: selectedRepo.agentId,
-        repoId: selectedRepo.id,
-        chatId: targetChatId,
-        prompt: promptText,
-        sandbox,
-        branchMode: "current",
-        kind: jobKind,
-        model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
-        reasoningEffort,
-        speed: jobKind === "codex" ? codexSpeed : undefined,
-        attachments: attachments.map((attachment) => ({
-          name: attachment.name,
-          mimeType: attachment.mimeType,
-          size: attachment.size,
-          dataBase64: attachment.dataBase64
-        }))
-      })
-    });
+    const jobIds: string[] = [];
+    for (const requested of requestedJobs) {
+      const response = await api("/api/jobs", {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({
+          agentId: selectedRepo.agentId,
+          repoId: selectedRepo.id,
+          chatId: targetChatId,
+          prompt: requested.prompt,
+          sandbox,
+          branchMode: "current",
+          kind: requested.kind,
+          model: modelValueForKind(requested.kind, codexModel, grokModel, geminiCliModel, geminiModel),
+          reasoningEffort,
+          speed: requested.kind === "codex" ? codexSpeed : undefined,
+          attachments: jobAttachments
+        })
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        setBusy(false);
+        setChatNoticeOk(false);
+        setChatNotice(data.error || "Не удалось поставить задачу в очередь.");
+        if (jobIds.length) await loadChat(targetChatId, jobIds[0]);
+        return;
+      }
+      const { jobId } = await response.json();
+      jobIds.push(jobId);
+    }
     setBusy(false);
-    if (!response.ok) return;
-    const { jobId } = await response.json();
     setPrompt("");
     setAttachments([]);
     setAttachmentNotice("");
     setVscodeNotice("");
-    await loadChat(targetChatId, jobId);
+    await loadChat(targetChatId, jobIds[0]);
   }
 
   async function shareChat(chat = activeChat) {

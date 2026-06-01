@@ -1764,24 +1764,75 @@ function assistantSourceForJob(kind: JobRow["kind"]): string {
   return "codex";
 }
 
+function jobIdFromMessageExternalId(externalId: string | null): string {
+  return externalId?.match(/^job:([^:]+):/)?.[1] ?? "";
+}
+
+function isRunningJobStatus(status: string): boolean {
+  return ["queued", "assigned", "running"].includes(status);
+}
+
+function parseMessageMetadata(value: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function contextLabelForMessage(message: Pick<ChatMessageRow, "role" | "source">): string {
+  if (message.role === "user") return "user";
+  if (message.role === "system") return "system";
+  if (message.source === "grok") return "grok";
+  if (message.source === "gemini") return "gemini";
+  if (message.source === "vscode") return "vscode";
+  if (message.source === "codex") return "codex";
+  return message.role;
+}
+
 function promptForAgentJob(job: JobRow): string {
-  if ((job.kind !== "gemini" && job.kind !== "gemini-cli") || !job.chat_id) return job.prompt;
+  if (!job.chat_id) return job.prompt;
   const rows = db.prepare(`
-    SELECT role, content, source, external_id FROM chat_messages
+    SELECT role, content, source, external_id, metadata_json FROM chat_messages
     WHERE chat_id = ? AND external_id != ?
     ORDER BY created_at DESC, id DESC
-    LIMIT 12
-  `).all(job.chat_id, `job:${job.id}:prompt`) as Array<{ role: string; content: string; source: string; external_id: string | null }>;
+    LIMIT 32
+  `).all(job.chat_id, `job:${job.id}:prompt`) as Array<Pick<ChatMessageRow, "role" | "content" | "source" | "external_id" | "metadata_json">>;
   if (!rows.length) return job.prompt;
-  const history = rows.reverse()
-    .filter((message) => message.content.trim())
+  const relatedJobIds = [...new Set(rows.map((message) => jobIdFromMessageExternalId(message.external_id)).filter(Boolean))];
+  const relatedJobs = new Map<string, Pick<JobRow, "id" | "status" | "git_diff_stat">>();
+  for (const relatedJobId of relatedJobIds) {
+    const relatedJob = db.prepare("SELECT id,status,git_diff_stat FROM jobs WHERE id = ?")
+      .get(relatedJobId) as Pick<JobRow, "id" | "status" | "git_diff_stat"> | undefined;
+    if (relatedJob) relatedJobs.set(relatedJob.id, relatedJob);
+  }
+  const history = rows
+    .reverse()
+    .filter((message) => {
+      if (!message.content.trim()) return false;
+      const relatedJobId = jobIdFromMessageExternalId(message.external_id);
+      const relatedJob = relatedJobId ? relatedJobs.get(relatedJobId) : undefined;
+      return !(message.role === "user" && relatedJobId !== job.id && relatedJob && isRunningJobStatus(relatedJob.status));
+    })
     .map((message) => {
-      const role = message.role === "assistant" ? assistantSourceForJob(job.kind) : message.role;
-      return `${role}: ${message.content.trim()}`;
+      const label = contextLabelForMessage(message);
+      const relatedJobId = jobIdFromMessageExternalId(message.external_id);
+      const relatedJob = relatedJobId ? relatedJobs.get(relatedJobId) : undefined;
+      const metadata = parseMessageMetadata(message.metadata_json);
+      const gitDiffStat = typeof metadata.gitDiffStat === "string"
+        ? metadata.gitDiffStat.trim()
+        : relatedJob?.git_diff_stat?.trim() ?? "";
+      const diffContext = message.role === "assistant" && gitDiffStat ? `\nDiff stat:\n${gitDiffStat.slice(0, 2000)}` : "";
+      return `${label}: ${message.content.trim().slice(-6000)}${diffContext}`;
     })
     .join("\n\n");
+  if (!history) return job.prompt;
   return [
-    "Conversation history for context:",
+    "Use this chat and project context when answering. Do not repeat the history unless it is needed.",
+    "",
+    "Chat context:",
     history,
     "",
     "Current user request:",
