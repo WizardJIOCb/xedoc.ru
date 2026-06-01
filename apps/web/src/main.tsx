@@ -9669,7 +9669,7 @@ function App() {
         <section className="login-panel">
           <img className="brand-logo large" src="/favicon.svg" alt="" />
           <h1>xedoc.ru</h1>
-          <p>Домашний Codex, управляемый с iPhone.</p>
+          <p>Управляй Codex, Gemini, Grok и всеми чатами и проектами из одного места</p>
           <div className={`auth-tabs ${registrationOpen ? "" : "single"}`}>
             <button className={authMode === "login" ? "active" : ""} type="button" onClick={() => setAuthMode("login")}>Вход</button>
             {registrationOpen && <button className={authMode === "register" ? "active" : ""} type="button" onClick={() => setAuthMode("register")}>Регистрация</button>}
