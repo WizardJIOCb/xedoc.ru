@@ -3660,6 +3660,8 @@ function App() {
     : projectWizardStep === "git"
       ? projectGitMode === "github-create"
         ? Boolean(githubConnection.connected && projectGithubRepoName.trim())
+        : projectGitMode === "clone"
+          ? Boolean(projectGithubUrl.trim())
         : true
     : projectWizardStep === "deploy"
       ? Boolean(!projectDeployEnabled || projectDraftDeployConfig)
