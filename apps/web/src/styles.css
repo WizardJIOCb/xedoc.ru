@@ -3407,6 +3407,12 @@ a.secondary {
   padding-left: 6px;
 }
 
+.sticky-submit .action-menu .runner-config-trigger.selected > svg:last-child,
+.sticky-submit .action-menu .runner-option-grid button.selected > svg {
+  color: var(--notice-success-text);
+  stroke-width: 3;
+}
+
 .runner-config-chevron {
   color: var(--muted);
   transition: transform 0.16s ease;
