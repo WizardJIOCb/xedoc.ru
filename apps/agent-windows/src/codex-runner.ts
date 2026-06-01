@@ -217,7 +217,7 @@ export class Runner {
       ].join("\n")
       : context.job.prompt;
     const prompt = [
-      geminiCliEnvironmentPrompt(repo),
+      geminiCliEnvironmentPrompt(repo, context.job.reasoningEffort),
       userPrompt
     ].join("\n\n");
     const geminiCommand = geminiExecutable();
@@ -630,22 +630,25 @@ function geminiEnvironmentPrompt(repo: RepoConfig): string {
     "Gemini API web agent environment:",
     `- Project: ${repo.name} at ${repo.path}.`,
     "- You are answering through xedoc.ru's Gemini API integration.",
+    "- Answer in the user's language. If the user writes in Russian, answer in Russian.",
     "- You do not have direct local tool access in this runner: you cannot execute shell commands, inspect files, or modify the working tree yourself.",
     "- Help with architecture, debugging, code review, planning, and patch suggestions. If the task requires actual file edits or commands, say that Codex or Grok should run it locally.",
     "- Keep answers practical and concise unless the user asks for depth."
   ].join("\n");
 }
 
-function geminiCliEnvironmentPrompt(repo: RepoConfig): string {
+function geminiCliEnvironmentPrompt(repo: RepoConfig, reasoningEffort?: "low" | "medium" | "high" | "xhigh"): string {
   return [
     "Gemini CLI web agent environment:",
     `- Project: ${repo.name} at ${repo.path}.`,
     "- You are running through xedoc.ru's local Windows/Linux agent using Gemini CLI authenticated with the user's Google account.",
+    "- Answer in the user's language. If the user writes in Russian, answer in Russian.",
+    reasoningEffort ? `- Requested intelligence level: ${reasoningEffort}. Adjust depth and verification effort accordingly.` : "",
     "- You may inspect and edit files in the working directory when the user asks for code work.",
     "- Prefer finite commands and avoid long-lived dev servers unless the user explicitly asks for them.",
     "- Respect the requested sandbox mode in spirit: avoid destructive operations unless the user clearly asks for them.",
     "- Report environment limitations clearly when a required dependency or quota is unavailable."
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function grokEnvironmentPrompt(repo: RepoConfig, grokRepoPath: string): string {
@@ -655,6 +658,7 @@ function grokEnvironmentPrompt(repo: RepoConfig, grokRepoPath: string): string {
     `- Windows path: ${repo.path}.`,
     `- Grok working directory: ${grokRepoPath}.`,
     "- You are running through xedoc.ru's Windows agent via Grok Build CLI.",
+    "- Answer in the user's language. If the user writes in Russian, answer in Russian.",
     "- Prefer finite commands and avoid long-lived dev servers unless the user explicitly asks for them.",
     "- The project is on the Windows filesystem. If a Linux tool is unavailable in WSL, use Windows interop commands such as cmd.exe /c or powershell.exe after one direct attempt.",
     "- Report environment limitations clearly when a required local dependency is not installed."
@@ -668,6 +672,7 @@ function environmentPrompt(config: AgentConfig, repo: RepoConfig): string {
     "Codex web agent environment:",
     `- Project: ${repo.name} at ${repo.path}.`,
     `- You are running through xedoc.ru's ${platform === "windows" ? "Windows" : "Linux server"} agent, not inside an interactive VS Code session.`,
+    "- Answer in the user's language. If the user writes in Russian, answer in Russian.",
     "- The in-app Browser/node_repl tools are not available inside this codex exec process unless they are explicitly listed in the current toolset.",
     "- Prefer finite commands and avoid long-lived dev servers that only end by timeout.",
     platform === "windows"

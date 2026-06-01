@@ -3388,6 +3388,102 @@ a.secondary {
   font-weight: 500;
 }
 
+.agent-menu-section {
+  gap: 4px;
+}
+
+.runner-config {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sticky-submit .action-menu .runner-config-trigger {
+  min-height: 42px;
+}
+
+.sticky-submit .action-menu .runner-config-trigger.selected {
+  border-left: 3px solid var(--accent);
+  padding-left: 6px;
+}
+
+.runner-config-chevron {
+  color: var(--muted);
+  transition: transform 0.16s ease;
+}
+
+.runner-config.open .runner-config-chevron {
+  transform: rotate(90deg);
+}
+
+.runner-submenu {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 4px 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.runner-submenu-block {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.runner-submenu-title {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 800;
+}
+
+.runner-segmented,
+.runner-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.runner-option-grid.models {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sticky-submit .action-menu .runner-segmented button,
+.sticky-submit .action-menu .runner-option-grid button {
+  min-width: 0;
+  min-height: 29px;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  background: var(--field);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.sticky-submit .action-menu .runner-option-grid.models button {
+  justify-content: space-between;
+  text-align: left;
+}
+
+.sticky-submit .action-menu .runner-segmented button:hover,
+.sticky-submit .action-menu .runner-option-grid button:hover,
+.sticky-submit .action-menu .runner-segmented button.selected,
+.sticky-submit .action-menu .runner-option-grid button.selected {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+}
+
+.sticky-submit .action-menu .runner-option-grid button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .menu-summary {
   margin-top: 3px;
   padding: 6px 8px;

@@ -80,6 +80,7 @@ type Sandbox = "read-only" | "workspace-write" | "danger-full-access";
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "standard" | "fast";
 type JobKind = "codex" | "grok" | "gemini-cli" | "gemini";
+type RunnerAgent = "codex" | "grok" | "gemini";
 type ProjectVisibility = "private" | "public";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
 type EditorTheme = "xedoc-light" | "xedoc-dark" | "xedoc-aurora" | "xedoc-midnight" | "vs-light" | "vs-dark" | "hc-black";
@@ -146,6 +147,11 @@ const RUNNER_OPTIONS: Array<{ value: JobKind; label: string; note: string }> = [
   { value: "grok", label: "Grok", note: "Grok Build CLI" },
   { value: "gemini-cli", label: "Gemini CLI", note: "Google account agent" },
   { value: "gemini", label: "Gemini API", note: "Google AI Studio key" }
+];
+const AGENT_MENU_OPTIONS: Array<{ value: RunnerAgent; label: string; note: string }> = [
+  { value: "codex", label: "Codex", note: "OpenAI Codex CLI" },
+  { value: "grok", label: "Grok", note: "Grok Build CLI" },
+  { value: "gemini", label: "Gemini", note: "CLI or API" }
 ];
 const PROJECT_DOMAIN_ROOT = "xedoc.ru";
 const WEB_ACTIVITY_SOURCES = new Set(["xedoc.ru", "codex.rodion.pro"]);
@@ -1191,6 +1197,23 @@ function modelValueForKind(kind: JobKind, codexModel: string, grokModel: string,
   if (kind === "gemini-cli") return geminiCliModel;
   if (kind === "gemini") return geminiModel;
   return codexModel;
+}
+
+function agentForKind(kind: JobKind): RunnerAgent {
+  if (kind === "grok") return "grok";
+  if (kind === "gemini" || kind === "gemini-cli") return "gemini";
+  return "codex";
+}
+
+function defaultKindForAgent(agent: RunnerAgent, currentKind: JobKind): JobKind {
+  if (agent === "gemini") return currentKind === "gemini" || currentKind === "gemini-cli" ? currentKind : "gemini-cli";
+  return agent;
+}
+
+function reasoningValueForKind(kind: JobKind, codexReasoning: ReasoningEffort, grokReasoning: ReasoningEffort, geminiReasoning: ReasoningEffort) {
+  if (kind === "grok") return grokReasoning;
+  if (kind === "gemini" || kind === "gemini-cli") return geminiReasoning;
+  return codexReasoning;
 }
 
 type MentionedAgentJob = {
@@ -3355,8 +3378,11 @@ function App() {
   const [grokModel, setGrokModel] = useState("grok-build");
   const [geminiCliModel, setGeminiCliModel] = useState("gemini-2.5-flash");
   const [geminiModel, setGeminiModel] = useState("gemini-3.1-pro-preview");
-  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("high");
+  const [codexReasoningEffort, setCodexReasoningEffort] = useState<ReasoningEffort>("high");
+  const [grokReasoningEffort, setGrokReasoningEffort] = useState<ReasoningEffort>("high");
+  const [geminiReasoningEffort, setGeminiReasoningEffort] = useState<ReasoningEffort>("high");
   const [codexSpeed, setCodexSpeed] = useState<CodexSpeed>("standard");
+  const [runnerConfigAgent, setRunnerConfigAgent] = useState<RunnerAgent>("codex");
   const [originalProjectPath, setOriginalProjectPath] = useState("");
   const [chatMenuId, setChatMenuId] = useState("");
   const [renamingChatId, setRenamingChatId] = useState("");
@@ -5045,14 +5071,33 @@ function App() {
     try {
       const raw = localStorage.getItem("cmc.codexRunSettings");
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { kind?: JobKind; model?: string; codexModel?: string; grokModel?: string; geminiCliModel?: string; geminiModel?: string; reasoningEffort?: ReasoningEffort; speed?: CodexSpeed };
+      const parsed = JSON.parse(raw) as {
+        kind?: JobKind;
+        model?: string;
+        codexModel?: string;
+        grokModel?: string;
+        geminiCliModel?: string;
+        geminiModel?: string;
+        reasoningEffort?: ReasoningEffort;
+        codexReasoningEffort?: ReasoningEffort;
+        grokReasoningEffort?: ReasoningEffort;
+        geminiReasoningEffort?: ReasoningEffort;
+        speed?: CodexSpeed;
+      };
       if (parsed.kind && RUNNER_OPTIONS.some((option) => option.value === parsed.kind)) setJobKind(parsed.kind);
       if (parsed.model && CODEX_MODEL_OPTIONS.some((option) => option.value === parsed.model)) setCodexModel(parsed.model);
       if (parsed.codexModel && CODEX_MODEL_OPTIONS.some((option) => option.value === parsed.codexModel)) setCodexModel(parsed.codexModel);
       if (parsed.grokModel && GROK_MODEL_OPTIONS.some((option) => option.value === parsed.grokModel)) setGrokModel(parsed.grokModel);
       if (parsed.geminiCliModel && GEMINI_CLI_MODEL_OPTIONS.some((option) => option.value === parsed.geminiCliModel)) setGeminiCliModel(parsed.geminiCliModel);
       if (parsed.geminiModel && GEMINI_MODEL_OPTIONS.some((option) => option.value === parsed.geminiModel)) setGeminiModel(parsed.geminiModel);
-      if (parsed.reasoningEffort && REASONING_OPTIONS.some((option) => option.value === parsed.reasoningEffort)) setReasoningEffort(parsed.reasoningEffort);
+      if (parsed.reasoningEffort && REASONING_OPTIONS.some((option) => option.value === parsed.reasoningEffort)) {
+        setCodexReasoningEffort(parsed.reasoningEffort);
+        setGrokReasoningEffort(parsed.reasoningEffort);
+        setGeminiReasoningEffort(parsed.reasoningEffort);
+      }
+      if (parsed.codexReasoningEffort && REASONING_OPTIONS.some((option) => option.value === parsed.codexReasoningEffort)) setCodexReasoningEffort(parsed.codexReasoningEffort);
+      if (parsed.grokReasoningEffort && REASONING_OPTIONS.some((option) => option.value === parsed.grokReasoningEffort)) setGrokReasoningEffort(parsed.grokReasoningEffort);
+      if (parsed.geminiReasoningEffort && REASONING_OPTIONS.some((option) => option.value === parsed.geminiReasoningEffort)) setGeminiReasoningEffort(parsed.geminiReasoningEffort);
       if (parsed.speed && SPEED_OPTIONS.some((option) => option.value === parsed.speed)) setCodexSpeed(parsed.speed);
     } catch {
       try {
@@ -5065,6 +5110,7 @@ function App() {
 
   useEffect(() => {
     try {
+      const currentReasoningEffort = reasoningValueForKind(jobKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort);
       localStorage.setItem("cmc.codexRunSettings", JSON.stringify({
         kind: jobKind,
         model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
@@ -5072,13 +5118,16 @@ function App() {
         grokModel,
         geminiCliModel,
         geminiModel,
-        reasoningEffort,
+        reasoningEffort: currentReasoningEffort,
+        codexReasoningEffort,
+        grokReasoningEffort,
+        geminiReasoningEffort,
         speed: codexSpeed
       }));
     } catch {
       // The settings are just a UI convenience; a blocked storage write should not break chat.
     }
-  }, [jobKind, codexModel, grokModel, geminiCliModel, geminiModel, reasoningEffort, codexSpeed]);
+  }, [jobKind, codexModel, grokModel, geminiCliModel, geminiModel, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort, codexSpeed]);
 
   useEffect(() => {
     try {
@@ -5734,7 +5783,7 @@ function App() {
         branchMode: "current",
         kind: jobKind,
         model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
-        reasoningEffort,
+        reasoningEffort: reasoningValueForKind(jobKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
         speed: jobKind === "codex" ? codexSpeed : undefined,
         attachments: []
       })
@@ -5918,7 +5967,7 @@ function App() {
           branchMode: "current",
           kind: requested.kind,
           model: modelValueForKind(requested.kind, codexModel, grokModel, geminiCliModel, geminiModel),
-          reasoningEffort,
+          reasoningEffort: reasoningValueForKind(requested.kind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
           speed: requested.kind === "codex" ? codexSpeed : undefined,
           attachments: jobAttachments
         })
@@ -6395,7 +6444,7 @@ function App() {
           branchMode: "current",
           kind: jobKind,
           model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
-          reasoningEffort,
+          reasoningEffort: reasoningValueForKind(jobKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
           speed: jobKind === "codex" ? codexSpeed : undefined,
           attachments: []
         })
@@ -8872,14 +8921,134 @@ function App() {
     const currentModelOptions = modelOptionsForKind(jobKind);
     const selectedModel = modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel);
     const selectedModelLabel = currentModelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel;
-    const selectedRunner = RUNNER_OPTIONS.find((option) => option.value === jobKind)
+    const selectedAgent = agentForKind(jobKind);
+    const selectedRunner = AGENT_MENU_OPTIONS.find((option) => option.value === selectedAgent)
       ?? { value: "codex" as const, label: "Codex", note: "OpenAI Codex CLI" };
-    const selectedReasoningLabel = REASONING_OPTIONS.find((option) => option.value === reasoningEffort)?.label ?? reasoningEffort;
+    const selectedReasoning = reasoningValueForKind(jobKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort);
+    const selectedReasoningLabel = REASONING_OPTIONS.find((option) => option.value === selectedReasoning)?.label ?? selectedReasoning;
     const selectedSpeedLabel = SPEED_OPTIONS.find((option) => option.value === codexSpeed)?.label ?? codexSpeed;
     const currentModeSummary = runnerSettingsSummary(jobKind, selectedModelLabel, selectedReasoningLabel, selectedSpeedLabel);
     const showCodexBusy = localCodexBusy || activeRunBusy;
     const activeRunnerLabel = jobRunnerLabel(activeJob);
     const busyLabel = activeRunBusy ? `${activeRunnerLabel} занят` : "Codex занят";
+    const setReasoningForKind = (kind: JobKind, value: ReasoningEffort) => {
+      if (kind === "grok") setGrokReasoningEffort(value);
+      else if (kind === "gemini" || kind === "gemini-cli") setGeminiReasoningEffort(value);
+      else setCodexReasoningEffort(value);
+    };
+    const setModelForKind = (kind: JobKind, value: string) => {
+      if (kind === "grok") setGrokModel(value);
+      else if (kind === "gemini-cli") setGeminiCliModel(value);
+      else if (kind === "gemini") setGeminiModel(value);
+      else setCodexModel(value);
+    };
+    const runnerKindForMenuAgent = (agent: RunnerAgent) => defaultKindForAgent(agent, jobKind);
+    const selectRunnerAgent = (agent: RunnerAgent) => {
+      const nextKind = runnerKindForMenuAgent(agent);
+      setRunnerConfigAgent(agent);
+      setJobKind(nextKind);
+    };
+    const renderRunnerSubmenu = (agent: RunnerAgent) => {
+      const configKind = runnerKindForMenuAgent(agent);
+      const configModelOptions = modelOptionsForKind(configKind);
+      const configModel = modelValueForKind(configKind, codexModel, grokModel, geminiCliModel, geminiModel);
+      const configReasoning = reasoningValueForKind(configKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort);
+      return (
+        <div className="runner-submenu" role="group" aria-label={`${AGENT_MENU_OPTIONS.find((option) => option.value === agent)?.label ?? agent} settings`}>
+          {agent === "gemini" && (
+            <div className="runner-submenu-block">
+              <span className="runner-submenu-title">Mode</span>
+              <div className="runner-segmented">
+                <button
+                  className={configKind === "gemini-cli" ? "selected" : ""}
+                  type="button"
+                  onClick={() => {
+                    setRunnerConfigAgent("gemini");
+                    setJobKind("gemini-cli");
+                  }}
+                >
+                  CLI
+                </button>
+                <button
+                  className={configKind === "gemini" ? "selected" : ""}
+                  type="button"
+                  onClick={() => {
+                    setRunnerConfigAgent("gemini");
+                    setJobKind("gemini");
+                  }}
+                >
+                  API
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="runner-submenu-block">
+            <span className="runner-submenu-title">Intelligence</span>
+            <div className="runner-option-grid">
+              {REASONING_OPTIONS.map((option) => (
+                <button
+                  className={configReasoning === option.value ? "selected" : ""}
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setRunnerConfigAgent(agent);
+                    setJobKind(configKind);
+                    setReasoningForKind(configKind, option.value);
+                  }}
+                >
+                  <span>{option.label}</span>
+                  {configReasoning === option.value && <Check size={13} />}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="runner-submenu-block">
+            <span className="runner-submenu-title">Model</span>
+            <div className="runner-option-grid models">
+              {configModelOptions.map((option) => (
+                <button
+                  className={configModel === option.value ? "selected" : ""}
+                  key={option.value}
+                  type="button"
+                  title={option.value}
+                  onClick={() => {
+                    setRunnerConfigAgent(agent);
+                    setJobKind(configKind);
+                    setModelForKind(configKind, option.value);
+                  }}
+                >
+                  <span>{option.label}</span>
+                  {configModel === option.value && <Check size={13} />}
+                </button>
+              ))}
+            </div>
+          </div>
+          {agent === "codex" && (
+            <div className="runner-submenu-block">
+              <span className="runner-submenu-title">Speed</span>
+              <div className="runner-option-grid">
+                {SPEED_OPTIONS.map((option) => (
+                  <button
+                    className={codexSpeed === option.value ? "selected" : ""}
+                    key={option.value}
+                    type="button"
+                    title={option.note}
+                    onClick={() => {
+                      setRunnerConfigAgent("codex");
+                      setJobKind("codex");
+                      setCodexSpeed(option.value);
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    {codexSpeed === option.value && <Check size={13} />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
     return (
       <form className="composer" ref={composerRef} onSubmit={createJob}>
         {attachments.length > 0 && (
@@ -8968,6 +9137,7 @@ function App() {
               type="button"
               onClick={() => {
                 setSandboxMenuOpen(false);
+                setRunnerConfigAgent(agentForKind(jobKind));
                 setActionMenuOpen((value) => !value);
               }}
             >
@@ -8976,76 +9146,41 @@ function App() {
             </button>
             {actionMenuOpen && (
               <div className="action-menu" role="menu">
-                <div className="menu-section">
+                <div className="menu-section agent-menu-section">
                   <span className="menu-section-title">Agent</span>
-                  {RUNNER_OPTIONS.map((option) => (
-                    <button
-                      className={`runner-option ${jobKind === option.value ? "selected" : ""}`}
-                      key={option.value}
-                      role="menuitemcheckbox"
-                      aria-checked={jobKind === option.value}
-                      type="button"
-                      onClick={() => setJobKind(option.value)}
-                    >
-                      <span>
-                        <strong>{option.label}</strong>
-                        <small>{option.note}</small>
-                      </span>
-                      {jobKind === option.value && <Check size={15} />}
-                    </button>
-                  ))}
+                  {AGENT_MENU_OPTIONS.map((option) => {
+                    const optionKind = runnerKindForMenuAgent(option.value);
+                    const optionAgentSelected = selectedAgent === option.value;
+                    const optionModel = modelValueForKind(optionKind, codexModel, grokModel, geminiCliModel, geminiModel);
+                    const optionModelLabel = modelOptionsForKind(optionKind).find((item) => item.value === optionModel)?.label ?? optionModel;
+                    const optionReasoning = reasoningValueForKind(optionKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort);
+                    const optionReasoningLabel = REASONING_OPTIONS.find((item) => item.value === optionReasoning)?.label ?? optionReasoning;
+                    const optionSummary = runnerSettingsSummary(optionKind, optionModelLabel, optionReasoningLabel, selectedSpeedLabel);
+                    const optionOpen = runnerConfigAgent === option.value;
+                    return (
+                      <div className={`runner-config ${optionOpen ? "open" : ""}`} key={option.value}>
+                        <button
+                          className={`runner-option runner-config-trigger ${optionAgentSelected ? "selected" : ""}`}
+                          role="menuitemcheckbox"
+                          aria-checked={optionAgentSelected}
+                          aria-expanded={optionOpen}
+                          type="button"
+                          onClick={() => selectRunnerAgent(option.value)}
+                          onMouseEnter={() => setRunnerConfigAgent(option.value)}
+                          onFocus={() => setRunnerConfigAgent(option.value)}
+                        >
+                          <span>
+                            <strong>{option.label}</strong>
+                            <small>{optionSummary}</small>
+                          </span>
+                          <ArrowRight className="runner-config-chevron" size={14} />
+                          {optionAgentSelected && <Check size={15} />}
+                        </button>
+                        {optionOpen && renderRunnerSubmenu(option.value)}
+                      </div>
+                    );
+                  })}
                 </div>
-                <div className="menu-section">
-                  <span className="menu-section-title">Intelligence</span>
-                  {REASONING_OPTIONS.map((option) => (
-                    <button
-                      className={reasoningEffort === option.value ? "selected" : ""}
-                      key={option.value}
-                      role="menuitemcheckbox"
-                      aria-checked={reasoningEffort === option.value}
-                      type="button"
-                      onClick={() => setReasoningEffort(option.value)}
-                    >
-                      <span>{option.label}</span>
-                      {reasoningEffort === option.value && <Check size={15} />}
-                    </button>
-                  ))}
-                </div>
-                <div className="menu-section">
-                  <span className="menu-section-title">Model</span>
-                  {currentModelOptions.map((option) => (
-                    <button
-                      className={selectedModel === option.value ? "selected" : ""}
-                      key={option.value}
-                      role="menuitemcheckbox"
-                      aria-checked={selectedModel === option.value}
-                      type="button"
-                      onClick={() => jobKind === "grok" ? setGrokModel(option.value) : jobKind === "gemini-cli" ? setGeminiCliModel(option.value) : jobKind === "gemini" ? setGeminiModel(option.value) : setCodexModel(option.value)}
-                    >
-                      <span>{option.label}</span>
-                      {selectedModel === option.value && <Check size={15} />}
-                    </button>
-                  ))}
-                </div>
-                {jobKind === "codex" && <div className="menu-section">
-                  <span className="menu-section-title">Speed</span>
-                  {SPEED_OPTIONS.map((option) => (
-                    <button
-                      className={`speed-option ${codexSpeed === option.value ? "selected" : ""}`}
-                      key={option.value}
-                      role="menuitemcheckbox"
-                      aria-checked={codexSpeed === option.value}
-                      type="button"
-                      onClick={() => setCodexSpeed(option.value)}
-                    >
-                      <span>
-                        <strong>{option.label}</strong>
-                        <small>{option.note}</small>
-                      </span>
-                      {codexSpeed === option.value && <Check size={15} />}
-                    </button>
-                  ))}
-                </div>}
                 <div className="menu-summary current-mode" title={`Model id: ${selectedModel}`}>
                   {currentModeSummary}
                 </div>
