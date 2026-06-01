@@ -9166,8 +9166,6 @@ function App() {
                           aria-expanded={optionOpen}
                           type="button"
                           onClick={() => selectRunnerAgent(option.value)}
-                          onMouseEnter={() => setRunnerConfigAgent(option.value)}
-                          onFocus={() => setRunnerConfigAgent(option.value)}
                         >
                           <span>
                             <strong>{option.label}</strong>
