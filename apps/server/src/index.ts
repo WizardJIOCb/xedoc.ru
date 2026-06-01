@@ -534,6 +534,21 @@ function canAccessChat(user: AuthUser, chatId: string): boolean {
   return Boolean(row);
 }
 
+function canAccessPublicChat(chatId: string): boolean {
+  const row = db.prepare(`
+    SELECT 1
+    FROM chats c
+    JOIN repos r ON r.agent_id = c.agent_id AND r.id = c.repo_id
+    JOIN users u ON u.id = r.user_id
+    WHERE c.id = ?
+      AND c.hidden_at IS NULL
+      AND r.visibility = 'public'
+      AND u.blocked_at IS NULL
+      AND (c.user_id IS NULL OR c.user_id = r.user_id)
+  `).get(chatId) as { 1: number } | undefined;
+  return Boolean(row);
+}
+
 function canAccessJob(user: AuthUser, jobId: string): boolean {
   const row = db.prepare(`
     SELECT 1 FROM jobs j
@@ -4203,8 +4218,7 @@ async function createApp(): Promise<FastifyInstance> {
   });
 
   app.get("/api/job-attachments/:id", async (request, reply) => {
-    const auth = requireAuth(db, request, reply);
-    if (!auth) return;
+    const auth = getSession(db, request);
     const attachmentId = (request.params as { id: string }).id;
     const row = db.prepare(`
       SELECT a.*, j.chat_id AS chat_id
@@ -4213,14 +4227,15 @@ async function createApp(): Promise<FastifyInstance> {
       WHERE a.id = ?
     `).get(attachmentId) as (AttachmentRow & { chat_id: string | null }) | undefined;
     if (!row) return reply.code(404).send({ error: "not_found" });
-    const allowed = row.chat_id ? canAccessChat(auth.user, row.chat_id) : canAccessJob(auth.user, row.job_id);
+    const allowed = row.chat_id
+      ? (auth ? canAccessChat(auth.user, row.chat_id) : false) || canAccessPublicChat(row.chat_id)
+      : auth ? canAccessJob(auth.user, row.job_id) : false;
     if (!allowed) return reply.code(404).send({ error: "not_found" });
     return sendAttachment(reply, row);
   });
 
   app.get("/api/chat-attachments/:id", async (request, reply) => {
-    const auth = requireAuth(db, request, reply);
-    if (!auth) return;
+    const auth = getSession(db, request);
     const attachmentId = (request.params as { id: string }).id;
     const row = db.prepare(`
       SELECT a.*, m.chat_id AS chat_id
@@ -4228,7 +4243,9 @@ async function createApp(): Promise<FastifyInstance> {
       JOIN chat_messages m ON m.id = a.chat_message_id
       WHERE a.id = ?
     `).get(attachmentId) as (ChatAttachmentRow & { chat_id: string }) | undefined;
-    if (!row || !canAccessChat(auth.user, row.chat_id)) return reply.code(404).send({ error: "not_found" });
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    const allowed = (auth ? canAccessChat(auth.user, row.chat_id) : false) || canAccessPublicChat(row.chat_id);
+    if (!allowed) return reply.code(404).send({ error: "not_found" });
     return sendAttachment(reply, row);
   });
 
