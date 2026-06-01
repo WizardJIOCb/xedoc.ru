@@ -3429,6 +3429,7 @@ function App() {
   const [gitMessageTemplate, setGitMessageTemplate] = useState("{project}: {summary}");
   const [gitStatusContext, setGitStatusContext] = useState("");
   const [gitMessageRefreshBusy, setGitMessageRefreshBusy] = useState(false);
+  const [gitMessageRefreshNotice, setGitMessageRefreshNotice] = useState("");
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitNotice, setGitNotice] = useState("");
   const [gitBusy, setGitBusy] = useState(false);
@@ -4760,6 +4761,7 @@ function App() {
     setSandbox(repo.defaultSandbox);
     setGitMessage(`Update ${repo.name}`);
     setGitStatusContext("");
+    setGitMessageRefreshNotice("");
     setGitRemoteUrl(repo.githubUrl ?? "");
     setGitNotice("");
     setBuildNotice("");
@@ -4791,6 +4793,7 @@ function App() {
     setProjectActionsOpen(false);
     setGitNotice("");
     setGitStatusContext("");
+    setGitMessageRefreshNotice("");
     setBuildNotice("");
     setDeployNotice("");
     setNginxNotice("");
@@ -6267,6 +6270,7 @@ function App() {
       }
       setGitRemoteUrl("");
       setGitStatusContext("");
+      setGitMessageRefreshNotice("");
       if (!targetChatId) setGitNotice(data.output || data.status || "Git sync completed.");
       await refresh();
     } catch (error) {
@@ -6281,6 +6285,7 @@ function App() {
   async function refreshGitMessageContext() {
     if (!selectedRepo || gitMessageRefreshBusy) return;
     setGitMessageRefreshBusy(true);
+    setGitMessageRefreshNotice("Обновляю commit message...");
     try {
       const targetChatId = activeChatId || activeChat?.id || "";
       if (targetChatId) chatCacheRef.current.delete(targetChatId);
@@ -6297,16 +6302,39 @@ function App() {
         statusRequest
       ]);
       let nextGitStatusContext = gitStatusContext;
-      if (statusResponse?.ok) {
+      let statusError = "";
+      if (statusResponse) {
         const data = await statusResponse.json().catch(() => ({}));
-        nextGitStatusContext = typeof data.output === "string" ? data.output : "";
-        setGitStatusContext(nextGitStatusContext);
+        if (statusResponse.ok) {
+          nextGitStatusContext = typeof data.output === "string" ? data.output : "";
+          setGitStatusContext(nextGitStatusContext);
+        } else {
+          statusError = typeof data.output === "string"
+            ? data.output
+            : typeof data.error === "string"
+              ? data.error
+              : "git status failed";
+        }
+      } else {
+        statusError = csrf ? "git status недоступен" : "нет CSRF-токена для git status";
       }
       const nextRepo = nextRepos?.find((repo) => repoKeyFor(repo) === repoKeyFor(selectedRepo)) ?? selectedRepo;
       const nextChat = chatPayload?.chat ?? activeChat;
       const nextMessages = chatPayload?.messages ?? messages;
       const nextMessage = autoCommitMessage(nextRepo, nextChat, nextMessages, gitMessageTemplate, nextGitStatusContext);
       if (gitMessageMode === "custom") setGitMessage(nextMessage);
+      const changeSummary = commitSummaryFromGitContext(nextGitStatusContext);
+      if (statusError) {
+        setGitMessageRefreshNotice(`Чат обновлён, но git status не получен: ${truncateCommitPart(statusError, 80)}`);
+      } else if (nextMessage === effectiveGitMessage.trim()) {
+        setGitMessageRefreshNotice(changeSummary
+          ? `Обновлено: ${changeSummary}, commit message уже актуален.`
+          : "Обновлено: git изменений не найдено, commit message уже актуален.");
+      } else {
+        setGitMessageRefreshNotice(changeSummary
+          ? `Обновлено: ${changeSummary}.`
+          : "Обновлено по свежему чату.");
+      }
     } finally {
       setGitMessageRefreshBusy(false);
     }
@@ -9300,6 +9328,7 @@ function App() {
                         <RefreshCw className={gitMessageRefreshBusy ? "spin" : ""} size={14} />
                       </button>
                     </div>
+                    {gitMessageRefreshNotice && <div className="git-message-refresh-notice">{gitMessageRefreshNotice}</div>}
                     {gitMessageMode === "auto" ? (
                       <>
                         <label>
