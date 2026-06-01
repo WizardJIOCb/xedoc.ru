@@ -3382,7 +3382,7 @@ function App() {
   const [grokReasoningEffort, setGrokReasoningEffort] = useState<ReasoningEffort>("high");
   const [geminiReasoningEffort, setGeminiReasoningEffort] = useState<ReasoningEffort>("high");
   const [codexSpeed, setCodexSpeed] = useState<CodexSpeed>("standard");
-  const [runnerConfigAgent, setRunnerConfigAgent] = useState<RunnerAgent>("codex");
+  const [openRunnerConfigAgents, setOpenRunnerConfigAgents] = useState<RunnerAgent[]>(["codex"]);
   const [originalProjectPath, setOriginalProjectPath] = useState("");
   const [chatMenuId, setChatMenuId] = useState("");
   const [renamingChatId, setRenamingChatId] = useState("");
@@ -8943,10 +8943,17 @@ function App() {
       else setCodexModel(value);
     };
     const runnerKindForMenuAgent = (agent: RunnerAgent) => defaultKindForAgent(agent, jobKind);
-    const selectRunnerAgent = (agent: RunnerAgent) => {
+    const ensureRunnerConfigOpen = (agent: RunnerAgent) => {
+      setOpenRunnerConfigAgents((current) => current.includes(agent) ? current : [...current, agent]);
+    };
+    const toggleRunnerAgent = (agent: RunnerAgent) => {
       const nextKind = runnerKindForMenuAgent(agent);
-      setRunnerConfigAgent(agent);
       setJobKind(nextKind);
+      setOpenRunnerConfigAgents((current) => (
+        current.includes(agent)
+          ? current.filter((item) => item !== agent)
+          : [...current, agent]
+      ));
     };
     const renderRunnerSubmenu = (agent: RunnerAgent) => {
       const configKind = runnerKindForMenuAgent(agent);
@@ -8963,7 +8970,7 @@ function App() {
                   className={configKind === "gemini-cli" ? "selected" : ""}
                   type="button"
                   onClick={() => {
-                    setRunnerConfigAgent("gemini");
+                    ensureRunnerConfigOpen("gemini");
                     setJobKind("gemini-cli");
                   }}
                 >
@@ -8973,7 +8980,7 @@ function App() {
                   className={configKind === "gemini" ? "selected" : ""}
                   type="button"
                   onClick={() => {
-                    setRunnerConfigAgent("gemini");
+                    ensureRunnerConfigOpen("gemini");
                     setJobKind("gemini");
                   }}
                 >
@@ -8991,7 +8998,7 @@ function App() {
                   key={option.value}
                   type="button"
                   onClick={() => {
-                    setRunnerConfigAgent(agent);
+                    ensureRunnerConfigOpen(agent);
                     setJobKind(configKind);
                     setReasoningForKind(configKind, option.value);
                   }}
@@ -9012,7 +9019,7 @@ function App() {
                   type="button"
                   title={option.value}
                   onClick={() => {
-                    setRunnerConfigAgent(agent);
+                    ensureRunnerConfigOpen(agent);
                     setJobKind(configKind);
                     setModelForKind(configKind, option.value);
                   }}
@@ -9034,7 +9041,7 @@ function App() {
                     type="button"
                     title={option.note}
                     onClick={() => {
-                      setRunnerConfigAgent("codex");
+                      ensureRunnerConfigOpen("codex");
                       setJobKind("codex");
                       setCodexSpeed(option.value);
                     }}
@@ -9137,7 +9144,7 @@ function App() {
               type="button"
               onClick={() => {
                 setSandboxMenuOpen(false);
-                setRunnerConfigAgent(agentForKind(jobKind));
+                ensureRunnerConfigOpen(agentForKind(jobKind));
                 setActionMenuOpen((value) => !value);
               }}
             >
@@ -9156,7 +9163,7 @@ function App() {
                     const optionReasoning = reasoningValueForKind(optionKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort);
                     const optionReasoningLabel = REASONING_OPTIONS.find((item) => item.value === optionReasoning)?.label ?? optionReasoning;
                     const optionSummary = runnerSettingsSummary(optionKind, optionModelLabel, optionReasoningLabel, selectedSpeedLabel);
-                    const optionOpen = runnerConfigAgent === option.value;
+                    const optionOpen = openRunnerConfigAgents.includes(option.value);
                     return (
                       <div className={`runner-config ${optionOpen ? "open" : ""}`} key={option.value}>
                         <button
@@ -9165,7 +9172,7 @@ function App() {
                           aria-checked={optionAgentSelected}
                           aria-expanded={optionOpen}
                           type="button"
-                          onClick={() => selectRunnerAgent(option.value)}
+                          onClick={() => toggleRunnerAgent(option.value)}
                         >
                           <span>
                             <strong>{option.label}</strong>
