@@ -74,6 +74,7 @@ export type AgentRow = {
 
 export type RepoRow = {
   id: string;
+  user_id: string | null;
   agent_id: string;
   name: string;
   path_masked: string;
@@ -232,6 +233,7 @@ export function openDb(path: string): DatabaseSync {
     );
     CREATE TABLE IF NOT EXISTS repos (
       id TEXT NOT NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
       agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       path_masked TEXT NOT NULL,
@@ -457,6 +459,18 @@ export function openDb(path: string): DatabaseSync {
     db.exec("ALTER TABLE jobs ADD COLUMN progress_json TEXT");
   }
   const repoColumns = db.prepare("PRAGMA table_info(repos)").all() as Array<{ name: string }>;
+  if (!repoColumns.some((column) => column.name === "user_id")) {
+    db.exec("ALTER TABLE repos ADD COLUMN user_id TEXT");
+    db.prepare(`
+      UPDATE repos
+      SET user_id = (
+        SELECT a.user_id
+        FROM agents a
+        WHERE a.id = repos.agent_id
+      )
+      WHERE user_id IS NULL
+    `).run();
+  }
   if (!repoColumns.some((column) => column.name === "github_url")) {
     db.exec("ALTER TABLE repos ADD COLUMN github_url TEXT");
   }
@@ -516,6 +530,7 @@ export function openDb(path: string): DatabaseSync {
     db.exec("ALTER TABLE chats ADD COLUMN title_override TEXT");
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_chat_created ON jobs(chat_id, created_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_repos_user_agent_updated ON repos(user_id, agent_id, updated_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_chats_user_repo_updated ON chats(user_id, agent_id, repo_id, updated_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_at ON chat_messages(chat_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_attachments_job ON job_attachments(job_id)");

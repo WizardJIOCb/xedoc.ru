@@ -355,14 +355,11 @@ function markUserActivity(userId: string): void {
 }
 
 function profileStats(user: AuthUser) {
-  const agentFilter = isAdmin(user) ? "" : "AND a.user_id = ?";
-  const args = isAdmin(user) ? [] : [user.id];
   const chatStats = db.prepare(`
     SELECT COUNT(*) AS chats
     FROM chats c
-    JOIN agents a ON a.id = c.agent_id
-    WHERE 1=1 ${agentFilter}
-  `).get(...args) as { chats: number };
+    WHERE c.user_id = ?
+  `).get(user.id) as { chats: number };
   const jobStats = db.prepare(`
     SELECT
       COUNT(*) AS jobs,
@@ -374,15 +371,14 @@ function profileStats(user: AuthUser) {
         ELSE 0
       END) AS seconds
     FROM jobs j
-    JOIN agents a ON a.id = j.agent_id
-    WHERE 1=1 ${agentFilter}
-  `).get(...args) as { jobs: number; completed: number | null; failed: number | null; seconds: number | null };
+    JOIN repos r ON r.agent_id = j.agent_id AND r.id = j.repo_id
+    WHERE r.user_id = ?
+  `).get(user.id) as { jobs: number; completed: number | null; failed: number | null; seconds: number | null };
   const repoStats = db.prepare(`
     SELECT COUNT(*) AS projects
     FROM repos r
-    JOIN agents a ON a.id = r.agent_id
-    WHERE 1=1 ${agentFilter}
-  `).get(...args) as { projects: number };
+    WHERE r.user_id = ?
+  `).get(user.id) as { projects: number };
   return {
     chats: chatStats.chats,
     jobs: jobStats.jobs,
@@ -414,8 +410,7 @@ function serializePublicProfile(user: UserRow, request: { protocol: string; host
   const publicProjects = db.prepare(`
     SELECT COUNT(*) AS count
     FROM repos r
-    JOIN agents a ON a.id = r.agent_id
-    WHERE a.user_id = ? AND r.visibility = 'public'
+    WHERE r.user_id = ? AND r.visibility = 'public'
   `).get(user.id) as { count: number };
   return {
     id: user.id,
@@ -432,13 +427,14 @@ function serializePublicProfile(user: UserRow, request: { protocol: string; host
   };
 }
 
-function publicChatSummaries(agentId: string, repoId: string, limit = 5) {
+function publicChatSummaries(agentId: string, repoId: string, ownerUserId?: string | null, limit = 5) {
   const rows = db.prepare(`
     SELECT * FROM chats
     WHERE agent_id = ? AND repo_id = ? AND hidden_at IS NULL
+      ${ownerUserId ? "AND (user_id IS NULL OR user_id = ?)" : ""}
     ORDER BY updated_at DESC
     LIMIT ?
-  `).all(agentId, repoId, limit) as ChatRow[];
+  `).all(...(ownerUserId ? [agentId, repoId, ownerUserId, limit] : [agentId, repoId, limit])) as ChatRow[];
   return rows.map(serializeChat);
 }
 
@@ -466,7 +462,7 @@ function serializePublicProject(row: PublicProjectRow, request: { protocol: stri
     url: projectUrlFromDomain(row.domain),
     chatCount: row.chat_count,
     author,
-    latestChats: publicChatSummaries(row.agent_id, row.id)
+    latestChats: publicChatSummaries(row.agent_id, row.id, row.user_id)
   };
 }
 
@@ -524,32 +520,29 @@ function visibleAgentIds(user: AuthUser): string[] {
 function canAccessRepo(user: AuthUser, agentId: string, repoId: string): boolean {
   const row = db.prepare(`
     SELECT 1 FROM repos r
-    JOIN agents a ON a.id = r.agent_id
-    WHERE r.agent_id = ? AND r.id = ? ${isAdmin(user) ? "" : "AND a.user_id = ?"}
-  `).get(agentId, repoId, ...(isAdmin(user) ? [] : [user.id])) as { 1: number } | undefined;
+    WHERE r.agent_id = ? AND r.id = ? AND r.user_id = ?
+  `).get(agentId, repoId, user.id) as { 1: number } | undefined;
   return Boolean(row);
 }
 
 function canAccessChat(user: AuthUser, chatId: string): boolean {
   const row = db.prepare(`
     SELECT 1 FROM chats c
-    JOIN agents a ON a.id = c.agent_id
     WHERE c.id = ?
       AND (c.user_id IS NULL OR c.user_id = ?)
-      ${isAdmin(user) ? "" : "AND a.user_id = ?"}
-  `).get(chatId, user.id, ...(isAdmin(user) ? [] : [user.id])) as { 1: number } | undefined;
+  `).get(chatId, user.id) as { 1: number } | undefined;
   return Boolean(row);
 }
 
 function canAccessJob(user: AuthUser, jobId: string): boolean {
   const row = db.prepare(`
     SELECT 1 FROM jobs j
-    JOIN agents a ON a.id = j.agent_id
+    JOIN repos r ON r.agent_id = j.agent_id AND r.id = j.repo_id
     LEFT JOIN chats c ON c.id = j.chat_id
     WHERE j.id = ?
+      AND r.user_id = ?
       AND (j.chat_id IS NULL OR c.user_id IS NULL OR c.user_id = ?)
-      ${isAdmin(user) ? "" : "AND a.user_id = ?"}
-  `).get(jobId, user.id, ...(isAdmin(user) ? [] : [user.id])) as { 1: number } | undefined;
+  `).get(jobId, user.id, user.id) as { 1: number } | undefined;
   return Boolean(row);
 }
 
@@ -562,10 +555,21 @@ function eventAgentId(event: UiEvent): string | undefined {
   return undefined;
 }
 
-function broadcast(event: UiEvent): void {
+function canReceiveUiEvent(user: AuthUser, event: UiEvent): boolean {
+  if (event.type === "repos.updated") return canAccessAgent(user, event.agentId) || repoInfosForAgent(event.agentId, user).length > 0;
+  if (event.type === "chats.updated") return canAccessRepo(user, event.agentId, event.repoId);
+  if ("jobId" in event) return canAccessJob(user, event.jobId);
   const agentId = eventAgentId(event);
+  return !agentId || canAccessAgent(user, agentId);
+}
+
+function broadcast(event: UiEvent): void {
   for (const client of uiClients) {
-    if (agentId && !canAccessAgent(client.user, agentId)) continue;
+    if (!canReceiveUiEvent(client.user, event)) continue;
+    if (event.type === "repos.updated") {
+      client.send({ ...event, repos: repoInfosForAgent(event.agentId, client.user) });
+      continue;
+    }
     client.send(event);
   }
 }
@@ -794,9 +798,12 @@ function markAgentStatus(agentId: string, status: "online" | "offline"): void {
   broadcast({ type: "agent.status", agentId, status });
 }
 
-function repoInfosForAgent(agentId: string): RepoInfo[] {
-  const rows = db.prepare("SELECT * FROM repos WHERE agent_id = ? ORDER BY name")
-    .all(agentId) as RepoRow[];
+function repoInfosForAgent(agentId: string, user?: AuthUser): RepoInfo[] {
+  const rows = user
+    ? db.prepare("SELECT * FROM repos WHERE agent_id = ? AND user_id = ? ORDER BY name")
+      .all(agentId, user.id) as RepoRow[]
+    : db.prepare("SELECT * FROM repos WHERE agent_id = ? ORDER BY name")
+      .all(agentId) as RepoRow[];
   return rows.map(mapRepo);
 }
 
@@ -828,10 +835,11 @@ async function syncAgentProjectConfig(agentId: string, row: RepoRow): Promise<vo
 
 function upsertRepos(agentId: string, repos: RepoInfo[]): void {
   const stamp = nowIso();
+  const agentOwner = db.prepare("SELECT user_id FROM agents WHERE id = ?").get(agentId) as { user_id: string | null } | undefined;
   // Deploy/data are controller-owned after first insert, so offline UI edits survive stale agent heartbeats.
   const upsert = db.prepare(`
-    INSERT INTO repos (id,agent_id,name,path_masked,github_url,server_path,domain,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    INSERT INTO repos (id,user_id,agent_id,name,path_masked,github_url,server_path,domain,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(agent_id,id) DO UPDATE SET
       name=excluded.name,
       path_masked=excluded.path_masked,
@@ -850,6 +858,7 @@ function upsertRepos(agentId: string, repos: RepoInfo[]): void {
     if (redirected.get(agentId, repo.id)) continue;
     upsert.run(
       repo.id,
+      agentOwner?.user_id ?? null,
       agentId,
       repo.name,
       repo.pathMasked,
@@ -884,17 +893,19 @@ function moveProjectRowsToAgent(
   targetAgentId: string,
   repoId: string,
   patch: Extract<ServerToAgent, { type: "project.update" }>["patch"],
-  visibility: ProjectVisibility
+  visibility: ProjectVisibility,
+  ownerUserId: string | null
 ): void {
   const stamp = nowIso();
   const allowedSandboxes = patch.allowedSandboxes ?? ["read-only", "workspace-write", "danger-full-access"];
   db.exec("BEGIN");
   try {
     db.prepare(`
-      INSERT OR IGNORE INTO repos (id,agent_id,name,path_masked,github_url,server_path,domain,visibility,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT OR IGNORE INTO repos (id,user_id,agent_id,name,path_masked,github_url,server_path,domain,visibility,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       repoId,
+      ownerUserId,
       targetAgentId,
       patch.name ?? repoId,
       patch.path ?? "",
@@ -914,6 +925,7 @@ function moveProjectRowsToAgent(
     db.prepare(`
       UPDATE repos
       SET name = ?,
+          user_id = ?,
           path_masked = ?,
           github_url = ?,
           server_path = ?,
@@ -927,6 +939,7 @@ function moveProjectRowsToAgent(
       WHERE agent_id = ? AND id = ?
     `).run(
       patch.name ?? repoId,
+      ownerUserId,
       patch.path ?? "",
       nullableText(patch.githubUrl),
       nullableText(patch.serverPath),
@@ -1046,11 +1059,9 @@ type ProjectOperationStatus = "running" | "completed" | "failed";
 function projectOperationChat(user: AuthUser, agentId: string, repoId: string, chatId: string): ChatRow | undefined {
   return db.prepare(`
     SELECT c.* FROM chats c
-    JOIN agents a ON a.id = c.agent_id
     WHERE c.id = ? AND c.agent_id = ? AND c.repo_id = ?
       AND (c.user_id IS NULL OR c.user_id = ?)
-      ${isAdmin(user) ? "" : "AND a.user_id = ?"}
-  `).get(chatId, agentId, repoId, user.id, ...(isAdmin(user) ? [] : [user.id])) as ChatRow | undefined;
+  `).get(chatId, agentId, repoId, user.id) as ChatRow | undefined;
 }
 
 function safeInlineCode(value: string): string {
@@ -2945,11 +2956,11 @@ async function createApp(): Promise<FastifyInstance> {
         u.avatar_data_url AS author_avatar_data_url,
         u.bio AS author_bio,
         u.created_at AS author_created_at,
-        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL) AS chat_count
+        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL AND (c.user_id IS NULL OR c.user_id = r.user_id)) AS chat_count
       FROM repos r
       JOIN agents a ON a.id = r.agent_id
-      JOIN users u ON u.id = a.user_id
-      WHERE a.user_id = ? AND r.visibility = 'public'
+      JOIN users u ON u.id = r.user_id
+      WHERE r.user_id = ? AND r.visibility = 'public'
       ORDER BY r.updated_at DESC
       LIMIT 30
     `).all(user.id) as PublicProjectRow[];
@@ -2997,10 +3008,10 @@ async function createApp(): Promise<FastifyInstance> {
         u.avatar_data_url AS author_avatar_data_url,
         u.bio AS author_bio,
         u.created_at AS author_created_at,
-        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL) AS chat_count
+        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL AND (c.user_id IS NULL OR c.user_id = r.user_id)) AS chat_count
       FROM repos r
       JOIN agents a ON a.id = r.agent_id
-      JOIN users u ON u.id = a.user_id
+      JOIN users u ON u.id = r.user_id
       WHERE ${filters.join(" AND ")}
       ORDER BY r.updated_at DESC
       LIMIT ?
@@ -3011,14 +3022,14 @@ async function createApp(): Promise<FastifyInstance> {
   app.get("/api/public/projects/:agentId/:repoId/chats", async (request, reply) => {
     const { agentId, repoId } = request.params as { agentId: string; repoId: string };
     const project = db.prepare(`
-      SELECT 1
+      SELECT r.user_id
       FROM repos r
       JOIN agents a ON a.id = r.agent_id
-      JOIN users u ON u.id = a.user_id
+      JOIN users u ON u.id = r.user_id
       WHERE r.agent_id = ? AND r.id = ? AND r.visibility = 'public' AND u.blocked_at IS NULL
-    `).get(agentId, repoId) as { 1: number } | undefined;
+    `).get(agentId, repoId) as { user_id: string | null } | undefined;
     if (!project) return reply.code(404).send({ error: "not_found" });
-    return { chats: publicChatSummaries(agentId, repoId, 100) };
+    return { chats: publicChatSummaries(agentId, repoId, project.user_id, 100) };
   });
 
   app.get("/api/public/chats/:id", async (request, reply) => {
@@ -3028,8 +3039,9 @@ async function createApp(): Promise<FastifyInstance> {
       FROM chats c
       JOIN repos r ON r.agent_id = c.agent_id AND r.id = c.repo_id
       JOIN agents a ON a.id = c.agent_id
-      JOIN users u ON u.id = a.user_id
+      JOIN users u ON u.id = r.user_id
       WHERE c.id = ? AND c.hidden_at IS NULL AND r.visibility = 'public' AND u.blocked_at IS NULL
+        AND (c.user_id IS NULL OR c.user_id = r.user_id)
     `).get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
     const jobs = db.prepare("SELECT * FROM jobs WHERE chat_id = ? ORDER BY created_at DESC").all(chatId) as JobRow[];
@@ -3344,7 +3356,7 @@ async function createApp(): Promise<FastifyInstance> {
       FROM chats c
       JOIN agents a ON a.id = c.agent_id
       LEFT JOIN repos r ON r.agent_id = c.agent_id AND r.id = c.repo_id
-      WHERE a.user_id = ?
+      WHERE c.user_id = ?
       ORDER BY c.updated_at DESC
       LIMIT 300
     `).all(userId) as AdminChatRow[];
@@ -3450,9 +3462,9 @@ async function createApp(): Promise<FastifyInstance> {
     const rows = db.prepare(`
       SELECT r.* FROM repos r
       JOIN agents a ON a.id = r.agent_id
-      ${isAdmin(auth.user) ? "" : "WHERE a.user_id = ?"}
+      WHERE r.user_id = ?
       ORDER BY r.name
-    `).all(...(isAdmin(auth.user) ? [] : [auth.user.id])) as RepoRow[];
+    `).all(auth.user.id) as RepoRow[];
     return { repos: rows.map((row) => ({ ...mapRepo(row), agentId: row.agent_id, updatedAt: row.updated_at })) };
   });
 
@@ -3497,8 +3509,8 @@ async function createApp(): Promise<FastifyInstance> {
       });
       if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_create_failed" });
       if (result.repos) upsertRepos(parsed.data.agentId, result.repos);
-      db.prepare("UPDATE repos SET visibility = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
-        .run(parsed.data.visibility, nowIso(), parsed.data.agentId, repoId);
+      db.prepare("UPDATE repos SET user_id = ?, visibility = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
+        .run(auth.user.id, parsed.data.visibility, nowIso(), parsed.data.agentId, repoId);
       return reply.code(201).send({ repoId, githubUrl });
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
@@ -3542,7 +3554,7 @@ async function createApp(): Promise<FastifyInstance> {
         });
         if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_update_failed" });
         if (result.repos) upsertRepos(nextAgentId, result.repos);
-        moveProjectRowsToAgent(params.agentId, nextAgentId, params.repoId, migrationPatch, visibility ?? sourceRepo.visibility);
+        moveProjectRowsToAgent(params.agentId, nextAgentId, params.repoId, migrationPatch, visibility ?? sourceRepo.visibility, sourceRepo.user_id);
         broadcast({ type: "repos.updated", agentId: params.agentId, repos: repoInfosForAgent(params.agentId) });
         broadcast({ type: "repos.updated", agentId: nextAgentId, repos: repoInfosForAgent(nextAgentId) });
         broadcast({ type: "chats.updated", agentId: params.agentId, repoId: params.repoId });
@@ -4318,12 +4330,12 @@ async function createApp(): Promise<FastifyInstance> {
       ? db.prepare("SELECT * FROM jobs WHERE chat_id = ? ORDER BY created_at DESC LIMIT 50").all(query.chatId) as JobRow[]
       : db.prepare(`
           SELECT j.* FROM jobs j
-          JOIN agents a ON a.id = j.agent_id
+          JOIN repos r ON r.agent_id = j.agent_id AND r.id = j.repo_id
           LEFT JOIN chats c ON c.id = j.chat_id
-          WHERE (j.chat_id IS NULL OR c.user_id IS NULL OR c.user_id = ?)
-          ${isAdmin(auth.user) ? "" : "AND a.user_id = ?"}
+          WHERE r.user_id = ?
+            AND (j.chat_id IS NULL OR c.user_id IS NULL OR c.user_id = ?)
           ORDER BY j.created_at DESC LIMIT 50
-        `).all(auth.user.id, ...(isAdmin(auth.user) ? [] : [auth.user.id])) as JobRow[];
+        `).all(auth.user.id, auth.user.id) as JobRow[];
     return { jobs: rows.map((row) => serializeJob(row)) };
   });
 
