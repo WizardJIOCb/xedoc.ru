@@ -387,7 +387,6 @@ export function openDb(path: string): DatabaseSync {
       PRIMARY KEY (user_id, day)
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_agent_status ON jobs(agent_id, status, created_at);
-    CREATE INDEX IF NOT EXISTS idx_chats_user_repo_updated ON chats(user_id, agent_id, repo_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_chats_repo_updated ON chats(agent_id, repo_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_logs_job_at ON job_logs(job_id, at);
     CREATE INDEX IF NOT EXISTS idx_messages_chat_at ON chat_messages(chat_id, created_at);
