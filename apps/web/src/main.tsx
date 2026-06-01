@@ -4381,13 +4381,12 @@ function App() {
       if (loadChatsAbortRef.current !== controller) return;
       loadChatsAbortRef.current = null;
       const activeId = activeChatIdRef.current;
-      setChats((current) => {
-        if (selectFirst || !activeId || nextChats.some((chat: Chat) => chat.id === activeId)) return nextChats;
-        const active = current.find((chat) => chat.id === activeId);
-        if (!active) return nextChats;
-        return [active, ...nextChats.filter((chat: Chat) => chat.id !== activeId)]
-          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-      });
+      const activeStillVisible = !activeId || nextChats.some((chat: Chat) => chat.id === activeId);
+      setChats(nextChats);
+      if (!selectFirst && !activeStillVisible && selectedRepoRef.current && repoKeyFor(selectedRepoRef.current) === loadingRepoKey) {
+        resetActiveChatView();
+        saveProjectState(repo);
+      }
       if (selectFirst && nextChats[0]) {
         await loadChat(nextChats[0].id, undefined, true);
         return nextChats;
@@ -4785,6 +4784,35 @@ function App() {
     setMessages([]);
     setActiveJob(null);
     setLogs([]);
+  }
+
+  function resetSessionViewState() {
+    loadChatsAbortRef.current?.abort();
+    chatListLoadingControllerRef.current?.abort();
+    loadChatAbortRef.current?.abort();
+    loadChatInFlightRef.current?.controller.abort();
+    projectStateRestoredRef.current = false;
+    chatCacheRef.current.clear();
+    messageDetailsLoadingRef.current.clear();
+    messageDetailsLoadedRef.current.clear();
+    missingChangeDetailsRequestedRef.current.clear();
+    setAgents([]);
+    setRepos([]);
+    setChats([]);
+    setHiddenLocalChats([]);
+    setAllJobs([]);
+    setProgressByJob({});
+    setRepoKey("");
+    setSyncRepoKey("");
+    setChatListLoadingRepoKey("");
+    setChatListSyncingRepoKey("");
+    setProjectPanel(null);
+    setChatProperties(null);
+    setChatMenuId("");
+    setProjectActionsOpen(false);
+    setGithubConnection({ connected: false });
+    setGithubTokenInput("");
+    resetActiveChatView();
   }
 
   function selectProject(repo: Repo) {
@@ -5797,6 +5825,7 @@ function App() {
       setAuthNotice(data.error === "user_blocked" ? "Аккаунт заблокирован." : "Не получилось войти: проверь email и пароль.");
       return;
     }
+    resetSessionViewState();
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
     refresh();
@@ -5822,6 +5851,7 @@ function App() {
       setAuthNotice(data.error === "registration_closed" ? "Регистрация временно закрыта." : data.error === "user_exists" ? "Пользователь с таким email уже есть." : data.error === "nickname_taken" ? "Этот nickname уже занят." : "Регистрация не получилась.");
       return;
     }
+    resetSessionViewState();
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
     refresh();
@@ -7198,6 +7228,7 @@ function App() {
       setAdminNotice(data.error === "user_blocked" ? "Пользователь заблокирован." : data.error || "Не получилось авторизоваться за пользователя.");
       return;
     }
+    resetSessionViewState();
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
     window.location.href = "/";
@@ -8759,6 +8790,7 @@ function App() {
 
   async function logout() {
     if (csrf) await api("/api/logout", { method: "POST", headers: { "x-csrf-token": csrf }, body: "{}" });
+    resetSessionViewState();
     setCsrf(undefined);
     setCurrentUser(null);
   }
