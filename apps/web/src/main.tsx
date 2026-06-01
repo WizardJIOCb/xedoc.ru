@@ -9155,6 +9155,9 @@ function App() {
               <div className="action-menu" role="menu">
                 <div className="menu-section agent-menu-section">
                   <span className="menu-section-title">Agent</span>
+                  <div className="menu-summary current-mode" title={`Model id: ${selectedModel}`}>
+                    {currentModeSummary}
+                  </div>
                   {AGENT_MENU_OPTIONS.map((option) => {
                     const optionKind = runnerKindForMenuAgent(option.value);
                     const optionAgentSelected = selectedAgent === option.value;
@@ -9185,9 +9188,6 @@ function App() {
                       </div>
                     );
                   })}
-                </div>
-                <div className="menu-summary current-mode" title={`Model id: ${selectedModel}`}>
-                  {currentModeSummary}
                 </div>
                 {vscodeNotice && <div className="menu-summary">{vscodeNotice}</div>}
                 <button
