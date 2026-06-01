@@ -2027,7 +2027,13 @@ function stripPrivateAttachmentUrls<T extends { attachments?: object[] }>(messag
 }
 
 function latestAssistantContent(messages: Array<{ role: string; content: string }>): string | null {
-  return [...messages].reverse().find((message) => message.role === "assistant" && message.content.trim())?.content.trim() ?? null;
+  return [...messages].reverse().find((message) => {
+    if (message.role !== "assistant" || !message.content.trim()) return false;
+    const metadata = "metadata" in message && message.metadata && typeof message.metadata === "object"
+      ? message.metadata as Record<string, unknown>
+      : {};
+    return !metadata.status || metadata.status === "completed";
+  })?.content.trim() ?? null;
 }
 
 function chatShareSnapshot(chat: ChatRow) {
@@ -2048,6 +2054,15 @@ function serializeShare(row: ChatShareRow, request: { protocol: string; hostname
     ? db.prepare("SELECT name, domain FROM repos WHERE agent_id = ? AND id = ?").get(row.agent_id, row.repo_id) as { name: string; domain: string | null } | undefined
     : undefined;
   const projectUrl = projectUrlFromDomain(repo?.domain);
+  const liveChat = row.chat_id
+    ? db.prepare("SELECT * FROM chats WHERE id = ?").get(row.chat_id) as ChatRow | undefined
+    : undefined;
+  const snapshot = liveChat
+    ? chatShareSnapshot(liveChat)
+    : JSON.parse(row.snapshot_json) as { finalAnswer?: unknown };
+  const finalContent = typeof snapshot.finalAnswer === "string" && snapshot.finalAnswer.trim()
+    ? snapshot.finalAnswer
+    : row.final_content;
   return {
     token: row.token,
     url: publicShareUrl(request, row.token),
@@ -2062,10 +2077,10 @@ function serializeShare(row: ChatShareRow, request: { protocol: string; hostname
     title: row.title,
     source: row.source,
     externalId: row.external_id,
-    finalContent: row.final_content,
+    finalContent,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    snapshot: JSON.parse(row.snapshot_json) as unknown
+    snapshot
   };
 }
 
@@ -4110,6 +4125,7 @@ async function createApp(): Promise<FastifyInstance> {
     const jobId = id("job");
     const createdAt = nowIso();
     const promptMessageId = id("msg");
+    const displayPrompt = parsed.data.displayPrompt?.trim() || parsed.data.prompt;
     db.prepare(`
       INSERT INTO jobs (id,chat_id,agent_id,repo_id,prompt,sandbox,branch_mode,model,reasoning_effort,speed,kind,status,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -4132,11 +4148,12 @@ async function createApp(): Promise<FastifyInstance> {
       id: promptMessageId,
       chat_id: chatId,
       role: "user",
-      content: parsed.data.prompt,
+      content: displayPrompt,
       source: "web",
       external_id: `job:${jobId}:prompt`,
       metadata_json: JSON.stringify({
         jobId,
+        prompt: parsed.data.prompt,
         model: parsed.data.model,
         reasoningEffort: parsed.data.reasoningEffort,
         speed: parsed.data.speed,

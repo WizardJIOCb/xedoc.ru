@@ -482,6 +482,7 @@ export const CreateJobSchema = z.object({
   agentId: z.string().min(1),
   chatId: z.string().optional(),
   prompt: z.string().min(3).max(16000),
+  displayPrompt: z.string().min(1).max(16000).optional(),
   sandbox: SandboxSchema,
   branchMode: z.enum(["current", "create-per-job"]).default("current"),
   kind: z.enum(["codex", "grok", "gemini-cli", "gemini"]).default("codex"),

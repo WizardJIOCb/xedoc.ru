@@ -100,6 +100,21 @@ export class Runner {
   }
 
   private async runCodex(context: RunContext, repo: RepoConfig): Promise<AgentJobDone> {
+    const result = await this.runCodexOnce(context, repo);
+    if (context.job.codexThreadId && shouldRetryCodexWithoutThread(result)) {
+      context.sendLog(log(context.job.id, "system", `Codex thread ${context.job.codexThreadId} is not available on this agent; starting a new thread with chat context.`));
+      return this.runCodexOnce({
+        ...context,
+        job: {
+          ...context.job,
+          codexThreadId: undefined
+        }
+      }, repo);
+    }
+    return result;
+  }
+
+  private async runCodexOnce(context: RunContext, repo: RepoConfig): Promise<AgentJobDone> {
     const codexCommand = codexExecutable();
     const attachments = prepareAttachments(context, repo);
     const userPrompt = attachments.length
@@ -458,6 +473,11 @@ function safePathSegment(value: string): string {
 function safeFilename(value: string, index: number): string {
   const cleaned = value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").replace(/^\.+/g, "").trim();
   return `${String(index + 1).padStart(2, "0")}-${(cleaned || "attachment").slice(0, 120)}`;
+}
+
+function shouldRetryCodexWithoutThread(result: AgentJobDone): boolean {
+  if (result.status !== "failed") return false;
+  return /thread\/resume|no rollout found/i.test(result.finalMessage ?? "");
 }
 
 function codexExecutable(): { command: string; prefixArgs: string[] } {

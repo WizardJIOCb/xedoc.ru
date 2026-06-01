@@ -1196,6 +1196,7 @@ function modelValueForKind(kind: JobKind, codexModel: string, grokModel: string,
 type MentionedAgentJob = {
   kind: JobKind;
   prompt: string;
+  displayPrompt: string;
 };
 
 function kindForMention(mention: string, currentKind: JobKind): JobKind {
@@ -1221,19 +1222,21 @@ function parseMentionedAgentJobs(value: string, currentKind: JobKind): Mentioned
       start: (match.index ?? 0) + (match[1]?.length ?? 0),
       mention: match[2] ?? ""
     }));
-  if (!matches.length) return [{ kind: currentKind, prompt: trimmed }];
+  if (!matches.length) return [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
   const intro = cleanMentionPrompt(trimmed.slice(0, matches[0]!.start));
   const jobs = matches.flatMap((match, index) => {
     const next = matches[index + 1]?.start ?? trimmed.length;
     const bodyStart = match.start + match.mention.length + 1;
     const body = cleanMentionPrompt(trimmed.slice(bodyStart, next));
+    const displayPrompt = cleanMentionPrompt(trimmed.slice(match.start, next));
     if (!body) return [];
     return [{
       kind: kindForMention(match.mention, currentKind),
-      prompt: intro ? `${intro}\n\n${body}` : body
+      prompt: intro ? `${intro}\n\n${body}` : body,
+      displayPrompt: intro ? `${intro}\n\n${displayPrompt}` : displayPrompt
     }];
   });
-  return jobs.length ? jobs : [{ kind: currentKind, prompt: trimmed }];
+  return jobs.length ? jobs : [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
 }
 
 function runnerSettingsSummary(kind: JobKind, modelLabel: string, reasoningLabel: string, speedLabel: string) {
@@ -1734,7 +1737,8 @@ function normalizeDisplayText(value: string) {
     .replace(/\\r\\n/g, "\n")
     .replace(/\\n/g, "\n")
     .replace(/\\r/g, "\n")
-    .replace(/\\t/g, "  ");
+    .replace(/\\t/g, "  ")
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
 }
 
 function isEscaped(text: string, index: number) {
@@ -2555,7 +2559,7 @@ function SharedChatPage({ token }: { token: string }) {
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-meta">
                   <div className="message-author-stack">
-                    <span>{message.role === "user" ? "User" : message.source === "vscode" ? "VS Code" : "Codex"}</span>
+                    <span>{message.role === "user" ? "User" : chatSourceLabel(message.source)}</span>
                     <small>{formatDateTime(message.createdAt)}</small>
                   </div>
                 </div>
@@ -5894,6 +5898,7 @@ function App() {
           repoId: selectedRepo.id,
           chatId: targetChatId,
           prompt: requested.prompt,
+          displayPrompt: requested.displayPrompt,
           sandbox,
           branchMode: "current",
           kind: requested.kind,
