@@ -82,6 +82,7 @@ type CodexSpeed = "standard" | "fast";
 type JobKind = "codex" | "grok" | "gemini-cli" | "gemini";
 type RunnerAgent = "codex" | "grok" | "gemini";
 type ProjectVisibility = "private" | "public";
+type ProjectGitMode = "blank" | "github-create" | "clone";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
 type EditorTheme = "xedoc-light" | "xedoc-dark" | "xedoc-aurora" | "xedoc-midnight" | "vs-light" | "vs-dark" | "hc-black";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
@@ -403,6 +404,14 @@ type OAuthProvider = {
   displayName?: string | null;
   connectedAt?: string | null;
   configured: boolean;
+};
+
+type GithubConnection = {
+  connected: boolean;
+  login?: string | null;
+  scopes?: string | null;
+  connectedAt?: string | null;
+  updatedAt?: string | null;
 };
 
 type AgentSetup = {
@@ -947,6 +956,10 @@ function defaultServerPathForDomain(domain: string) {
 
 function defaultGithubUrlForDomain(_domain: string) {
   return "";
+}
+
+function githubRepoNameFromProject(name: string) {
+  return projectSlug(name).replace(/^-+|-+$/g, "") || "new-project";
 }
 
 function defaultProjectOwnerSegment(user?: Pick<User, "id" | "email" | "nickname"> | null) {
@@ -3388,6 +3401,10 @@ function App() {
   const [projectAgentId, setProjectAgentId] = useState("");
   const [projectPath, setProjectPath] = useState("");
   const [projectGithubUrl, setProjectGithubUrl] = useState("");
+  const [projectGitMode, setProjectGitMode] = useState<ProjectGitMode>("blank");
+  const [projectGithubOwner, setProjectGithubOwner] = useState("");
+  const [projectGithubRepoName, setProjectGithubRepoName] = useState("");
+  const [projectGithubVisibility, setProjectGithubVisibility] = useState<ProjectVisibility>("private");
   const [projectServerPath, setProjectServerPath] = useState("");
   const [projectDomain, setProjectDomain] = useState("");
   const [projectVisibility, setProjectVisibility] = useState<ProjectVisibility>("private");
@@ -3466,6 +3483,9 @@ function App() {
   const [profileBio, setProfileBio] = useState("");
   const [profileAvatarDataUrl, setProfileAvatarDataUrl] = useState("");
   const [profileNotice, setProfileNotice] = useState("");
+  const [githubConnection, setGithubConnection] = useState<GithubConnection>({ connected: false });
+  const [githubTokenInput, setGithubTokenInput] = useState("");
+  const [githubBusy, setGithubBusy] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
@@ -3637,6 +3657,10 @@ function App() {
   const projectWizardStepIndex = PROJECT_WIZARD_STEPS.findIndex((step) => step.id === projectWizardStep);
   const projectWizardCanContinue = projectWizardStep === "project"
     ? Boolean(projectName.trim() && projectPath.trim() && projectFormAgent)
+    : projectWizardStep === "git"
+      ? projectGitMode === "github-create"
+        ? Boolean(githubConnection.connected && projectGithubRepoName.trim())
+        : true
     : projectWizardStep === "deploy"
       ? Boolean(!projectDeployEnabled || projectDraftDeployConfig)
       : projectWizardStep === "data"
@@ -4288,9 +4312,17 @@ function App() {
     setCurrentUser(data.user);
     setProfileStatsData(data.stats);
     setOauthProviders(data.oauth);
+    setGithubConnection(data.github ?? { connected: false });
     setProfileNickname(data.user.nickname ?? "");
     setProfileBio(data.user.bio ?? "");
     setProfileAvatarDataUrl(data.user.avatarDataUrl ?? "");
+  }
+
+  async function loadGithubConnection() {
+    const response = await api("/api/profile/github");
+    if (!response.ok) return;
+    const data = await response.json().catch(() => ({}));
+    setGithubConnection(data.github ?? { connected: false });
   }
 
   async function loadAuthOAuthProviders() {
@@ -4884,7 +4916,12 @@ function App() {
 
   function handleProjectNameChange(value: string) {
     const previousDataPath = defaultProjectDataPath(projectDataLocation, projectPath, projectServerPath);
+    const previousRepoName = githubRepoNameFromProject(projectName || "new-project");
     setProjectName(value);
+    const nextRepoName = githubRepoNameFromProject(value || "new-project");
+    if (!projectGithubRepoName.trim() || projectGithubRepoName.trim() === previousRepoName) {
+      setProjectGithubRepoName(nextRepoName);
+    }
     if (projectPanel !== "new") return;
     const defaults = defaultProjectValues(value, projectFormAgent, currentUser);
     setProjectPath(defaults.path);
@@ -4953,6 +4990,10 @@ function App() {
     setProjectAgentId(selectedAgent?.id ?? agents[0]?.id ?? "");
     setProjectPath(defaults.path);
     setProjectGithubUrl(defaults.githubUrl);
+    setProjectGitMode("blank");
+    setProjectGithubOwner(githubConnection.login ?? "");
+    setProjectGithubRepoName(githubRepoNameFromProject("New Project"));
+    setProjectGithubVisibility("private");
     setProjectServerPath(defaults.serverPath);
     setProjectDomain(defaults.domain);
     setProjectVisibility("private");
@@ -4977,6 +5018,10 @@ function App() {
     setProjectAgentId(repo.agentId);
     setProjectPath(repo.pathMasked);
     setProjectGithubUrl(repo.githubUrl ?? "");
+    setProjectGitMode(repo.githubUrl ? "clone" : "blank");
+    setProjectGithubOwner(githubConnection.login ?? "");
+    setProjectGithubRepoName(githubRepoNameFromProject(repo.name));
+    setProjectGithubVisibility(repo.visibility ?? "private");
     setProjectServerPath(repo.serverPath ?? "");
     setProjectDomain(repo.domain ?? "");
     setProjectVisibility(repo.visibility ?? "private");
@@ -5023,6 +5068,7 @@ function App() {
       setCurrentUser(data.user);
       setCsrf(data.csrfToken);
       refresh();
+      void loadGithubConnection();
     });
   }, []);
 
@@ -5079,6 +5125,11 @@ function App() {
       });
     })();
   }, [csrf, currentUser, isAdminRoute, repos]);
+
+  useEffect(() => {
+    if (projectPanel !== "new" || projectGithubOwner.trim() || !githubConnection.login) return;
+    setProjectGithubOwner(githubConnection.login);
+  }, [githubConnection.login, projectGithubOwner, projectPanel]);
 
   useEffect(() => {
     const error = new URLSearchParams(window.location.search).get("oauth_error");
@@ -5747,6 +5798,7 @@ function App() {
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
     refresh();
+    void loadGithubConnection();
   }
 
   async function register(event: React.FormEvent) {
@@ -5771,6 +5823,7 @@ function App() {
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
     refresh();
+    void loadGithubConnection();
   }
 
   function projectStartPromptWithSetup(promptText: string) {
@@ -5861,11 +5914,19 @@ function App() {
     const normalizedDomain = normalizeProjectDomain(projectDomain);
     const deployConfig = projectDraftDeployConfig;
     const dataConfig = projectDraftDataConfig;
+    const nextGithubUrl = isNew && projectGitMode === "blank" ? "" : projectGithubUrl.trim();
     const body: Record<string, unknown> = isNew ? {
       agentId: targetAgent.id,
       name: projectName.trim(),
       path: projectPath.trim(),
-      githubUrl: projectGithubUrl.trim(),
+      githubUrl: projectGitMode === "github-create" ? "" : nextGithubUrl,
+      cloneGit: projectGitMode === "clone",
+      githubCreate: projectGitMode === "github-create" ? {
+        enabled: true,
+        owner: projectGithubOwner.trim() || githubConnection.login || undefined,
+        name: projectGithubRepoName.trim(),
+        visibility: projectGithubVisibility
+      } : undefined,
       serverPath: projectServerPath.trim(),
       domain: normalizedDomain,
       visibility: projectVisibility,
@@ -5902,6 +5963,12 @@ function App() {
             ? "На выбранном агенте уже есть проект с таким ID."
             : data.error === "project_has_running_job"
               ? "У проекта есть активная задача. Дождись завершения перед переносом на другой агент."
+              : data.error === "github_not_connected"
+                ? "GitHub не подключён. Добавь GitHub token в профиле."
+                : data.error === "invalid_github_repo_name"
+                  ? "Некорректное имя GitHub repository."
+                  : data.error === "invalid_github_owner"
+                    ? "Некорректный GitHub owner."
               : data.error || "Job start failed.";
       setChatNoticeOk(false);
       setChatNotice(errorMessage);
@@ -7322,7 +7389,49 @@ function App() {
     setCurrentUser(data.user);
     setProfileStatsData(data.stats);
     setOauthProviders(data.oauth);
+    setGithubConnection(data.github ?? githubConnection);
     setProfileNotice("Profile saved.");
+  }
+
+  async function saveGithubToken(event: React.FormEvent) {
+    event.preventDefault();
+    if (!csrf || !githubTokenInput.trim()) return;
+    setGithubBusy(true);
+    setProfileNotice("");
+    const response = await api("/api/profile/github/token", {
+      method: "PUT",
+      headers: { "x-csrf-token": csrf },
+      body: JSON.stringify({ token: githubTokenInput.trim() })
+    });
+    const data = await response.json().catch(() => ({}));
+    setGithubBusy(false);
+    if (!response.ok) {
+      setProfileNotice(data.error === "Bad credentials" ? "GitHub token не принят: проверь token и права." : data.error || "GitHub token failed.");
+      return;
+    }
+    setGithubConnection(data.github ?? { connected: false });
+    setGithubTokenInput("");
+    setProfileNotice(`GitHub connected${data.github?.login ? ` as ${data.github.login}` : ""}.`);
+  }
+
+  async function disconnectGithubToken() {
+    if (!csrf) return;
+    setGithubBusy(true);
+    setProfileNotice("");
+    const response = await api("/api/profile/github/token", {
+      method: "DELETE",
+      headers: { "x-csrf-token": csrf },
+      body: "{}"
+    });
+    const data = await response.json().catch(() => ({}));
+    setGithubBusy(false);
+    if (!response.ok) {
+      setProfileNotice(data.error || "GitHub disconnect failed.");
+      return;
+    }
+    setGithubConnection(data.github ?? { connected: false });
+    setGithubTokenInput("");
+    setProfileNotice("GitHub disconnected.");
   }
 
   async function changePassword(event: React.FormEvent) {
@@ -7725,6 +7834,31 @@ function App() {
           </div>
         </section>
 
+        <form className="settings-card profile-card" onSubmit={saveGithubToken}>
+          <h2><Github size={18} /> GitHub repositories</h2>
+          <p>Token нужен wizard-у, чтобы создавать GitHub repositories и сразу привязывать remote URL к проекту.</p>
+          <div className="oauth-row">
+            <span><Github size={17} /> GitHub token</span>
+            <small>{githubConnection.connected ? `Connected as ${githubConnection.login}` : "Not connected"}</small>
+            {githubConnection.connected && (
+              <button className="secondary" disabled={githubBusy} type="button" onClick={() => void disconnectGithubToken()}>
+                Disconnect
+              </button>
+            )}
+          </div>
+          <label>
+            Personal access token
+            <input
+              autoComplete="off"
+              placeholder="github_pat_... или ghp_..."
+              type="password"
+              value={githubTokenInput}
+              onChange={(event) => setGithubTokenInput(event.target.value)}
+            />
+          </label>
+          <button disabled={githubBusy || !githubTokenInput.trim()} type="submit"><Save size={16} /> Save GitHub token</button>
+        </form>
+
         {profileNotice && <div className="notice">{profileNotice}</div>}
       </section>
     );
@@ -7850,9 +7984,10 @@ function App() {
           </div>
           <div className="wizard-mode-grid">
             <button
-              className={!projectGithubUrl.trim() && projectDeployEnabled ? "active" : ""}
+              className={projectGitMode === "blank" && projectDeployEnabled ? "active" : ""}
               type="button"
               onClick={() => {
+                setProjectGitMode("blank");
                 setProjectGithubUrl("");
                 setProjectDeployEnabled(true);
               }}
@@ -7864,9 +7999,28 @@ function App() {
               </span>
             </button>
             <button
-              className={projectGithubUrl.trim() ? "active" : ""}
+              className={projectGitMode === "github-create" ? "active" : ""}
               type="button"
-              onClick={() => setProjectWizardStep("git")}
+              onClick={() => {
+                setProjectGitMode("github-create");
+                setProjectGithubRepoName((current) => current.trim() || githubRepoNameFromProject(projectName || "new-project"));
+                setProjectGithubOwner((current) => current.trim() || githubConnection.login || "");
+                setProjectWizardStep("git");
+              }}
+            >
+              <Github size={17} />
+              <span>
+                <strong>Create GitHub repo</strong>
+                <small>Создать репозиторий в подключённом GitHub и закрепить за проектом.</small>
+              </span>
+            </button>
+            <button
+              className={projectGitMode === "clone" ? "active" : ""}
+              type="button"
+              onClick={() => {
+                setProjectGitMode("clone");
+                setProjectWizardStep("git");
+              }}
             >
               <Github size={17} />
               <span>
@@ -7877,7 +8031,11 @@ function App() {
             <button
               className={!projectDeployEnabled ? "active" : ""}
               type="button"
-              onClick={() => setProjectDeployEnabled(false)}
+              onClick={() => {
+                setProjectGitMode("blank");
+                setProjectGithubUrl("");
+                setProjectDeployEnabled(false);
+              }}
             >
               <Terminal size={17} />
               <span>
@@ -7915,19 +8073,81 @@ function App() {
       );
     }
     if (projectWizardStep === "git") {
+      const githubCreateUrl = projectGithubOwner.trim() && projectGithubRepoName.trim()
+        ? `https://github.com/${projectGithubOwner.trim()}/${projectGithubRepoName.trim()}.git`
+        : "";
       return (
         <div className="wizard-step-panel">
           <div className="wizard-hero subtle">
             <span>Optional</span>
-            <strong>Git URL нужен только если проект надо склонировать.</strong>
-            <small>Если оставить поле пустым, агент создаст пустую Git-папку. Commit & push можно настроить позже в меню проекта.</small>
+            <strong>{projectGitMode === "github-create" ? "Создай GitHub repo прямо из wizard." : projectGitMode === "clone" ? "Git URL нужен только если проект надо склонировать." : "Git можно подключить позже."}</strong>
+            <small>{projectGitMode === "github-create"
+              ? "Xedoc создаст пустой репозиторий через подключённый GitHub token, локально агент создаст пустую Git-папку и закрепит remote URL за проектом."
+              : projectGitMode === "clone"
+                ? "Агент склонирует указанный репозиторий в выбранную папку."
+                : "Агент создаст пустую Git-папку. Commit & push можно настроить позже в меню проекта."}</small>
           </div>
-          <label>
-            GitHub repository
-            <input placeholder="https://github.com/WizardJIOCb/project.git" value={projectGithubUrl} onChange={(event) => setProjectGithubUrl(event.target.value)} />
-          </label>
+          <div className="storage-choice" role="group" aria-label="Git setup mode">
+            <button className={projectGitMode === "blank" ? "active" : ""} type="button" onClick={() => { setProjectGitMode("blank"); setProjectGithubUrl(""); }}>
+              <FolderGit2 size={16} />
+              <span><strong>No remote yet</strong><small>Пустой локальный Git.</small></span>
+            </button>
+            <button className={projectGitMode === "github-create" ? "active" : ""} type="button" onClick={() => {
+              setProjectGitMode("github-create");
+              setProjectGithubOwner((current) => current.trim() || githubConnection.login || "");
+              setProjectGithubRepoName((current) => current.trim() || githubRepoNameFromProject(projectName || "new-project"));
+            }}>
+              <Github size={16} />
+              <span><strong>Create on GitHub</strong><small>{githubConnection.connected ? `as ${githubConnection.login}` : "GitHub token needed"}</small></span>
+            </button>
+            <button className={projectGitMode === "clone" ? "active" : ""} type="button" onClick={() => setProjectGitMode("clone")}>
+              <Download size={16} />
+              <span><strong>Clone existing</strong><small>URL уже есть.</small></span>
+            </button>
+          </div>
+          {projectGitMode === "github-create" ? (
+            <>
+              {!githubConnection.connected && (
+                <div className="notice warning">
+                  Сначала добавь GitHub token в Profile. Нужны права на создание repository.
+                  <button className="secondary compact inline-action" type="button" onClick={openProfileView}>Open Profile</button>
+                </div>
+              )}
+              <div className="wizard-two-col">
+                <label>
+                  GitHub owner
+                  <input placeholder={githubConnection.login || "WizardJIOCb"} value={projectGithubOwner} onChange={(event) => setProjectGithubOwner(event.target.value)} />
+                </label>
+                <label>
+                  Repository name
+                  <input placeholder="project" value={projectGithubRepoName} onChange={(event) => setProjectGithubRepoName(event.target.value)} />
+                </label>
+              </div>
+              <label>
+                Repository visibility
+                <select value={projectGithubVisibility} onChange={(event) => setProjectGithubVisibility(event.target.value as ProjectVisibility)}>
+                  <option value="private">Private GitHub repo</option>
+                  <option value="public">Public GitHub repo</option>
+                </select>
+              </label>
+              <div className="project-preview">
+                <span>Remote URL</span>
+                <strong>{githubCreateUrl || "owner/repo"}</strong>
+              </div>
+            </>
+          ) : projectGitMode === "clone" ? (
+            <label>
+              GitHub repository
+              <input placeholder="https://github.com/WizardJIOCb/project.git" value={projectGithubUrl} onChange={(event) => setProjectGithubUrl(event.target.value)} />
+            </label>
+          ) : (
+            <div className="wizard-muted">
+              Remote URL не будет задан. Когда проект появится, его можно привязать через Project settings или Git options.
+            </div>
+          )}
           <div className="wizard-summary-grid">
             <div><span>Local repo</span><strong>{projectPath || "not set"}</strong></div>
+            <div><span>Remote</span><strong>{projectGitMode === "github-create" ? githubCreateUrl || "will be created" : projectGithubUrl || "not connected"}</strong></div>
             <div><span>Default commit</span><strong>{`Update ${projectName.trim() || "project"}`}</strong></div>
           </div>
         </div>
@@ -7958,7 +8178,7 @@ function App() {
           <div><span>Project</span><strong>{projectName || "Untitled"}</strong></div>
           <div><span>Agent</span><strong>{projectFormAgent?.name || "No agent"}</strong></div>
           <div><span>Folder</span><strong>{projectPath || "not set"}</strong></div>
-          <div><span>GitHub</span><strong>{projectGithubUrl || "not connected"}</strong></div>
+          <div><span>GitHub</span><strong>{projectGitMode === "github-create" && projectGithubOwner.trim() && projectGithubRepoName.trim() ? `https://github.com/${projectGithubOwner.trim()}/${projectGithubRepoName.trim()}.git` : projectGithubUrl || "not connected"}</strong></div>
           <div><span>Deploy</span><strong>{projectDraftDeployConfig ? `${projectDraftDeployConfig.mode} · ${projectServerPath || "server path"}` : "not configured"}</strong></div>
           <div><span>Data</span><strong>{projectDraftDataConfig ? `${projectDraftDataConfig.location} · ${projectDraftDataConfig.path}` : "not configured"}</strong></div>
           <div><span>Domain</span><strong>{normalizeProjectDomain(projectDomain) || "not set"}</strong></div>

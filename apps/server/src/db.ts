@@ -33,6 +33,17 @@ export type OAuthStateRow = {
   expires_at: string;
 };
 
+export type GithubConnectionRow = {
+  user_id: string;
+  login: string;
+  scopes: string | null;
+  token_encrypted: string;
+  token_iv: string;
+  token_tag: string;
+  connected_at: string;
+  updated_at: string;
+};
+
 export type SessionRow = {
   id: string;
   user_id: string;
@@ -341,6 +352,16 @@ export function openDb(path: string): DatabaseSync {
       code_verifier TEXT,
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS github_connections (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      login TEXT NOT NULL,
+      scopes TEXT,
+      token_encrypted TEXT NOT NULL,
+      token_iv TEXT NOT NULL,
+      token_tag TEXT NOT NULL,
+      connected_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS deleted_chat_sync (
       agent_id TEXT NOT NULL,

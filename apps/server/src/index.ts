@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { createHash, createHmac } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
@@ -51,6 +51,7 @@ import {
   type ChatMessageRow,
   type ChatRow,
   type ChatShareRow,
+  type GithubConnectionRow,
   type JobRow,
   type LogRow,
   type OAuthConnectionRow,
@@ -2576,6 +2577,142 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function githubTokenKey(): Buffer {
+  return createHash("sha256").update(`github-token:${config.sessionSecret}`).digest();
+}
+
+function encryptGithubToken(token: string): { encrypted: string; iv: string; tag: string } {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", githubTokenKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  return {
+    encrypted: encrypted.toString("base64url"),
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url")
+  };
+}
+
+function decryptGithubToken(row: GithubConnectionRow): string {
+  const decipher = createDecipheriv("aes-256-gcm", githubTokenKey(), Buffer.from(row.token_iv, "base64url"));
+  decipher.setAuthTag(Buffer.from(row.token_tag, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(row.token_encrypted, "base64url")),
+    decipher.final()
+  ]).toString("utf8");
+}
+
+function githubConnectionForUser(userId: string): GithubConnectionRow | undefined {
+  return db.prepare("SELECT * FROM github_connections WHERE user_id = ?").get(userId) as GithubConnectionRow | undefined;
+}
+
+function serializeGithubConnection(row: GithubConnectionRow | undefined) {
+  return row
+    ? {
+      connected: true,
+      login: row.login,
+      scopes: row.scopes,
+      connectedAt: row.connected_at,
+      updatedAt: row.updated_at
+    }
+    : { connected: false };
+}
+
+function githubRepoPart(value: unknown): string {
+  const text = stringValue(value) ?? "";
+  return /^[A-Za-z0-9_.-]{1,100}$/.test(text) ? text : "";
+}
+
+function githubRepoSlug(owner: string, repo: string): string {
+  return `${owner}/${repo}`;
+}
+
+function githubApiMessage(data: unknown, fallback: string): string {
+  return data && typeof data === "object" && "message" in data && typeof data.message === "string"
+    ? data.message
+    : fallback;
+}
+
+async function githubApiRequest(
+  path: string,
+  token: string,
+  init: RequestInit = {}
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown>; text: string; scopes: string | null }> {
+  const response = await fetch(`https://api.github.com${path}`, {
+    ...init,
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${token}`,
+      "user-agent": PUBLIC_DOMAIN,
+      "x-github-api-version": "2022-11-28",
+      ...(init.headers ?? {})
+    }
+  });
+  const text = await response.text();
+  let data: Record<string, unknown> = {};
+  try {
+    data = text ? JSON.parse(text) as Record<string, unknown> : {};
+  } catch {
+    data = {};
+  }
+  return {
+    ok: response.ok,
+    status: response.status,
+    data,
+    text,
+    scopes: response.headers.get("x-oauth-scopes")
+  };
+}
+
+async function validateGithubToken(token: string): Promise<{ login: string; scopes: string | null }> {
+  const result = await githubApiRequest("/user", token);
+  if (!result.ok) throw new Error(githubApiMessage(result.data, `GitHub API returned HTTP ${result.status}`));
+  const login = stringValue(result.data.login);
+  if (!login) throw new Error("github_login_missing");
+  return { login, scopes: result.scopes };
+}
+
+async function createGithubRepositoryForUser(
+  userId: string,
+  options: { owner?: string; name?: string; visibility: "private" | "public" }
+): Promise<{ githubUrl: string; htmlUrl: string; fullName: string; created: boolean }> {
+  const connection = githubConnectionForUser(userId);
+  if (!connection) throw new Error("github_not_connected");
+  const token = decryptGithubToken(connection);
+  const rawOwner = stringValue(options.owner);
+  const owner = rawOwner ? githubRepoPart(rawOwner) : connection.login;
+  if (!owner) throw new Error("invalid_github_owner");
+  const repoName = githubRepoPart(options.name);
+  if (!repoName) throw new Error("invalid_github_repo_name");
+  const slug = githubRepoSlug(owner, repoName);
+  const existing = await githubApiRequest(`/repos/${slug}`, token);
+  if (existing.ok) {
+    const cloneUrl = stringValue(existing.data.clone_url) ?? `https://github.com/${slug}.git`;
+    const htmlUrl = stringValue(existing.data.html_url) ?? `https://github.com/${slug}`;
+    const fullName = stringValue(existing.data.full_name) ?? slug;
+    return { githubUrl: cloneUrl, htmlUrl, fullName, created: false };
+  }
+  if (existing.status !== 404) {
+    throw new Error(githubApiMessage(existing.data, `GitHub repo check failed with HTTP ${existing.status}`));
+  }
+  const createPath = owner.toLowerCase() === connection.login.toLowerCase() ? "/user/repos" : `/orgs/${owner}/repos`;
+  const created = await githubApiRequest(createPath, token, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: repoName,
+      private: options.visibility === "private",
+      auto_init: false
+    })
+  });
+  if (!created.ok) {
+    throw new Error(githubApiMessage(created.data, `GitHub repo create failed with HTTP ${created.status}`));
+  }
+  const cloneUrl = stringValue(created.data.clone_url) ?? `https://github.com/${slug}.git`;
+  const htmlUrl = stringValue(created.data.html_url) ?? `https://github.com/${slug}`;
+  const fullName = stringValue(created.data.full_name) ?? slug;
+  return { githubUrl: cloneUrl, htmlUrl, fullName, created: true };
+}
+
 function jwtPayload(token: unknown): Record<string, unknown> {
   const value = stringValue(token);
   if (!value) return {};
@@ -2963,8 +3100,60 @@ async function createApp(): Promise<FastifyInstance> {
     return {
       user: serializeUser(auth.user),
       stats: profileStats(auth.user),
-      oauth: oauthProviders(auth.user.id)
+      oauth: oauthProviders(auth.user.id),
+      github: serializeGithubConnection(githubConnectionForUser(auth.user.id))
     };
+  });
+
+  app.get("/api/profile/github", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth) return;
+    return { github: serializeGithubConnection(githubConnectionForUser(auth.user.id)) };
+  });
+
+  app.put("/api/profile/github/token", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const token = typeof (request.body as { token?: unknown } | undefined)?.token === "string"
+      ? (request.body as { token: string }).token.trim()
+      : "";
+    if (!token || token.length > 500) return reply.code(400).send({ error: "invalid_github_token" });
+    try {
+      const profile = await validateGithubToken(token);
+      const encrypted = encryptGithubToken(token);
+      const existing = githubConnectionForUser(auth.user.id);
+      const stamp = nowIso();
+      db.prepare(`
+        INSERT INTO github_connections (user_id,login,scopes,token_encrypted,token_iv,token_tag,connected_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          login=excluded.login,
+          scopes=excluded.scopes,
+          token_encrypted=excluded.token_encrypted,
+          token_iv=excluded.token_iv,
+          token_tag=excluded.token_tag,
+          updated_at=excluded.updated_at
+      `).run(
+        auth.user.id,
+        profile.login,
+        profile.scopes,
+        encrypted.encrypted,
+        encrypted.iv,
+        encrypted.tag,
+        existing?.connected_at ?? stamp,
+        stamp
+      );
+      return { github: serializeGithubConnection(githubConnectionForUser(auth.user.id)) };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "github_token_failed" });
+    }
+  });
+
+  app.delete("/api/profile/github/token", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    db.prepare("DELETE FROM github_connections WHERE user_id = ?").run(auth.user.id);
+    return { github: serializeGithubConnection(undefined) };
   });
 
   app.put("/api/profile", async (request, reply) => {
@@ -2981,7 +3170,12 @@ async function createApp(): Promise<FastifyInstance> {
     db.prepare("UPDATE users SET nickname = ?, bio = ?, avatar_data_url = ?, updated_at = ? WHERE id = ?")
       .run(nickname, parsed.data.bio?.trim() || null, parsed.data.avatarDataUrl || null, stamp, auth.user.id);
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(auth.user.id) as UserRow;
-    return { user: serializeUser(user), stats: profileStats(user), oauth: oauthProviders(user.id) };
+    return {
+      user: serializeUser(user),
+      stats: profileStats(user),
+      oauth: oauthProviders(user.id),
+      github: serializeGithubConnection(githubConnectionForUser(user.id))
+    };
   });
 
   app.post("/api/profile/password", async (request, reply) => {
@@ -3265,6 +3459,17 @@ async function createApp(): Promise<FastifyInstance> {
       .get(parsed.data.agentId, repoId) as RepoRow | undefined;
     if (existing) repoId = `${repoId}-${Date.now().toString(36)}`;
     try {
+      let githubUrl = parsed.data.githubUrl?.trim() || undefined;
+      let cloneGit = parsed.data.cloneGit;
+      if (parsed.data.githubCreate?.enabled) {
+        const created = await createGithubRepositoryForUser(auth.user.id, {
+          owner: parsed.data.githubCreate.owner?.trim() || undefined,
+          name: parsed.data.githubCreate.name?.trim() || repoId,
+          visibility: parsed.data.githubCreate.visibility
+        });
+        githubUrl = created.githubUrl;
+        cloneGit = false;
+      }
       const result = await requestAgentProject(parsed.data.agentId, {
         type: "project.create",
         requestId: id("req"),
@@ -3272,7 +3477,8 @@ async function createApp(): Promise<FastifyInstance> {
           id: repoId,
           name: parsed.data.name,
           path: parsed.data.path,
-          githubUrl: parsed.data.githubUrl?.trim() || undefined,
+          githubUrl,
+          cloneGit,
           serverPath: parsed.data.serverPath?.trim() || undefined,
           domain: parsed.data.domain?.trim() || undefined,
           deploy: parsed.data.deploy ?? undefined,
@@ -3285,7 +3491,7 @@ async function createApp(): Promise<FastifyInstance> {
       if (result.repos) upsertRepos(parsed.data.agentId, result.repos);
       db.prepare("UPDATE repos SET visibility = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
         .run(parsed.data.visibility, nowIso(), parsed.data.agentId, repoId);
-      return reply.code(201).send({ repoId });
+      return reply.code(201).send({ repoId, githubUrl });
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }

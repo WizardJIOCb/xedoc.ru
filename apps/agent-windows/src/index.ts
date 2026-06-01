@@ -1356,7 +1356,7 @@ function connect() {
       try {
         logProgress(`project: Creating ${message.project.name}.`);
         if (config.repos.some((repo) => repo.id === message.project.id)) throw new Error("Project id already exists.");
-        await prepareProjectFolder(message.project.path, message.project.githubUrl);
+        await prepareProjectFolder(message.project.path, message.project.cloneGit === false ? undefined : message.project.githubUrl);
         config.repos.push({
           id: message.project.id,
           name: message.project.name,

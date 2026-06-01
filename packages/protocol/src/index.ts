@@ -346,6 +346,7 @@ export const ServerProjectCreateSchema = z.object({
     name: z.string().min(1).max(120),
     path: z.string().min(3).max(260),
     githubUrl: z.string().max(300).optional(),
+    cloneGit: z.boolean().optional(),
     serverPath: z.string().max(260).optional(),
     domain: z.string().max(253).optional(),
     deploy: DeployConfigSchema.nullish(),
@@ -513,6 +514,13 @@ export const CreateProjectSchema = z.object({
   name: z.string().min(1).max(120),
   path: z.string().min(3).max(260),
   githubUrl: z.string().max(300).optional(),
+  cloneGit: z.boolean().default(true),
+  githubCreate: z.object({
+    enabled: z.boolean().default(false),
+    owner: z.string().trim().max(80).optional(),
+    name: z.string().trim().max(100).optional(),
+    visibility: z.enum(["private", "public"]).default("private")
+  }).optional(),
   serverPath: z.string().max(260).optional(),
   domain: z.string().max(253).optional(),
   visibility: ProjectVisibilitySchema.default("private"),

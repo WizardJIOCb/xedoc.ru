@@ -1308,7 +1308,7 @@ textarea:focus {
 
 .wizard-mode-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 8px;
 }
 
@@ -2142,6 +2142,12 @@ textarea:focus {
   color: #ffffff;
   background: var(--accent);
   font-weight: 800;
+}
+
+.inline-action {
+  display: inline-flex;
+  margin-left: 8px;
+  padding: 4px 8px;
 }
 
 .admin-page {
