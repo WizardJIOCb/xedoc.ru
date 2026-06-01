@@ -621,6 +621,21 @@ async function buildProject(repoId: string): Promise<string> {
   return [...output, "Build completed."].join("\n");
 }
 
+async function gitStatusProject(repoId: string): Promise<string> {
+  const repo = config.repos.find((item) => item.id === repoId);
+  if (!repo) throw new Error("Project not found in agent config.");
+  const status = await runCapture("git", ["status", "--short", "--branch"], repo.path, 15000);
+  const staged = await runCapture("git", ["diff", "--cached", "--stat"], repo.path, 15000);
+  const unstaged = await runCapture("git", ["diff", "--stat"], repo.path, 15000);
+  const sections = [
+    "$ git status --short --branch",
+    status.stdout.trim() || status.stderr.trim() || "No status output.",
+    staged.stdout.trim() ? ["", "$ git diff --cached --stat", staged.stdout.trim()].join("\n") : "",
+    unstaged.stdout.trim() ? ["", "$ git diff --stat", unstaged.stdout.trim()].join("\n") : ""
+  ].filter(Boolean);
+  return sections.join("\n");
+}
+
 async function deployProject(repoId: string): Promise<string> {
   const repo = config.repos.find((item) => item.id === repoId);
   if (!repo) throw new Error("Project not found in agent config.");
@@ -1458,6 +1473,8 @@ function connect() {
         logProgress(`project-command: ${message.command} started for ${message.repoId}.`);
         const output = message.command === "build"
           ? await buildProject(message.repoId)
+          : message.command === "git-status"
+            ? await gitStatusProject(message.repoId)
           : "Unknown project command.";
         send({
           type: "project.command.result",

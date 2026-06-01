@@ -3562,6 +3562,13 @@ a.secondary {
   background: var(--accent);
 }
 
+.git-message-preview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+  align-items: stretch;
+}
+
 .git-message-preview {
   min-width: 0;
   display: grid;
@@ -3586,6 +3593,27 @@ a.secondary {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sticky-submit .action-menu .git-message-refresh {
+  min-width: 34px;
+  min-height: 100%;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--field);
+}
+
+.sticky-submit .action-menu .git-message-refresh:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+}
+
+.sticky-submit .action-menu .git-message-refresh:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .sticky-submit .action-menu .action-menu-fields input {

@@ -398,7 +398,7 @@ export const ServerProjectCommandSchema = z.object({
   type: z.literal("project.command"),
   requestId: z.string().min(1),
   repoId: z.string().min(1),
-  command: z.enum(["build"])
+  command: z.enum(["build", "git-status"])
 });
 
 export const ServerNginxSchema = z.object({

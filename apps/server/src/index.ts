@@ -3607,6 +3607,29 @@ async function createApp(): Promise<FastifyInstance> {
     }
   });
 
+  app.post("/api/projects/:agentId/:repoId/git-status", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const params = request.params as { agentId: string; repoId: string };
+    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
+      .get(params.agentId, params.repoId) as RepoRow | undefined;
+    if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    try {
+      await syncAgentProjectConfig(params.agentId, repo);
+      const result = await requestAgentProjectCommand(params.agentId, {
+        type: "project.command",
+        requestId: id("req"),
+        repoId: params.repoId,
+        command: "git-status"
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error ?? "git_status_failed", output: result.output });
+      return { ok: true, output: result.output };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
   app.post("/api/projects/:agentId/:repoId/nginx", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;

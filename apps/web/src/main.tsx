@@ -1937,11 +1937,42 @@ function truncateCommitPart(value: string, maxLength: number): string {
   return cut || value.slice(0, maxLength).trim();
 }
 
-function commitSummaryFromChat(activeChat: Chat | undefined, messages: ChatMessage[]): string {
+function commitSummaryFromGitContext(value: string): string {
+  const files = value
+    .split(/\r?\n/)
+    .map((line) => {
+      const statusMatch = line.match(/^[ MADRCU?!]{1,2}\s+(.+)$/);
+      if (statusMatch?.[1]) return statusMatch[1].replace(/^"?(.+?)"?$/, "$1").split(/\s+->\s+/).pop() ?? "";
+      const statMatch = line.match(/^\s*(.+?)\s+\|\s+\d+/);
+      return statMatch?.[1] ?? "";
+    })
+    .map((path) => path.trim().replace(/^\.\/+/, ""))
+    .filter((path) => path && !path.startsWith("$") && !path.startsWith("##"));
+  const unique = [...new Set(files)].slice(0, 12);
+  if (!unique.length) return "";
+  const onlyFile = unique[0] ?? "";
+  if (unique.length === 1) return `update ${basenameFromPath(onlyFile) || onlyFile}`;
+  const topFolders = unique
+    .map((path) => path.split(/[\\/]/)[0])
+    .filter((folder): folder is string => Boolean(folder));
+  const folderCounts = new Map<string, number>();
+  for (const folder of topFolders) folderCounts.set(folder, (folderCounts.get(folder) ?? 0) + 1);
+  const topEntry = [...folderCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  const topFolder = topEntry?.[0];
+  const topCount = topEntry?.[1] ?? 0;
+  if (topFolder && topCount >= 2 && topCount >= Math.ceil(unique.length / 2)) return `update ${topFolder} changes`;
+  return `update ${unique.length} files`;
+}
+
+function commitSummaryFromChat(activeChat: Chat | undefined, messages: ChatMessage[], gitContext = ""): string {
   const lastUser = activeChat ? [...messages].reverse().find((message) => message.role === "user")?.content : undefined;
+  const chatSummary = cleanCommitSummary(lastUser) || cleanCommitSummary(activeChat?.title);
+  const changeSummary = commitSummaryFromGitContext(gitContext);
   const candidates = [
-    cleanCommitSummary(lastUser),
-    cleanCommitSummary(activeChat?.title)
+    chatSummary && changeSummary && !chatSummary.toLowerCase().includes(changeSummary.toLowerCase())
+      ? `${chatSummary}; ${changeSummary}`
+      : chatSummary,
+    changeSummary
   ].filter(Boolean);
   return truncateCommitPart(candidates[0] ?? "", 92);
 }
@@ -1954,15 +1985,17 @@ function formatCommitTemplate(template: string, values: Record<string, string>):
   return result.replace(/\s+/g, " ").replace(/\s+([:;,.])/g, "$1").trim();
 }
 
-function autoCommitMessage(repo: Repo | undefined, activeChat: Chat | undefined, messages: ChatMessage[], template: string): string {
+function autoCommitMessage(repo: Repo | undefined, activeChat: Chat | undefined, messages: ChatMessage[], template: string, gitContext = ""): string {
   const project = repo?.name?.trim() || "Project";
-  const summary = commitSummaryFromChat(activeChat, messages);
+  const summary = commitSummaryFromChat(activeChat, messages, gitContext);
+  const changes = commitSummaryFromGitContext(gitContext);
   const fallback = `Update ${project}`;
   const message = formatCommitTemplate(template, {
     project,
     summary: summary || "update project",
     branch: repo?.currentBranch || "main",
-    chat: cleanCommitSummary(activeChat?.title) || summary || project
+    chat: cleanCommitSummary(activeChat?.title) || summary || project,
+    changes: changes || summary || "update project"
   });
   const cleaned = message && message !== `${project}: update project` ? message : fallback;
   return truncateCommitPart(cleaned, 120) || fallback;
@@ -3394,6 +3427,8 @@ function App() {
   const [gitMessage, setGitMessage] = useState("Update project");
   const [gitMessageMode, setGitMessageMode] = useState<CommitMessageMode>("auto");
   const [gitMessageTemplate, setGitMessageTemplate] = useState("{project}: {summary}");
+  const [gitStatusContext, setGitStatusContext] = useState("");
+  const [gitMessageRefreshBusy, setGitMessageRefreshBusy] = useState(false);
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [gitNotice, setGitNotice] = useState("");
   const [gitBusy, setGitBusy] = useState(false);
@@ -3526,8 +3561,8 @@ function App() {
   ), [repos, selectedRepo, syncRepoKey]);
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId), [activeChatId, chats]);
   const generatedGitMessage = useMemo(
-    () => autoCommitMessage(selectedRepo, activeChat, messages, gitMessageTemplate),
-    [activeChat, gitMessageTemplate, messages, selectedRepo]
+    () => autoCommitMessage(selectedRepo, activeChat, messages, gitMessageTemplate, gitStatusContext),
+    [activeChat, gitMessageTemplate, gitStatusContext, messages, selectedRepo]
   );
   const effectiveGitMessage = gitMessageMode === "auto" ? generatedGitMessage : gitMessage.trim();
   const visibleProjectFiles = useMemo(() => {
@@ -4467,7 +4502,7 @@ function App() {
     preferredJobId?: string,
     showLoader = false,
     scrollAfterLoad: ScrollBehavior | false = showLoader ? "auto" : false
-  ) {
+  ): Promise<ChatPayload | undefined> {
     const currentLoad = loadChatInFlightRef.current;
     if (currentLoad?.chatId === chatId && (!showLoader || currentLoad.foreground)) return;
     const controller = new AbortController();
@@ -4580,6 +4615,7 @@ function App() {
       if (scrollAfterLoad) {
         setLoadedChatAutoScroll({ chatId, behavior: scrollAfterLoad, tick: Date.now() });
       }
+      return data;
     } catch (error) {
       if (loadChatAbortRef.current === controller) {
         loadChatAbortRef.current = null;
@@ -4723,6 +4759,7 @@ function App() {
     setRepoKey(nextRepoKey);
     setSandbox(repo.defaultSandbox);
     setGitMessage(`Update ${repo.name}`);
+    setGitStatusContext("");
     setGitRemoteUrl(repo.githubUrl ?? "");
     setGitNotice("");
     setBuildNotice("");
@@ -4753,6 +4790,7 @@ function App() {
     setChatMenuId("");
     setProjectActionsOpen(false);
     setGitNotice("");
+    setGitStatusContext("");
     setBuildNotice("");
     setDeployNotice("");
     setNginxNotice("");
@@ -6228,6 +6266,7 @@ function App() {
         return;
       }
       setGitRemoteUrl("");
+      setGitStatusContext("");
       if (!targetChatId) setGitNotice(data.output || data.status || "Git sync completed.");
       await refresh();
     } catch (error) {
@@ -6236,6 +6275,40 @@ function App() {
     } finally {
       projectActionBusyRef.current.gitSync = false;
       setGitBusy(false);
+    }
+  }
+
+  async function refreshGitMessageContext() {
+    if (!selectedRepo || gitMessageRefreshBusy) return;
+    setGitMessageRefreshBusy(true);
+    try {
+      const targetChatId = activeChatId || activeChat?.id || "";
+      if (targetChatId) chatCacheRef.current.delete(targetChatId);
+      const statusRequest = csrf
+        ? api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-status`, {
+          method: "POST",
+          headers: { "x-csrf-token": csrf },
+          body: "{}"
+        }).catch(() => null)
+        : Promise.resolve(null);
+      const [chatPayload, nextRepos, statusResponse] = await Promise.all([
+        targetChatId ? loadChat(targetChatId, undefined, false, false).catch(() => undefined) : Promise.resolve(undefined),
+        refresh({ keepRepoKey: repoKeyFor(selectedRepo) }).catch(() => undefined),
+        statusRequest
+      ]);
+      let nextGitStatusContext = gitStatusContext;
+      if (statusResponse?.ok) {
+        const data = await statusResponse.json().catch(() => ({}));
+        nextGitStatusContext = typeof data.output === "string" ? data.output : "";
+        setGitStatusContext(nextGitStatusContext);
+      }
+      const nextRepo = nextRepos?.find((repo) => repoKeyFor(repo) === repoKeyFor(selectedRepo)) ?? selectedRepo;
+      const nextChat = chatPayload?.chat ?? activeChat;
+      const nextMessages = chatPayload?.messages ?? messages;
+      const nextMessage = autoCommitMessage(nextRepo, nextChat, nextMessages, gitMessageTemplate, nextGitStatusContext);
+      if (gitMessageMode === "custom") setGitMessage(nextMessage);
+    } finally {
+      setGitMessageRefreshBusy(false);
     }
   }
 
@@ -9211,9 +9284,21 @@ function App() {
                         Custom
                       </button>
                     </div>
-                    <div className="git-message-preview" title={effectiveGitMessage}>
-                      <span>Commit</span>
-                      <strong>{effectiveGitMessage || "Message is empty"}</strong>
+                    <div className="git-message-preview-row">
+                      <div className="git-message-preview" title={effectiveGitMessage}>
+                        <span>Commit</span>
+                        <strong>{effectiveGitMessage || "Message is empty"}</strong>
+                      </div>
+                      <button
+                        aria-label="Refresh commit message"
+                        className="git-message-refresh"
+                        disabled={gitMessageRefreshBusy || !selectedRepo}
+                        title="Обновить по свежему чату и git changes"
+                        type="button"
+                        onClick={() => void refreshGitMessageContext()}
+                      >
+                        <RefreshCw className={gitMessageRefreshBusy ? "spin" : ""} size={14} />
+                      </button>
                     </div>
                     {gitMessageMode === "auto" ? (
                       <>
@@ -9229,7 +9314,7 @@ function App() {
                             }}
                           />
                         </label>
-                        <div className="menu-summary">Variables: {"{project}"}, {"{summary}"}, {"{branch}"}, {"{chat}"}</div>
+                        <div className="menu-summary">Variables: {"{project}"}, {"{summary}"}, {"{branch}"}, {"{chat}"}, {"{changes}"}</div>
                       </>
                     ) : (
                       <label>
