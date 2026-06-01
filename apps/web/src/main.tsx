@@ -9181,7 +9181,7 @@ function App() {
                             <strong>{option.label}</strong>
                             <small>{optionSummary}</small>
                           </span>
-                          <ArrowRight className="runner-config-chevron" size={14} />
+                          {!optionAgentSelected && <ArrowRight className="runner-config-chevron" size={14} />}
                           {optionAgentSelected && <Check size={15} />}
                         </button>
                         {optionOpen && renderRunnerSubmenu(option.value)}
