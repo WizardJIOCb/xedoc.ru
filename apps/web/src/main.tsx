@@ -7142,7 +7142,7 @@ function App() {
         size: typeof data.size === "number" ? data.size : undefined,
         mtimeMs: typeof data.mtimeMs === "number" ? data.mtimeMs : undefined,
         loading: false,
-        notice: data.size !== undefined ? `${formatBytes(data.size)} loaded` : "Файл открыт.",
+        notice: "",
         error: ""
       };
       setFileEditor((current) => current && editorFileKey(current) === editorFileKey(loadingTab) ? loadedTab : current);
@@ -7224,8 +7224,18 @@ function App() {
       const nextTabs = current.filter((item) => editorFileKey(item) !== key);
       if (fileEditor && editorFileKey(fileEditor) === key) {
         const nextActive = nextTabs.at(-1) ?? null;
-        setFileEditor(nextActive);
-        if (nextActive) expandProjectFoldersForFile(nextActive.path);
+        if (nextActive) {
+          setFileEditor(nextActive);
+          expandProjectFoldersForFile(nextActive.path);
+        } else {
+          setFileEditor({ ...tab, content: tab.originalContent, notice: "", error: "" });
+          setIdeEditorPaneOpen(false);
+          setIdeChatPanelOpen(true);
+          setIdeFindOpen(false);
+          setEditorFindQuery("");
+          setEditorFindIndex(0);
+          setFileContextMenu(null);
+        }
       }
       return nextTabs;
     });
@@ -10400,7 +10410,7 @@ function App() {
             })}
             {renderIdeMenuItem({
               icon: <MessageSquare size={14} />,
-              label: "Codex Chat",
+              label: "Chat",
               checked: ideChatPanelOpen,
               onClick: toggleIdeChatPanel
             })}
@@ -10608,7 +10618,7 @@ function App() {
       { group: "Edit", label: "Format document", shortcut: "Shift+Alt+F", run: () => triggerEditorCommand("format") },
       { group: "View", label: ideExplorerOpen ? "Hide Explorer" : "Show Explorer", run: () => setIdeExplorerOpen((value) => !value) },
       { group: "View", label: ideEditorPaneOpen ? "Hide Code Editor" : "Show Code Editor", run: toggleIdeEditorPane },
-      { group: "View", label: ideChatPanelOpen ? "Hide Codex Chat" : "Show Codex Chat", run: toggleIdeChatPanel },
+      { group: "View", label: ideChatPanelOpen ? "Hide Chat" : "Show Chat", run: toggleIdeChatPanel },
       { group: "View", label: "Show Output", disabled: !(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice), run: () => setIdeOutputOpen(true) },
       { group: "View", label: fileEditorFullscreen ? "Exit Full Screen" : "Full Screen", shortcut: "F11", run: () => setFileEditorFullscreen((value) => !value) },
       { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo, run: buildProject },
