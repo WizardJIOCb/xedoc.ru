@@ -4350,6 +4350,22 @@ button.message-attachment.image:hover {
   grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
 }
 
+.file-editor-workspace.without-editor {
+  grid-template-columns: minmax(210px, 280px);
+}
+
+.file-editor-workspace.without-editor.with-chat {
+  grid-template-columns: minmax(210px, 270px) minmax(0, 1fr);
+}
+
+.file-editor-workspace.without-explorer.without-editor {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.file-editor-workspace.without-explorer.without-editor.with-chat {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .file-explorer,
 .file-editor-main,
 .ide-chat-panel {
@@ -4801,11 +4817,41 @@ button.message-attachment.image:hover {
 }
 
 .ide-chat-panel {
+  --ide-chat-font-size: 12px;
+  --ide-chat-heading-size: 13px;
+  --ide-chat-code-size: 11px;
+  --ide-chat-line-height: 1.45;
+  --ide-chat-feed-gap: 7px;
+  --ide-chat-message-gap: 4px;
+  --ide-chat-message-padding: 8px;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--panel-2);
   overflow: hidden;
+}
+
+.ide-chat-panel.chat-size-small {
+  --ide-chat-font-size: 11px;
+  --ide-chat-heading-size: 12px;
+  --ide-chat-code-size: 10px;
+  --ide-chat-line-height: 1.38;
+  --ide-chat-feed-gap: 6px;
+  --ide-chat-message-padding: 7px;
+}
+
+.ide-chat-panel.chat-size-large {
+  --ide-chat-font-size: 14px;
+  --ide-chat-heading-size: 15px;
+  --ide-chat-code-size: 12px;
+  --ide-chat-line-height: 1.52;
+  --ide-chat-feed-gap: 9px;
+  --ide-chat-message-gap: 6px;
+  --ide-chat-message-padding: 10px;
+}
+
+.ide-chat-panel.wide {
+  min-width: 0;
 }
 
 .ide-chat-panel header {
@@ -4841,17 +4887,46 @@ button.message-attachment.image:hover {
   overflow: auto;
   display: grid;
   align-content: start;
-  gap: 7px;
+  gap: var(--ide-chat-feed-gap);
   padding-right: 2px;
+}
+
+.ide-chat-panel.wide .ide-chat-feed {
+  padding-right: 4px;
 }
 
 .ide-chat-message {
   display: grid;
-  gap: 4px;
-  padding: 8px;
+  gap: var(--ide-chat-message-gap);
+  padding: var(--ide-chat-message-padding);
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--panel);
+}
+
+.ide-chat-panel.wide .ide-chat-message {
+  max-width: min(980px, 100%);
+}
+
+.ide-chat-panel.chat-style-plain .ide-chat-message {
+  padding-inline: 2px;
+  border-color: transparent;
+  border-bottom-color: var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.ide-chat-panel.chat-style-plain .ide-chat-message.user {
+  background: transparent;
+}
+
+.ide-chat-panel.chat-style-reader .ide-chat-message {
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--line));
+  background: color-mix(in srgb, var(--field) 76%, var(--panel));
+}
+
+.ide-chat-panel.chat-style-reader .ide-chat-body {
+  max-width: 72ch;
 }
 
 .ide-chat-message.user {
@@ -4886,16 +4961,16 @@ button.message-attachment.image:hover {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--ide-chat-font-size);
+  line-height: var(--ide-chat-line-height);
 }
 
 .ide-chat-body {
   min-width: 0;
   max-width: 100%;
   color: var(--text);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: var(--ide-chat-font-size);
+  line-height: var(--ide-chat-line-height);
 }
 
 .ide-chat-body.rich-text {
@@ -4903,7 +4978,7 @@ button.message-attachment.image:hover {
 }
 
 .ide-chat-body h3 {
-  font-size: 13px;
+  font-size: var(--ide-chat-heading-size);
   line-height: 1.28;
 }
 
@@ -4925,7 +5000,7 @@ button.message-attachment.image:hover {
   max-width: 100%;
   max-height: 260px;
   overflow: auto;
-  font-size: 11px;
+  font-size: var(--ide-chat-code-size);
 }
 
 .ide-chat-message .system-message-body.ide-chat-body {
@@ -7322,6 +7397,26 @@ button:disabled {
   .file-editor-workspace.without-explorer.with-chat {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) minmax(180px, 28dvh);
+  }
+
+  .file-editor-workspace.without-editor {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(180px, 1fr);
+  }
+
+  .file-editor-workspace.without-editor.with-chat {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(120px, 28dvh) minmax(0, 1fr);
+  }
+
+  .file-editor-workspace.without-explorer.without-editor {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .file-editor-workspace.without-explorer.without-editor.with-chat {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .file-explorer {

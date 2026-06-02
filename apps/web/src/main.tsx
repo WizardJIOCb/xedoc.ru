@@ -102,6 +102,8 @@ type ProjectVisibility = "private" | "public";
 type ProjectGitMode = "blank" | "github-create" | "clone";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
 type EditorTheme = "xedoc-light" | "xedoc-dark" | "xedoc-aurora" | "xedoc-midnight" | "vs-light" | "vs-dark" | "hc-black";
+type IdeChatTextSize = "small" | "normal" | "large";
+type IdeChatTextStyle = "cards" | "plain" | "reader";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
 type ProjectDataLocation = "local" | "server";
 type ProjectDataConfig = {
@@ -123,6 +125,16 @@ const EDITOR_THEME_OPTIONS: Array<{ value: EditorTheme; label: string; note: str
   { value: "vs-light", label: "VS Code Light", note: "Classic Monaco light", swatches: ["#ffffff", "#000000", "#0451a5", "#a31515"] },
   { value: "vs-dark", label: "VS Code Dark", note: "Classic Monaco dark", swatches: ["#1e1e1e", "#d4d4d4", "#569cd6", "#ce9178"] },
   { value: "hc-black", label: "High Contrast", note: "Maximum contrast", swatches: ["#000000", "#ffffff", "#1aebff", "#ffcc00"] }
+];
+const IDE_CHAT_TEXT_SIZE_OPTIONS: Array<{ value: IdeChatTextSize; label: string }> = [
+  { value: "small", label: "Small" },
+  { value: "normal", label: "Default" },
+  { value: "large", label: "Large" }
+];
+const IDE_CHAT_TEXT_STYLE_OPTIONS: Array<{ value: IdeChatTextStyle; label: string }> = [
+  { value: "cards", label: "Cards" },
+  { value: "plain", label: "Plain" },
+  { value: "reader", label: "Reader" }
 ];
 const SANDBOX_LABELS: Record<Sandbox, string> = {
   "read-only": "read-only",
@@ -1039,6 +1051,14 @@ function isUiTheme(value: string | null): value is UiTheme {
 
 function isEditorTheme(value: string | null): value is EditorTheme {
   return EDITOR_THEMES.includes(value as EditorTheme);
+}
+
+function isIdeChatTextSize(value: string | null): value is IdeChatTextSize {
+  return IDE_CHAT_TEXT_SIZE_OPTIONS.some((option) => option.value === value);
+}
+
+function isIdeChatTextStyle(value: string | null): value is IdeChatTextStyle {
+  return IDE_CHAT_TEXT_STYLE_OPTIONS.some((option) => option.value === value);
 }
 
 function editorThemeLabel(value: EditorTheme) {
@@ -3818,12 +3838,37 @@ function App() {
   const [editorFindIndex, setEditorFindIndex] = useState(0);
   const [ideChatPanelOpen, setIdeChatPanelOpen] = useState(true);
   const [ideExplorerOpen, setIdeExplorerOpen] = useState(true);
+  const [ideEditorPaneOpen, setIdeEditorPaneOpen] = useState(() => {
+    try {
+      return localStorage.getItem("cmc.ideEditorPaneOpen") !== "0";
+    } catch {
+      return true;
+    }
+  });
   const [ideFindOpen, setIdeFindOpen] = useState(true);
   const [ideOutputOpen, setIdeOutputOpen] = useState(false);
   const [ideMenuOpen, setIdeMenuOpen] = useState("");
   const [ideCommandPaletteOpen, setIdeCommandPaletteOpen] = useState(false);
   const [ideCommandQuery, setIdeCommandQuery] = useState("");
   const [ideEditorCommand, setIdeEditorCommand] = useState<IdeEditorCommandRequest | null>(null);
+  const [ideChatTextSize, setIdeChatTextSize] = useState<IdeChatTextSize>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.ideChatTextSize");
+      if (isIdeChatTextSize(stored)) return stored;
+    } catch {
+      // Ignore blocked storage.
+    }
+    return "normal";
+  });
+  const [ideChatTextStyle, setIdeChatTextStyle] = useState<IdeChatTextStyle>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.ideChatTextStyle");
+      if (isIdeChatTextStyle(stored)) return stored;
+    } catch {
+      // Ignore blocked storage.
+    }
+    return "cards";
+  });
   const [fileEditorFullscreen, setFileEditorFullscreen] = useState(() => {
     try {
       return localStorage.getItem("cmc.fileEditorFullscreen") === "1";
@@ -5766,6 +5811,30 @@ function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem("cmc.ideEditorPaneOpen", ideEditorPaneOpen ? "1" : "0");
+    } catch {
+      // IDE layout is local preference only.
+    }
+  }, [ideEditorPaneOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.ideChatTextSize", ideChatTextSize);
+    } catch {
+      // IDE chat display is local preference only.
+    }
+  }, [ideChatTextSize]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.ideChatTextStyle", ideChatTextStyle);
+    } catch {
+      // IDE chat display is local preference only.
+    }
+  }, [ideChatTextStyle]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem("cmc.fileEditorFullscreen", fileEditorFullscreen ? "1" : "0");
     } catch {
       // Editor layout is local preference only.
@@ -7015,6 +7084,7 @@ function App() {
 
   async function openProjectFile(path: string, repo = selectedRepo) {
     if (!repo) return;
+    setIdeEditorPaneOpen(true);
     const currentFileRepoKey = `${repo.agentId}:${repo.id}`;
     if (!projectFiles.length || projectFilesRepoKey !== currentFileRepoKey) void loadProjectFileList(repo);
     const filePath = normalizeProjectFilePath(projectFilePathFromReference(path, {
@@ -7249,11 +7319,13 @@ function App() {
   }
 
   function focusEditorFind() {
+    setIdeEditorPaneOpen(true);
     setIdeFindOpen(true);
     window.setTimeout(() => editorFindInputRef.current?.focus(), 30);
   }
 
   function triggerEditorCommand(command: IdeEditorCommand) {
+    setIdeEditorPaneOpen(true);
     setIdeEditorCommand({ id: Date.now(), command });
   }
 
@@ -7261,11 +7333,36 @@ function App() {
     void navigator.clipboard?.writeText(path).catch(() => undefined);
   }
 
+  function toggleIdeEditorPane() {
+    const nextOpen = !ideEditorPaneOpen;
+    setIdeEditorPaneOpen(nextOpen);
+    if (!nextOpen) {
+      setIdeChatPanelOpen(true);
+      setIdeFindOpen(false);
+    }
+  }
+
+  function toggleIdeChatPanel() {
+    const nextOpen = !ideChatPanelOpen;
+    if (!nextOpen && !ideEditorPaneOpen) setIdeEditorPaneOpen(true);
+    setIdeChatPanelOpen(nextOpen);
+  }
+
   function ideWorkspaceClassName() {
     return [
       "file-editor-workspace",
       ideExplorerOpen ? "" : "without-explorer",
+      ideEditorPaneOpen ? "" : "without-editor",
       ideChatPanelOpen ? "with-chat" : ""
+    ].filter(Boolean).join(" ");
+  }
+
+  function ideChatPanelClassName() {
+    return [
+      "ide-chat-panel",
+      `chat-size-${ideChatTextSize}`,
+      `chat-style-${ideChatTextStyle}`,
+      ideEditorPaneOpen ? "" : "wide"
     ].filter(Boolean).join(" ");
   }
 
@@ -10286,9 +10383,16 @@ function App() {
               onClick: () => setIdeExplorerOpen((value) => !value)
             })}
             {renderIdeMenuItem({
+              icon: <FilePenLine size={14} />,
+              label: "Code Editor",
+              checked: ideEditorPaneOpen,
+              onClick: toggleIdeEditorPane
+            })}
+            {renderIdeMenuItem({
               icon: <Search size={14} />,
               label: "Search",
-              checked: ideFindOpen,
+              checked: ideEditorPaneOpen && ideFindOpen,
+              disabled: !ideEditorPaneOpen,
               onClick: () => {
                 setIdeFindOpen((value) => !value);
                 if (!ideFindOpen) window.setTimeout(() => editorFindInputRef.current?.focus(), 30);
@@ -10298,7 +10402,7 @@ function App() {
               icon: <MessageSquare size={14} />,
               label: "Codex Chat",
               checked: ideChatPanelOpen,
-              onClick: () => setIdeChatPanelOpen((value) => !value)
+              onClick: toggleIdeChatPanel
             })}
             {renderIdeMenuItem({
               icon: <Terminal size={14} />,
@@ -10315,6 +10419,43 @@ function App() {
               checked: fileEditorFullscreen,
               onClick: () => setFileEditorFullscreen((value) => !value)
             })}
+            <div className="ide-menu-divider" />
+            <span className="ide-menu-title">Chat Text Size</span>
+            {IDE_CHAT_TEXT_SIZE_OPTIONS.map((option) => (
+              <button
+                className={ideChatTextSize === option.value ? "ide-menu-item checked" : "ide-menu-item"}
+                key={option.value}
+                role="menuitemradio"
+                aria-checked={ideChatTextSize === option.value}
+                type="button"
+                onClick={() => {
+                  setIdeChatTextSize(option.value);
+                  setIdeMenuOpen("");
+                }}
+              >
+                <span className="ide-menu-check">{ideChatTextSize === option.value && <Check size={14} />}</span>
+                <span>{option.label}</span>
+              </button>
+            ))}
+            <div className="ide-menu-divider" />
+            <span className="ide-menu-title">Chat Text Style</span>
+            {IDE_CHAT_TEXT_STYLE_OPTIONS.map((option) => (
+              <button
+                className={ideChatTextStyle === option.value ? "ide-menu-item checked" : "ide-menu-item"}
+                key={option.value}
+                role="menuitemradio"
+                aria-checked={ideChatTextStyle === option.value}
+                type="button"
+                onClick={() => {
+                  setIdeChatTextStyle(option.value);
+                  setIdeMenuOpen("");
+                }}
+              >
+                <span className="ide-menu-check">{ideChatTextStyle === option.value && <Check size={14} />}</span>
+                <span>{option.label}</span>
+              </button>
+            ))}
+            <div className="ide-menu-note">Applies to every message in the IDE chat panel.</div>
             <div className="ide-menu-divider" />
             <span className="ide-menu-title">Syntax Theme</span>
             {EDITOR_THEME_OPTIONS.map((option) => (
@@ -10466,7 +10607,8 @@ function App() {
       { group: "Edit", label: "Find in file", shortcut: "Ctrl+F", run: focusEditorFind },
       { group: "Edit", label: "Format document", shortcut: "Shift+Alt+F", run: () => triggerEditorCommand("format") },
       { group: "View", label: ideExplorerOpen ? "Hide Explorer" : "Show Explorer", run: () => setIdeExplorerOpen((value) => !value) },
-      { group: "View", label: ideChatPanelOpen ? "Hide Codex Chat" : "Show Codex Chat", run: () => setIdeChatPanelOpen((value) => !value) },
+      { group: "View", label: ideEditorPaneOpen ? "Hide Code Editor" : "Show Code Editor", run: toggleIdeEditorPane },
+      { group: "View", label: ideChatPanelOpen ? "Hide Codex Chat" : "Show Codex Chat", run: toggleIdeChatPanel },
       { group: "View", label: "Show Output", disabled: !(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice), run: () => setIdeOutputOpen(true) },
       { group: "View", label: fileEditorFullscreen ? "Exit Full Screen" : "Full Screen", shortcut: "F11", run: () => setFileEditorFullscreen((value) => !value) },
       { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo, run: buildProject },
@@ -11410,7 +11552,7 @@ function App() {
             </header>
             {renderIdeMenubar(fileEditor)}
             {renderIdeCommandPalette(fileEditor)}
-            {renderFileEditorTabs()}
+            {ideEditorPaneOpen && renderFileEditorTabs()}
             {(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice) && (
               <details
                 className="file-editor-output"
@@ -11499,7 +11641,7 @@ function App() {
                   ))}
                 </div>
               </aside>}
-              <section className="file-editor-main">
+              {ideEditorPaneOpen && <section className="file-editor-main">
                 {ideFindOpen && !fileEditor.binary && <div className="file-editor-search">
                   <label>
                     <Search size={15} />
@@ -11552,15 +11694,15 @@ function App() {
                     }}
                   />
                 )}
-              </section>
+              </section>}
               {ideChatPanelOpen && (
-                <aside className="ide-chat-panel" aria-label="IDE chat">
+                <aside className={ideChatPanelClassName()} aria-label="IDE chat">
                   <header>
                     <div>
                       <strong>{activeChat?.title || "Project chat"}</strong>
                       <small>{selectedRepo?.name || fileEditor.repoName}</small>
                     </div>
-                    <button className="icon tiny" type="button" onClick={() => setIdeChatPanelOpen(false)} title="Hide chat">
+                    <button className="icon tiny" type="button" onClick={toggleIdeChatPanel} title="Hide chat">
                       <X size={15} />
                     </button>
                   </header>
