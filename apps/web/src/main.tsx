@@ -2346,6 +2346,8 @@ function lineNumbersForContent(content: string): number[] {
 function editorLanguageFromPath(path: string): string {
   const filename = path.split(/[\\/]/).pop()?.toLowerCase() ?? "";
   if (filename === "dockerfile" || filename.endsWith(".dockerfile")) return "dockerfile";
+  if (filename === "makefile") return "makefile";
+  if (filename === ".gitignore" || filename === ".dockerignore") return "plaintext";
   if (filename === ".env" || filename.startsWith(".env.")) return "ini";
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   if (["ts", "tsx", "mts", "cts"].includes(ext)) return "typescript";
@@ -2353,9 +2355,13 @@ function editorLanguageFromPath(path: string): string {
   if (ext === "json") return "json";
   if (ext === "css") return "css";
   if (["scss", "sass"].includes(ext)) return "scss";
+  if (ext === "less") return "less";
   if (["html", "htm"].includes(ext)) return "html";
+  if (["vue", "svelte", "astro"].includes(ext)) return "html";
   if (ext === "xml") return "xml";
+  if (["svg", "xhtml"].includes(ext)) return "xml";
   if (["md", "markdown"].includes(ext)) return "markdown";
+  if (ext === "mdx") return "mdx";
   if (["yml", "yaml"].includes(ext)) return "yaml";
   if (["sh", "bash", "zsh"].includes(ext)) return "shell";
   if (["bat", "cmd"].includes(ext)) return "bat";
@@ -2364,9 +2370,24 @@ function editorLanguageFromPath(path: string): string {
   if (ext === "py") return "python";
   if (ext === "go") return "go";
   if (ext === "rs") return "rust";
-  if (["java", "kt", "kts"].includes(ext)) return "java";
+  if (ext === "java") return "java";
+  if (["kt", "kts"].includes(ext)) return "kotlin";
   if (["php", "phtml"].includes(ext)) return "php";
-  if (["toml", "ini", "conf"].includes(ext)) return "ini";
+  if (["toml", "ini", "conf", "cfg"].includes(ext)) return "ini";
+  if (["rb", "rake"].includes(ext) || filename === "gemfile") return "ruby";
+  if (["c", "h", "cc", "cpp", "cxx", "hpp", "hxx"].includes(ext)) return "cpp";
+  if (["cs", "csx"].includes(ext)) return "csharp";
+  if (["fs", "fsi", "fsx"].includes(ext)) return "fsharp";
+  if (["vb", "vbs"].includes(ext)) return "vb";
+  if (["swift"].includes(ext)) return "swift";
+  if (["dart"].includes(ext)) return "dart";
+  if (["lua"].includes(ext)) return "lua";
+  if (["pl", "pm"].includes(ext)) return "perl";
+  if (["r"].includes(ext)) return "r";
+  if (["scala", "sc"].includes(ext)) return "scala";
+  if (["clj", "cljs", "cljc"].includes(ext)) return "clojure";
+  if (["ex", "exs"].includes(ext)) return "elixir";
+  if (["graphql", "gql"].includes(ext)) return "graphql";
   return "plaintext";
 }
 
@@ -2501,6 +2522,62 @@ function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, o
   }, [findIndex, findQuery, value]);
 
   return <div className="monaco-editor-host" ref={containerRef} />;
+}
+
+function MonacoReadOnlyCodeViewer({ value, path }: { value: string; path: string }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const modelRef = useRef<monaco.editor.ITextModel | null>(null);
+  const heightPx = Math.max(220, Math.min(780, value.split(/\r\n|\r|\n/).length * 20 + 34));
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const uri = monaco.Uri.parse(`file:///public/${path.replace(/\\/g, "/").replace(/^\/+/, "")}`);
+    const model = monaco.editor.createModel(value, editorLanguageFromPath(path), uri);
+    modelRef.current = model;
+    monaco.editor.setTheme("xedoc-light");
+    const editor = monaco.editor.create(container, {
+      model,
+      theme: "xedoc-light",
+      readOnly: true,
+      domReadOnly: true,
+      automaticLayout: true,
+      minimap: { enabled: true, maxColumn: 90, renderCharacters: false, scale: 0.72 },
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace",
+      fontSize: 13,
+      lineHeight: 20,
+      scrollBeyondLastLine: false,
+      wordWrap: "off",
+      tabSize: 2,
+      renderWhitespace: "selection",
+      roundedSelection: false,
+      bracketPairColorization: { enabled: true },
+      guides: {
+        bracketPairs: true,
+        indentation: true
+      },
+      renderLineHighlight: "all",
+      smoothScrolling: true,
+      contextmenu: true,
+      fixedOverflowWidgets: true
+    });
+    editorRef.current = editor;
+    return () => {
+      editor.dispose();
+      model.dispose();
+      editorRef.current = null;
+      modelRef.current = null;
+    };
+  }, [path]);
+
+  useEffect(() => {
+    const model = modelRef.current;
+    if (!model || model.getValue() === value) return;
+    model.setValue(value);
+  }, [value]);
+
+  return <div className="monaco-editor-host public-file-code-editor" ref={containerRef} style={{ height: `min(72vh, ${heightPx}px)` }} />;
 }
 
 function renderPlainWithFileReferences(text: string, keyPrefix: string, options?: RichTextOptions): React.ReactNode[] {
@@ -2994,7 +3071,7 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
               <small>{file.mimeType || "application/octet-stream"}{file.size !== undefined ? ` · ${formatBytes(file.size)}` : ""}</small>
             </div>
           ) : (
-            <pre className="public-file-code">{file.content}</pre>
+            <MonacoReadOnlyCodeViewer path={file.path} value={file.content} />
           )}
         </section>
       )}
