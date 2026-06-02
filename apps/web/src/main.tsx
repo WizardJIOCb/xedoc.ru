@@ -2442,6 +2442,179 @@ function editorLanguageLabel(path: string) {
   return labels[language] ?? language;
 }
 
+const PROJECT_REFERENCE_EXTENSION_CANDIDATES = [
+  "ts",
+  "tsx",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "json",
+  "css",
+  "scss",
+  "sass",
+  "less",
+  "html",
+  "md",
+  "yml",
+  "yaml",
+  "sql",
+  "svg",
+  "png",
+  "jpg",
+  "jpeg",
+  "webp"
+];
+
+function normalizeRelativeProjectPath(path: string) {
+  const parts: string[] = [];
+  for (const part of path.replace(/\\/g, "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join("/");
+}
+
+function currentProjectFileDirectory(path: string) {
+  const parts = normalizeProjectFilePath(path).split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
+}
+
+function cleanEditorReferenceCandidate(value: string) {
+  let candidate = value.trim().replace(/^['"`(<[{]+|['"`)>}\],.;:]+$/g, "");
+  if (!candidate || candidate.includes("\0")) return "";
+  candidate = stripReferenceLineSuffix(candidate);
+  try {
+    if (/^https?:\/\//i.test(candidate)) candidate = decodeURIComponent(new URL(candidate).pathname);
+  } catch {
+    return "";
+  }
+  try {
+    candidate = decodeURIComponent(candidate);
+  } catch {
+    // Keep the raw candidate if percent-decoding fails.
+  }
+  return candidate.replace(/[?#].*$/g, "").replace(/\\/g, "/").trim();
+}
+
+function projectFileCandidatesFromReference(rawValue: string, currentPath: string) {
+  const cleaned = cleanEditorReferenceCandidate(rawValue);
+  if (!cleaned || cleaned.includes("://") || cleaned === ".git" || cleaned.startsWith(".git/")) return [];
+  const baseDir = currentProjectFileDirectory(currentPath);
+  const primary = cleaned.startsWith(".")
+    ? normalizeRelativeProjectPath(`${baseDir}/${cleaned}`)
+    : normalizeRelativeProjectPath(cleaned.replace(/^\/+/, ""));
+  if (!primary) return [];
+  const candidates = [primary];
+  const leaf = primary.split("/").pop() ?? primary;
+  const hasExtension = /\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16}$/.test(leaf);
+  if (!hasExtension) {
+    for (const ext of PROJECT_REFERENCE_EXTENSION_CANDIDATES) {
+      candidates.push(`${primary}.${ext}`);
+      candidates.push(`${primary}/index.${ext}`);
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+function resolveProjectFileReference(rawValue: string, currentPath: string, entries: ProjectFileEntry[]) {
+  const candidates = projectFileCandidatesFromReference(rawValue, currentPath);
+  if (!candidates.length) return "";
+  const files = entries.filter((entry) => entry.type === "file");
+  const byPath = new Map(files.map((entry) => [normalizeProjectFilePath(entry.path).toLowerCase(), normalizeProjectFilePath(entry.path)]));
+  for (const candidate of candidates) {
+    const match = byPath.get(normalizeProjectFilePath(candidate).toLowerCase());
+    if (match) return match;
+  }
+  if (!files.length) {
+    const fallback = candidates.find(filePathLooksOpenable);
+    return fallback ? normalizeProjectFilePath(fallback) : "";
+  }
+  const leaf = normalizeProjectFilePath(candidates[0] ?? "").split("/").filter(Boolean).pop()?.toLowerCase();
+  if (!leaf) return "";
+  const leafMatches = files
+    .map((entry) => normalizeProjectFilePath(entry.path))
+    .filter((path) => path.split("/").pop()?.toLowerCase() === leaf);
+  return leafMatches.length === 1 ? leafMatches[0] : "";
+}
+
+function editorReferenceAtPosition(model: monaco.editor.ITextModel, position: monaco.Position) {
+  const line = model.getLineContent(position.lineNumber);
+  const offset = Math.max(0, position.column - 1);
+  const pattern = /(["'`])([^"'`\s]+)\1|[^\s"'`()<>[\]{}]+/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(line))) {
+    const start = match.index;
+    const end = match.index + match[0].length;
+    if (offset < start || offset > end) continue;
+    return match[2] ?? match[0];
+  }
+  return "";
+}
+
+function editorSelectedText(editor: monaco.editor.ICodeEditor, model: monaco.editor.ITextModel) {
+  const selections = editor.getSelections() ?? [];
+  return selections
+    .map((selection) => model.getValueInRange(selection).trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function projectFileTargetAtEditorPosition(
+  editor: monaco.editor.ICodeEditor,
+  model: monaco.editor.ITextModel,
+  currentPath: string,
+  entries: ProjectFileEntry[],
+  position = editor.getPosition()
+) {
+  const selected = editorSelectedText(editor, model);
+  const selectedTarget = selected ? resolveProjectFileReference(selected, currentPath, entries) : "";
+  if (selectedTarget) return selectedTarget;
+  if (!position) return "";
+  return resolveProjectFileReference(editorReferenceAtPosition(model, position), currentPath, entries);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function revealSymbolDefinitionInModel(editor: monaco.editor.ICodeEditor, model: monaco.editor.ITextModel, position = editor.getPosition()) {
+  const selected = editorSelectedText(editor, model);
+  const symbol = selected && /^[A-Za-z_$][\w$]*$/.test(selected)
+    ? selected
+    : position
+      ? model.getWordAtPosition(position)?.word ?? ""
+      : "";
+  if (!symbol) return false;
+  const escaped = escapeRegExp(symbol);
+  const patterns = [
+    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`),
+    new RegExp(`\\b(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`),
+    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`),
+    new RegExp(`\\b${escaped}\\s*[:=]\\s*`)
+  ];
+  const currentLine = position?.lineNumber ?? 0;
+  for (let lineNumber = 1; lineNumber <= model.getLineCount(); lineNumber += 1) {
+    const line = model.getLineContent(lineNumber);
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (!match || (lineNumber === currentLine && (match.index ?? 0) + 1 === position?.column)) continue;
+      const column = (match.index ?? 0) + 1;
+      editor.setPosition({ lineNumber, column });
+      editor.revealPositionInCenterIfOutsideViewport({ lineNumber, column }, monaco.editor.ScrollType.Smooth);
+      editor.focus();
+      return true;
+    }
+  }
+  return false;
+}
+
 type MonacoCodeEditorProps = {
   value: string;
   path: string;
@@ -2452,9 +2625,23 @@ type MonacoCodeEditorProps = {
   onChange: (value: string) => void;
   onSave?: () => void;
   onCursorChange?: (cursor: EditorCursorState) => void;
+  projectFiles?: ProjectFileEntry[];
+  onOpenFile?: (path: string) => void | Promise<void>;
 };
 
-function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, onChange, onSave, onCursorChange }: MonacoCodeEditorProps) {
+function MonacoCodeEditor({
+  value,
+  path,
+  theme,
+  findQuery,
+  findIndex,
+  command,
+  onChange,
+  onSave,
+  onCursorChange,
+  projectFiles = [],
+  onOpenFile
+}: MonacoCodeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
@@ -2462,6 +2649,9 @@ function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, o
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const onCursorChangeRef = useRef(onCursorChange);
+  const onOpenFileRef = useRef(onOpenFile);
+  const projectFilesRef = useRef(projectFiles);
+  const pathRef = useRef(path);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -2474,6 +2664,18 @@ function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, o
   useEffect(() => {
     onCursorChangeRef.current = onCursorChange;
   }, [onCursorChange]);
+
+  useEffect(() => {
+    onOpenFileRef.current = onOpenFile;
+  }, [onOpenFile]);
+
+  useEffect(() => {
+    projectFilesRef.current = projectFiles;
+  }, [projectFiles]);
+
+  useEffect(() => {
+    pathRef.current = path;
+  }, [path]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -2513,6 +2715,43 @@ function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, o
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       onSaveRef.current?.();
     });
+    const openFileAtPosition = (position: monaco.Position | null) => {
+      const target = projectFileTargetAtEditorPosition(editor, model, pathRef.current, projectFilesRef.current, position);
+      if (!target) return false;
+      void onOpenFileRef.current?.(target);
+      return true;
+    };
+    const goToDefinitionAtPosition = (position: monaco.Position | null) => {
+      if (openFileAtPosition(position)) return true;
+      return revealSymbolDefinitionInModel(editor, model, position ?? editor.getPosition());
+    };
+    const mouseSubscription = editor.onMouseDown((event) => {
+      if (!event.event.leftButton || (!event.event.ctrlKey && !event.event.metaKey)) return;
+      if (event.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT) return;
+      const position = event.target.position;
+      if (!position) return;
+      if (!goToDefinitionAtPosition(position)) return;
+      event.event.preventDefault();
+      event.event.stopPropagation();
+    });
+    const goToFileAction = editor.addAction({
+      id: "xedoc.goToFile",
+      label: "Go to File",
+      contextMenuGroupId: "navigation",
+      contextMenuOrder: 1.1,
+      run: () => {
+        openFileAtPosition(editor.getPosition());
+      }
+    });
+    const goToDefinitionAction = editor.addAction({
+      id: "xedoc.goToDefinition",
+      label: "Go to Definition",
+      contextMenuGroupId: "navigation",
+      contextMenuOrder: 1.2,
+      run: () => {
+        goToDefinitionAtPosition(editor.getPosition());
+      }
+    });
     const reportCursor = () => {
       const position = editor.getPosition();
       if (!position) return;
@@ -2535,6 +2774,9 @@ function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, o
       subscription.dispose();
       cursorSubscription.dispose();
       selectionSubscription.dispose();
+      mouseSubscription.dispose();
+      goToFileAction.dispose();
+      goToDefinitionAction.dispose();
       decorationRef.current?.clear();
       decorationRef.current = null;
       editor.dispose();
@@ -12130,8 +12372,10 @@ function App() {
                     command={ideEditorCommand}
                     key={`${fileEditor.agentId}:${fileEditor.repoId}:${fileEditor.path}`}
                     path={fileEditor.path}
+                    projectFiles={projectFiles}
                     theme={editorTheme}
                     value={fileEditor.content}
+                    onOpenFile={openProjectFile}
                     onSave={saveProjectFile}
                     onCursorChange={setEditorCursor}
                     onChange={(value) => {
