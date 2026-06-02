@@ -980,12 +980,13 @@ function AnimatedStreamingRichText({
 }
 
 function api(path: string, options: RequestInit = {}) {
+  const headers = new Headers(options.headers ?? {});
+  if (options.body !== undefined && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   return fetch(path, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers ?? {})
-    }
+    headers
   }).catch((error) => {
     if (isAbortError(error)) throw error;
     return new Response(JSON.stringify({ error: "network_error" }), {
@@ -2377,18 +2378,24 @@ type MonacoCodeEditorProps = {
   findIndex: number;
   command?: IdeEditorCommandRequest | null;
   onChange: (value: string) => void;
+  onSave?: () => void;
 };
 
-function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, onChange }: MonacoCodeEditorProps) {
+function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, onChange, onSave }: MonacoCodeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
   const decorationRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const onChangeRef = useRef(onChange);
+  const onSaveRef = useRef(onSave);
 
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -2425,6 +2432,9 @@ function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, o
     });
     editorRef.current = editor;
     decorationRef.current = editor.createDecorationsCollection();
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      onSaveRef.current?.();
+    });
     const subscription = editor.onDidChangeModelContent(() => {
       onChangeRef.current(model.getValue());
     });
@@ -6008,6 +6018,12 @@ function App() {
   useEffect(() => {
     if (!fileEditor) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        event.stopPropagation();
+        void saveProjectFile();
+        return;
+      }
       if (event.key === "F11") {
         event.preventDefault();
         setFileEditorFullscreen((value) => !value);
@@ -6020,7 +6036,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [fileContextMenu, fileEditor, fileEditorFullscreen, ideCommandPaletteOpen]);
+  }, [csrf, fileContextMenu, fileEditor, fileEditorFullscreen, ideCommandPaletteOpen]);
 
   useEffect(() => {
     if (fileLinkOpenedRef.current || !repos.length) return;
@@ -7333,13 +7349,14 @@ function App() {
   async function saveProjectFile() {
     if (!fileEditor || fileEditor.loading || fileEditor.saving || !csrf) return;
     if (fileEditor.binary) return;
+    if (fileEditor.content === fileEditor.originalContent) return;
     const { agentId, repoId, path, content } = fileEditor;
     setFileEditor((current) => current ? { ...current, saving: true, notice: "", error: "" } : current);
     setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: true, notice: "", error: "" } : tab));
     try {
       const response = await api(`/api/projects/${encodeURIComponent(agentId)}/${encodeURIComponent(repoId)}/files/write`, {
         method: "PUT",
-        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        headers: { "x-csrf-token": csrf },
         body: JSON.stringify({ path, content })
       });
       const data = await response.json().catch(() => ({}));
@@ -7491,7 +7508,7 @@ function App() {
     try {
       const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/write`, {
         method: "PUT",
-        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        headers: { "x-csrf-token": csrf },
         body: JSON.stringify({ path: entry.path, content: text })
       });
       const data = await response.json().catch(() => ({}));
@@ -11921,6 +11938,7 @@ function App() {
                     path={fileEditor.path}
                     theme={editorTheme}
                     value={fileEditor.content}
+                    onSave={saveProjectFile}
                     onChange={(value) => {
                       setFileEditor((current) => current ? { ...current, content: value, notice: "" } : current);
                       setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, content: value, notice: "" } : tab));
