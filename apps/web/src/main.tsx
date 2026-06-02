@@ -1252,6 +1252,14 @@ function fileFolderAncestors(path: string) {
   return ancestors;
 }
 
+function projectPathBreadcrumbs(path: string) {
+  const parts = normalizeProjectFilePath(path).split("/").filter(Boolean);
+  return parts.map((name, index) => ({
+    name,
+    path: parts.slice(0, index + 1).join("/")
+  }));
+}
+
 function parentFoldersExpanded(path: string, expandedFolders: Record<string, boolean>) {
   return fileFolderAncestors(path).every((folder) => expandedFolders[folder]);
 }
@@ -8044,9 +8052,31 @@ function App() {
     setIdeChatNotice(`Ссылка на файл скопирована: ${url}`);
   }
 
+  function downloadProjectEntry(entry: ProjectFileEntry) {
+    if (!selectedRepo) return;
+    const url = `/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/download?path=${encodeURIComponent(entry.path)}`;
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "";
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setIdeChatNotice(entry.type === "directory" ? `Скачиваю ${entry.path}.tar...` : `Скачиваю ${entry.path}...`);
+  }
+
   function openProjectFileInNewWindow(entry: ProjectFileEntry) {
     if (!selectedRepo) return;
     window.open(fileShareUrl(selectedRepo, entry.path), "_blank", "noopener,noreferrer");
+  }
+
+  function openProjectEntryContextMenu(event: React.MouseEvent, entry: ProjectFileEntry) {
+    event.preventDefault();
+    setFileContextMenu({
+      entry,
+      x: Math.min(event.clientX, window.innerWidth - 240),
+      y: Math.min(event.clientY, window.innerHeight - 300)
+    });
   }
 
   function runIdeMenuAction(action?: () => void | Promise<void>) {
@@ -11605,13 +11635,24 @@ function App() {
     }
     const foldersCount = selectedProjectFolderItems.filter((entry) => entry.type === "directory").length;
     const filesCount = selectedProjectFolderItems.length - foldersCount;
+    const breadcrumbs = projectPathBreadcrumbs(folderPath);
     return (
       <div className="folder-view">
         <header className="folder-view-head">
-          <div>
-            <strong>{folder.name}</strong>
-            <small title={folder.path}>{folder.path}</small>
-          </div>
+          <nav className="folder-breadcrumbs" aria-label="Folder path" title={folder.path}>
+            {breadcrumbs.map((crumb, index) => (
+              <React.Fragment key={crumb.path}>
+                {index > 0 && <span className="folder-breadcrumb-separator">/</span>}
+                <button
+                  className={index === breadcrumbs.length - 1 ? "current" : ""}
+                  type="button"
+                  onClick={() => selectProjectFolder(crumb.path)}
+                >
+                  {crumb.name}
+                </button>
+              </React.Fragment>
+            ))}
+          </nav>
           <div className="folder-view-actions" role="group" aria-label="Folder view mode">
             <span>{foldersCount} dirs · {filesCount} files</span>
             <button
@@ -11652,14 +11693,7 @@ function App() {
                   key={entry.path}
                   title={entry.path}
                   type="button"
-                  onContextMenu={directory ? undefined : (event) => {
-                    event.preventDefault();
-                    setFileContextMenu({
-                      entry,
-                      x: Math.min(event.clientX, window.innerWidth - 240),
-                      y: Math.min(event.clientY, window.innerHeight - 260)
-                    });
-                  }}
+                  onContextMenu={(event) => openProjectEntryContextMenu(event, entry)}
                   onClick={() => {
                     if (directory) selectProjectFolder(entry.path);
                     else void openProjectFile(entry.path);
@@ -11756,6 +11790,7 @@ function App() {
   function renderFileContextMenu() {
     if (!fileContextMenu || !selectedRepo) return null;
     const { entry, x, y } = fileContextMenu;
+    const directory = entry.type === "directory";
     const image = Boolean(imageMimeTypeFromPath(entry.path));
     return (
       <div
@@ -11764,26 +11799,30 @@ function App() {
         role="menu"
         onPointerDown={(event) => event.stopPropagation()}
       >
-        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void openProjectFile(entry.path); }}>
-          <FilePenLine size={14} /> Open
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); directory ? selectProjectFolder(entry.path) : void openProjectFile(entry.path); }}>
+          {directory ? <FolderOpen size={14} /> : <FilePenLine size={14} />} Open
         </button>
-        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void openProjectFile(entry.path); }}>
+        <button type="button" role="menuitem" disabled={directory} onClick={() => { setFileContextMenu(null); void openProjectFile(entry.path); }}>
           <PanelLeftOpen size={14} /> Open in tab
         </button>
-        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); openProjectFileInNewWindow(entry); }}>
+        <button type="button" role="menuitem" disabled={directory} onClick={() => { setFileContextMenu(null); openProjectFileInNewWindow(entry); }}>
           <ExternalLink size={14} /> Open in new window
+        </button>
+        <div className="ide-menu-divider" />
+        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); downloadProjectEntry(entry); }}>
+          <Download size={14} /> Download
         </button>
         <div className="ide-menu-divider" />
         <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void navigator.clipboard?.writeText(entry.path); }}>
           <FilePenLine size={14} /> Copy path
         </button>
-        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void copyProjectFileContent(entry); }}>
+        <button type="button" role="menuitem" disabled={directory} onClick={() => { setFileContextMenu(null); void copyProjectFileContent(entry); }}>
           <FilePenLine size={14} /> {image ? "Copy share link" : "Copy content"}
         </button>
-        <button type="button" role="menuitem" disabled={image} onClick={() => { setFileContextMenu(null); void pasteClipboardIntoFile(entry); }}>
+        <button type="button" role="menuitem" disabled={directory || image} onClick={() => { setFileContextMenu(null); void pasteClipboardIntoFile(entry); }}>
           <UploadCloud size={14} /> Paste into file
         </button>
-        <button type="button" role="menuitem" onClick={() => { setFileContextMenu(null); void shareProjectFile(entry); }}>
+        <button type="button" role="menuitem" disabled={directory} onClick={() => { setFileContextMenu(null); void shareProjectFile(entry); }}>
           <Link2 size={14} /> Share file link
         </button>
         <div className="ide-menu-divider" />
@@ -12596,14 +12635,7 @@ function App() {
                       style={{ paddingLeft: `${8 + entry.depth * 18}px` }}
                       title={entry.path}
                       type="button"
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        setFileContextMenu({
-                          entry,
-                          x: Math.min(event.clientX, window.innerWidth - 240),
-                          y: Math.min(event.clientY, window.innerHeight - 260)
-                        });
-                      }}
+                      onContextMenu={(event) => openProjectEntryContextMenu(event, entry)}
                       onClick={() => openProjectFile(entry.path)}
                     >
                       <span className="file-tree-caret-spacer" aria-hidden="true" />
@@ -12623,6 +12655,7 @@ function App() {
                       role="treeitem"
                       style={{ paddingLeft: `${8 + entry.depth * 18}px` }}
                       title={entry.path}
+                      onContextMenu={(event) => openProjectEntryContextMenu(event, entry)}
                     >
                       <button
                         aria-label={expandedProjectFolders[entry.path] ? `Collapse ${entry.name}` : `Expand ${entry.name}`}

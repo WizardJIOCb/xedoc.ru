@@ -751,7 +751,7 @@ function requestAgentVscode(
 
 function requestAgentFile(
   agentId: string,
-  message: Extract<ServerToAgent, { type: "file.list" | "file.read" | "file.write" }>
+  message: Extract<ServerToAgent, { type: "file.list" | "file.read" | "file.write" | "file.download" }>
 ): Promise<Extract<AgentToServer, { type: "file.result" }>> {
   const agent = agents.get(agentId);
   if (!agent) return Promise.reject(new Error("agent_offline"));
@@ -820,6 +820,17 @@ function repoInfosForAgent(agentId: string, user?: AuthUser): RepoInfo[] {
     : db.prepare("SELECT * FROM repos WHERE agent_id = ? ORDER BY name")
       .all(agentId) as RepoRow[];
   return rows.map(mapRepo);
+}
+
+function safeDownloadName(path: string, mimeType: string | undefined): string {
+  const leaf = path.replace(/\\/g, "/").split("/").filter(Boolean).pop() || "download";
+  const named = mimeType === "application/x-tar" && !leaf.toLowerCase().endsWith(".tar") ? `${leaf}.tar` : leaf;
+  return named.replace(/[\r\n]/g, " ").slice(0, 180) || "download";
+}
+
+function attachmentDisposition(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
 function fullProjectPatchFromRepo(row: RepoRow): Extract<ServerToAgent, { type: "project.update" }>["patch"] {
@@ -4138,6 +4149,34 @@ async function createApp(): Promise<FastifyInstance> {
         size: result.size,
         mtimeMs: result.mtimeMs
       };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
+  app.get("/api/projects/:agentId/:repoId/files/download", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth) return;
+    const params = request.params as { agentId: string; repoId: string };
+    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const parsed = ProjectFileReadQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_file", details: parsed.error.flatten() });
+    try {
+      const result = await requestAgentFile(params.agentId, {
+        type: "file.download",
+        requestId: id("req"),
+        repoId: params.repoId,
+        path: parsed.data.path
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error ?? "file_download_failed" });
+      if (!result.dataBase64) return reply.code(400).send({ error: "file_download_failed" });
+      const bytes = Buffer.from(result.dataBase64, "base64");
+      const mimeType = result.mimeType || "application/octet-stream";
+      const filename = safeDownloadName(result.path ?? parsed.data.path, mimeType);
+      reply.header("Content-Type", mimeType);
+      reply.header("Content-Length", String(bytes.length));
+      reply.header("Content-Disposition", attachmentDisposition(filename));
+      return reply.send(bytes);
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }

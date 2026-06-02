@@ -453,6 +453,13 @@ export const ServerFileWriteSchema = z.object({
   content: z.string().max(2 * 1024 * 1024)
 });
 
+export const ServerFileDownloadSchema = z.object({
+  type: z.literal("file.download"),
+  requestId: z.string().min(1),
+  repoId: z.string().min(1),
+  path: ProjectFilePathSchema
+});
+
 export const ServerChatSyncRequestSchema = z.object({
   type: z.literal("chat.sync.request"),
   requestId: z.string().min(1)
@@ -473,6 +480,7 @@ export const ServerToAgentSchema = z.discriminatedUnion("type", [
   ServerFileListSchema,
   ServerFileReadSchema,
   ServerFileWriteSchema,
+  ServerFileDownloadSchema,
   ServerChatSyncRequestSchema,
   z.object({ type: z.literal("repo.scan") })
 ]);

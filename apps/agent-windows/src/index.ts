@@ -1,5 +1,5 @@
 import os from "node:os";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import WebSocket from "ws";
 import { ServerToAgentSchema, type AgentToServer, type CodexUsage, type LocalCodexActivity, type ServerToAgent } from "@cmc/protocol";
@@ -19,6 +19,7 @@ const LOCAL_CHAT_SYNC_ACTIVITY_MIN_INTERVAL_MS = 30000;
 const LOCAL_CHAT_SYNC_BACKPRESSURE_BYTES = 16 * 1024 * 1024;
 const MAX_EDITOR_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_PREVIEW_BYTES = 8 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES = 6 * 1024 * 1024;
 const MAX_FILE_TREE_ENTRIES = 900;
 const MAX_FILE_TREE_DEPTH = 8;
 const LOCAL_DEPLOY_ROOT = "/var/www";
@@ -269,6 +270,111 @@ function writeProjectFile(repoId: string, rawPath: string, content: string) {
     path: target.filePath,
     size: stat.size,
     mtimeMs: stat.mtimeMs
+  };
+}
+
+function tarPathParts(path: string): { name: string; prefix: string } {
+  const normalized = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  const bytes = Buffer.byteLength(normalized);
+  if (bytes <= 100) return { name: normalized, prefix: "" };
+  const parts = normalized.split("/");
+  const name = parts.pop() ?? "";
+  const prefix = parts.join("/");
+  if (Buffer.byteLength(name) <= 100 && Buffer.byteLength(prefix) <= 155) return { name, prefix };
+  throw new Error("Archive path is too long.");
+}
+
+function writeTarOctal(header: Buffer, value: number, offset: number, length: number) {
+  const text = Math.max(0, Math.floor(value)).toString(8).slice(-(length - 1)).padStart(length - 1, "0");
+  header.write(text, offset, length - 1, "ascii");
+  header[offset + length - 1] = 0;
+}
+
+function tarHeader(path: string, stat: { size: number; mtimeMs: number }, type: "file" | "directory") {
+  const header = Buffer.alloc(512);
+  const { name, prefix } = tarPathParts(path);
+  header.write(name, 0, 100, "utf8");
+  writeTarOctal(header, type === "directory" ? 0o755 : 0o644, 100, 8);
+  writeTarOctal(header, 0, 108, 8);
+  writeTarOctal(header, 0, 116, 8);
+  writeTarOctal(header, type === "directory" ? 0 : stat.size, 124, 12);
+  writeTarOctal(header, Math.floor(stat.mtimeMs / 1000), 136, 12);
+  header.fill(0x20, 148, 156);
+  header.write(type === "directory" ? "5" : "0", 156, 1, "ascii");
+  header.write("ustar", 257, 6, "ascii");
+  header.write("00", 263, 2, "ascii");
+  header.write("xedoc", 265, 32, "ascii");
+  header.write("xedoc", 297, 32, "ascii");
+  if (prefix) header.write(prefix, 345, 155, "utf8");
+  let checksum = 0;
+  for (const byte of header) checksum += byte;
+  const checksumText = checksum.toString(8).padStart(6, "0");
+  header.write(checksumText, 148, 6, "ascii");
+  header[154] = 0;
+  header[155] = 0x20;
+  return header;
+}
+
+function createProjectDownload(repoId: string, rawPath: string) {
+  const target = repoFileTarget(repoId, rawPath);
+  if (!existsSync(target.targetPath)) throw new Error("File not found.");
+  const rootStat = lstatSync(target.targetPath);
+  if (rootStat.isSymbolicLink()) throw new Error("Symbolic links cannot be downloaded.");
+  if (rootStat.isFile()) {
+    if (rootStat.size > MAX_DOWNLOAD_BYTES) throw new Error("File is too large to download from the web IDE.");
+    const bytes = readFileSync(target.targetPath);
+    return {
+      path: target.filePath,
+      binary: true,
+      mimeType: imageMimeType(target.filePath) || "application/octet-stream",
+      dataBase64: bytes.toString("base64"),
+      size: bytes.length,
+      mtimeMs: rootStat.mtimeMs
+    };
+  }
+  if (!rootStat.isDirectory()) throw new Error("File not found.");
+
+  const chunks: Buffer[] = [];
+  let totalSize = 0;
+  const pushChunk = (chunk: Buffer) => {
+    totalSize += chunk.length;
+    if (totalSize > MAX_DOWNLOAD_BYTES) throw new Error("Folder archive is too large to download from the web IDE.");
+    chunks.push(chunk);
+  };
+  const padFile = (size: number) => {
+    const padding = (512 - (size % 512)) % 512;
+    if (padding) pushChunk(Buffer.alloc(padding));
+  };
+  const archiveRoot = basename(target.filePath) || "project";
+  const addEntry = (fullPath: string, archivePath: string) => {
+    const stat = lstatSync(fullPath);
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      pushChunk(tarHeader(`${archivePath}/`, { size: 0, mtimeMs: stat.mtimeMs }, "directory"));
+      for (const child of readdirSync(fullPath, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+        if (child.isSymbolicLink()) continue;
+        if (child.isDirectory() && FILE_TREE_IGNORED_DIRS.has(child.name)) continue;
+        addEntry(join(fullPath, child.name), `${archivePath}/${child.name}`);
+      }
+      return;
+    }
+    if (!stat.isFile()) return;
+    pushChunk(tarHeader(archivePath, { size: stat.size, mtimeMs: stat.mtimeMs }, "file"));
+    const bytes = readFileSync(fullPath);
+    pushChunk(bytes);
+    padFile(bytes.length);
+  };
+
+  addEntry(target.targetPath, archiveRoot);
+  pushChunk(Buffer.alloc(1024));
+  const archive = Buffer.concat(chunks);
+  return {
+    path: `${target.filePath}.tar`,
+    binary: true,
+    mimeType: "application/x-tar",
+    dataBase64: archive.toString("base64"),
+    size: archive.length,
+    mtimeMs: rootStat.mtimeMs
   };
 }
 
@@ -1627,6 +1733,26 @@ function connect() {
     if (message.type === "file.write") {
       try {
         const file = writeProjectFile(message.repoId, message.path, message.content);
+        send({
+          type: "file.result",
+          requestId: message.requestId,
+          ok: true,
+          ...file
+        });
+      } catch (error) {
+        send({
+          type: "file.result",
+          requestId: message.requestId,
+          ok: false,
+          error: error instanceof Error ? redact(error.message) : redact(String(error))
+        });
+      }
+      return;
+    }
+
+    if (message.type === "file.download") {
+      try {
+        const file = createProjectDownload(message.repoId, message.path);
         send({
           type: "file.result",
           requestId: message.requestId,
