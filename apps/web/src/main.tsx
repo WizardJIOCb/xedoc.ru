@@ -570,6 +570,38 @@ type ImagePreview = {
   size: number;
 };
 
+function isSupersededConnectionError(content: string) {
+  const normalized = content.toLowerCase();
+  return (
+    normalized.includes("codex could not connect to chatgpt codex websocket") ||
+    normalized.includes("chatgpt.com returned http 403") ||
+    normalized.includes("current vpn/proxy route is blocked") ||
+    normalized.includes("http/request failed: error sending request for url (https://chatgpt.com/backend-api/")
+  );
+}
+
+function publicShareMessages(messages: ChatMessage[]) {
+  const hiddenJobIds = new Set<string>();
+
+  messages.forEach((message, index) => {
+    if (message.role !== "assistant" || !isSupersededConnectionError(message.content)) return;
+    const hasLaterAnswer = messages.slice(index + 1).some((candidate) => (
+      candidate.role === "assistant" &&
+      candidate.content.trim() &&
+      !isSupersededConnectionError(candidate.content)
+    ));
+    const jobId = messageJobId(message);
+    if (hasLaterAnswer && jobId) hiddenJobIds.add(jobId);
+  });
+
+  if (!hiddenJobIds.size) return messages;
+  return messages.filter((message) => {
+    const jobId = messageJobId(message);
+    if (!jobId || !hiddenJobIds.has(jobId)) return true;
+    return message.role !== "assistant" && message.role !== "user";
+  });
+}
+
 type ProjectFileEditor = {
   agentId: string;
   repoId: string;
@@ -2632,7 +2664,7 @@ function SharedChatPage({ token }: { token: string }) {
   }, [token]);
 
   const finalAnswer = share?.snapshot.finalAnswer || share?.finalContent || "";
-  const messages = share?.snapshot.messages ?? [];
+  const messages = publicShareMessages(share?.snapshot.messages ?? []);
   const projectLink = share?.project?.url || projectUrl(share?.project?.domain ?? "");
 
   return (
