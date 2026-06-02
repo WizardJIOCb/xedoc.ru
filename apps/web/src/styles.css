@@ -6100,10 +6100,10 @@ h2 > strong {
 .live-activity-card {
   display: grid;
   gap: 0;
-  width: min(760px, calc(100% - 20px));
+  width: 100%;
   max-width: 100%;
   min-width: 0;
-  margin: 0 10px;
+  margin: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
