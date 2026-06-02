@@ -3828,6 +3828,8 @@ function App() {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const [fileEditor, setFileEditor] = useState<ProjectFileEditor | null>(null);
   const [fileEditorTabs, setFileEditorTabs] = useState<ProjectFileEditor[]>([]);
+  const fileEditorTabDragKeyRef = useRef("");
+  const [draggingFileEditorTabKey, setDraggingFileEditorTabKey] = useState("");
   const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
   const [projectFilesRepoKey, setProjectFilesRepoKey] = useState("");
   const [projectFilesLoading, setProjectFilesLoading] = useState(false);
@@ -7238,6 +7240,52 @@ function App() {
         }
       }
       return nextTabs;
+    });
+  }
+
+  function clearFileEditorTabDrag() {
+    fileEditorTabDragKeyRef.current = "";
+    setDraggingFileEditorTabKey("");
+  }
+
+  function startFileEditorTabDrag(event: React.DragEvent<HTMLButtonElement>, tab: ProjectFileEditor) {
+    if (fileEditorTabs.length < 2) {
+      event.preventDefault();
+      return;
+    }
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (target?.closest(".tab-close")) {
+      event.preventDefault();
+      return;
+    }
+    const key = editorFileKey(tab);
+    fileEditorTabDragKeyRef.current = key;
+    setDraggingFileEditorTabKey(key);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", key);
+  }
+
+  function moveFileEditorTabOver(event: React.DragEvent<HTMLButtonElement>, targetTab: ProjectFileEditor) {
+    const dragKey = fileEditorTabDragKeyRef.current;
+    if (!dragKey) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const targetKey = editorFileKey(targetTab);
+    if (dragKey === targetKey) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const insertAfterTarget = event.clientX > rect.left + rect.width / 2;
+    setFileEditorTabs((current) => {
+      const fromIndex = current.findIndex((tab) => editorFileKey(tab) === dragKey);
+      const targetIndex = current.findIndex((tab) => editorFileKey(tab) === targetKey);
+      if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return current;
+      const next = [...current];
+      const [moved] = next.splice(fromIndex, 1);
+      if (!moved) return current;
+      let insertIndex = targetIndex + (insertAfterTarget ? 1 : 0);
+      if (fromIndex < insertIndex) insertIndex -= 1;
+      if (fromIndex === insertIndex) return current;
+      next.splice(insertIndex, 0, moved);
+      return next;
     });
   }
 
@@ -10678,16 +10726,29 @@ function App() {
     return (
       <div className="file-editor-tabs" role="tablist" aria-label="Open files">
         {fileEditorTabs.map((tab) => {
-          const active = editorFileKey(tab) === editorFileKey(fileEditor);
+          const tabKey = editorFileKey(tab);
+          const active = tabKey === editorFileKey(fileEditor);
           const dirty = !tab.binary && tab.content !== tab.originalContent;
           return (
             <button
-              className={active ? "file-editor-tab active" : "file-editor-tab"}
-              key={editorFileKey(tab)}
+              className={[
+                "file-editor-tab",
+                active ? "active" : "",
+                draggingFileEditorTabKey === tabKey ? "dragging" : ""
+              ].filter(Boolean).join(" ")}
+              key={tabKey}
               role="tab"
               aria-selected={active}
+              draggable={fileEditorTabs.length > 1}
               title={tab.path}
               type="button"
+              onDragEnd={clearFileEditorTabDrag}
+              onDragOver={(event) => moveFileEditorTabOver(event, tab)}
+              onDragStart={(event) => startFileEditorTabDrag(event, tab)}
+              onDrop={(event) => {
+                event.preventDefault();
+                clearFileEditorTabDrag();
+              }}
               onClick={() => {
                 setFileEditor(tab);
                 expandProjectFoldersForFile(tab.path);
