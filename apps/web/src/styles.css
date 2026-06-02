@@ -3184,8 +3184,7 @@ a.secondary {
   box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
-.danger-button:hover:not(:disabled),
-.sticky-submit .stop:hover:not(:disabled) {
+.danger-button:hover:not(:disabled) {
   color: #ffffff;
   background: color-mix(in srgb, var(--danger) 86%, #000000);
   box-shadow: 0 8px 20px color-mix(in srgb, var(--danger) 18%, transparent);
@@ -3193,16 +3192,30 @@ a.secondary {
 
 .sticky-submit {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   gap: 6px;
   align-items: center;
   overflow: visible;
 }
 
-.sticky-submit .stop {
-  min-width: 104px;
+.sticky-submit .stop-run-button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 999px;
   color: #ffffff;
-  background: var(--danger);
+  background: color-mix(in srgb, var(--text) 78%, #000000);
+  border: 1px solid color-mix(in srgb, var(--text) 34%, transparent);
+  box-shadow: none;
+}
+
+.sticky-submit .stop-run-button:hover:not(:disabled) {
+  color: #ffffff;
+  background: color-mix(in srgb, var(--text) 88%, #000000);
+  border-color: color-mix(in srgb, var(--text) 44%, transparent);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--text) 12%, transparent);
 }
 
 .sandbox-control,
@@ -7342,14 +7355,8 @@ button:disabled {
   }
 
   .sticky-submit {
-    grid-template-columns: minmax(0, 1fr) 38px 38px minmax(76px, auto);
+    grid-template-columns: minmax(0, 1fr) 38px 34px 38px minmax(76px, auto);
     gap: 5px;
-  }
-
-  .sticky-submit .stop {
-    grid-column: 1 / -1;
-    min-height: 36px;
-    font-size: 14px;
   }
 
   .sticky-submit .run-button {
@@ -7551,8 +7558,7 @@ button:disabled {
     font-size: 12px;
   }
 
-  .sticky-submit .run-button,
-  .sticky-submit .stop {
+  .sticky-submit .run-button {
     font-size: 13px;
   }
 }

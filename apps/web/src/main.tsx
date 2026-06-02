@@ -9605,6 +9605,11 @@ function App() {
           <label className="attachment-picker" htmlFor="composer-attachment-input" title="Attach files">
             <Paperclip size={18} />
           </label>
+          {activeJob && ["queued", "assigned", "running"].includes(activeJob.status) && (
+            <button aria-label="Stop current job" className="stop-run-button" title="Stop" type="button" onClick={cancelJob}>
+              <Square size={14} />
+            </button>
+          )}
           <div className="sandbox-control" ref={sandboxControlRef}>
             <button
               aria-expanded={sandboxMenuOpen}
@@ -9847,9 +9852,6 @@ function App() {
               </div>
             )}
           </div>
-          {activeJob && ["queued", "assigned", "running"].includes(activeJob.status) && (
-            <button className="stop" type="button" onClick={cancelJob}><Square size={18} /> Stop</button>
-          )}
         </div>
       </form>
     );
