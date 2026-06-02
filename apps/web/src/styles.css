@@ -4661,17 +4661,48 @@ button.message-attachment.image:hover {
 }
 
 .file-tree-row.directory {
-  grid-template-columns: 14px 16px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, 1fr);
   color: var(--muted);
   font-weight: 850;
-  cursor: pointer;
 }
 
 .file-tree-row.directory:hover,
 .file-tree-row.file:hover,
-.file-tree-row.file.active {
+.file-tree-row.file.active,
+.file-tree-row.directory.active {
   color: var(--text);
   background: var(--panel);
+}
+
+.file-tree-caret-button,
+.file-tree-directory-button {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
+
+.file-tree-caret-button {
+  width: 14px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.file-tree-caret-button:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.file-tree-directory-button {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  text-align: left;
 }
 
 .file-tree-caret {
@@ -4693,6 +4724,10 @@ button.message-attachment.image:hover {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+.file-tree-row.directory.active {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 .file-tree-empty,
 .file-explorer-notice {
   padding: 8px;
@@ -4710,6 +4745,166 @@ button.message-attachment.image:hover {
 
 .file-editor-main {
   overflow: hidden;
+}
+
+.folder-view {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--field);
+}
+
+.folder-view.empty,
+.folder-view-empty {
+  min-height: 220px;
+  display: grid;
+  place-content: center;
+  gap: 7px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.folder-view-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.folder-view-head > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.folder-view-head strong,
+.folder-view-head small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-view-head strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.folder-view-head small,
+.folder-view-actions span,
+.folder-view-item small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.folder-view-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.folder-view-actions button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.folder-view-actions button:hover,
+.folder-view-actions button.selected {
+  color: var(--accent-text);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.folder-view-items {
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+}
+
+.folder-view-items.list {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+}
+
+.folder-view-items.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  align-content: start;
+  gap: 10px;
+}
+
+.folder-view-item {
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
+.folder-view-items.list .folder-view-item {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.folder-view-items.grid .folder-view-item {
+  min-height: 112px;
+  display: grid;
+  grid-template-rows: 34px minmax(0, auto) 16px;
+  justify-items: center;
+  align-content: center;
+  gap: 7px;
+  padding: 12px 10px;
+  text-align: center;
+  background: var(--panel-2);
+}
+
+.folder-view-item:hover {
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.folder-view-item > span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 800;
+}
+
+.folder-view-items.grid .folder-view-item .file-tree-icon {
+  width: 34px;
+  height: 34px;
+}
+
+.folder-view-items.grid .folder-view-item .file-tree-icon svg {
+  width: 26px;
+  height: 26px;
 }
 
 .code-editor-shell {

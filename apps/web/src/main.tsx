@@ -671,6 +671,8 @@ type EditorCursorState = {
   selectionLength: number;
 };
 
+type FolderViewMode = "list" | "grid";
+
 type ProjectFileEntry = {
   path: string;
   name: string;
@@ -4342,6 +4344,14 @@ function App() {
   const [projectFilesError, setProjectFilesError] = useState("");
   const [fileTreeQuery, setFileTreeQuery] = useState("");
   const [expandedProjectFolders, setExpandedProjectFolders] = useState<Record<string, boolean>>({});
+  const [selectedProjectFolderPath, setSelectedProjectFolderPath] = useState("");
+  const [folderViewMode, setFolderViewMode] = useState<FolderViewMode>(() => {
+    try {
+      return localStorage.getItem("cmc.folderViewMode") === "grid" ? "grid" : "list";
+    } catch {
+      return "list";
+    }
+  });
   const [editorFindQuery, setEditorFindQuery] = useState("");
   const [editorFindIndex, setEditorFindIndex] = useState(0);
   const [ideChatPanelOpen, setIdeChatPanelOpen] = useState(() => {
@@ -4473,6 +4483,21 @@ function App() {
     }
     return projectFiles.filter((entry) => visiblePaths.has(entry.path));
   }, [expandedProjectFolders, fileTreeQuery, projectFiles]);
+  const selectedProjectFolder = useMemo(
+    () => selectedProjectFolderPath
+      ? projectFiles.find((entry) => entry.type === "directory" && normalizeProjectFilePath(entry.path) === selectedProjectFolderPath)
+      : undefined,
+    [projectFiles, selectedProjectFolderPath]
+  );
+  const selectedProjectFolderItems = useMemo(() => {
+    if (!selectedProjectFolderPath) return [];
+    return projectFiles
+      .filter((entry) => normalizeProjectFilePath(currentProjectFileDirectory(entry.path)) === selectedProjectFolderPath)
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      });
+  }, [projectFiles, selectedProjectFolderPath]);
   const fileEditorOpenPathSignature = useMemo(() => (
     fileEditorTabs
       .filter((tab) => selectedRepo && tab.agentId === selectedRepo.agentId && tab.repoId === selectedRepo.id)
@@ -6411,6 +6436,14 @@ function App() {
   }, [fileEditorFullscreen]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem("cmc.folderViewMode", folderViewMode);
+    } catch {
+      // Folder layout is local preference only.
+    }
+  }, [folderViewMode]);
+
+  useEffect(() => {
     if (!fileEditor) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -7538,6 +7571,19 @@ function App() {
     }));
   }
 
+  function selectProjectFolder(path: string) {
+    const folderPath = normalizeProjectFilePath(path);
+    if (!folderPath) return;
+    setIdeEditorPaneOpen(true);
+    setSelectedProjectFolderPath(folderPath);
+    setExpandedProjectFolders((current) => current[folderPath] ? current : {
+      ...current,
+      [folderPath]: true
+    });
+    setEditorFindQuery("");
+    setEditorFindIndex(0);
+  }
+
   async function openProjectIde(chat?: Chat) {
     if (!selectedRepo) return;
     setMobileMenuOpen(false);
@@ -7675,6 +7721,7 @@ function App() {
         repo.domain
       ]
     }) ?? path);
+    setSelectedProjectFolderPath("");
     const existingTab = fileEditorTabs.find((tab) => tab.agentId === repo.agentId && tab.repoId === repo.id && tab.path === filePath);
     if (existingTab) {
       setActiveFileEditor(existingTab);
@@ -11449,6 +11496,7 @@ function App() {
                 clearFileEditorTabDrag();
               }}
               onClick={() => {
+                setSelectedProjectFolderPath("");
                 setFileEditor(tab);
                 expandProjectFoldersForFile(tab.path);
                 setEditorFindQuery("");
@@ -11484,6 +11532,92 @@ function App() {
             </button>
           );
         })}
+      </div>
+    );
+  }
+
+  function renderProjectFolderView() {
+    const folder = selectedProjectFolder;
+    const folderPath = selectedProjectFolderPath;
+    if (!folder || !folderPath) {
+      return (
+        <div className="folder-view empty">
+          <FolderOpen size={28} />
+          <strong>Folder not found</strong>
+          <small>{folderPath || "No folder selected"}</small>
+        </div>
+      );
+    }
+    const foldersCount = selectedProjectFolderItems.filter((entry) => entry.type === "directory").length;
+    const filesCount = selectedProjectFolderItems.length - foldersCount;
+    return (
+      <div className="folder-view">
+        <header className="folder-view-head">
+          <div>
+            <strong>{folder.name}</strong>
+            <small title={folder.path}>{folder.path}</small>
+          </div>
+          <div className="folder-view-actions" role="group" aria-label="Folder view mode">
+            <span>{foldersCount} dirs · {filesCount} files</span>
+            <button
+              aria-pressed={folderViewMode === "list"}
+              className={folderViewMode === "list" ? "selected" : ""}
+              title="List view"
+              type="button"
+              onClick={() => setFolderViewMode("list")}
+            >
+              <FileText size={14} />
+            </button>
+            <button
+              aria-pressed={folderViewMode === "grid"}
+              className={folderViewMode === "grid" ? "selected" : ""}
+              title="Icon view"
+              type="button"
+              onClick={() => setFolderViewMode("grid")}
+            >
+              <Package size={14} />
+            </button>
+          </div>
+        </header>
+        {selectedProjectFolderItems.length ? (
+          <div className={`folder-view-items ${folderViewMode}`}>
+            {selectedProjectFolderItems.map((entry) => {
+              const directory = entry.type === "directory";
+              return (
+                <button
+                  className={`folder-view-item ${entry.type}`}
+                  key={entry.path}
+                  title={entry.path}
+                  type="button"
+                  onContextMenu={directory ? undefined : (event) => {
+                    event.preventDefault();
+                    setFileContextMenu({
+                      entry,
+                      x: Math.min(event.clientX, window.innerWidth - 240),
+                      y: Math.min(event.clientY, window.innerHeight - 260)
+                    });
+                  }}
+                  onClick={() => {
+                    if (directory) selectProjectFolder(entry.path);
+                    else void openProjectFile(entry.path);
+                  }}
+                >
+                  {directory
+                    ? renderFileTreeDirectoryIcon(entry, Boolean(expandedProjectFolders[entry.path]))
+                    : renderFileTreeFileIcon(entry)}
+                  <span>{entry.name}</span>
+                  {entry.size !== undefined && <small>{formatBytes(entry.size)}</small>}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="folder-view-empty">
+            <FolderOpen size={26} />
+            <strong>Empty folder</strong>
+            <small>{folder.path}</small>
+          </div>
+        )}
       </div>
     );
   }
@@ -12409,25 +12543,39 @@ function App() {
                       {entry.size !== undefined && <small>{formatBytes(entry.size)}</small>}
                     </button>
                   ) : (
-                    <button
+                    <div
                       aria-expanded={Boolean(expandedProjectFolders[entry.path])}
-                      className={`file-tree-row directory${expandedProjectFolders[entry.path] ? " open" : ""}`}
+                      className={[
+                        "file-tree-row directory",
+                        expandedProjectFolders[entry.path] ? "open" : "",
+                        selectedProjectFolderPath === normalizeProjectFilePath(entry.path) ? "active" : ""
+                      ].filter(Boolean).join(" ")}
                       key={entry.path}
-                      onClick={() => toggleProjectFolder(entry.path)}
                       role="treeitem"
                       style={{ paddingLeft: `${8 + entry.depth * 18}px` }}
                       title={entry.path}
-                      type="button"
                     >
-                      <ChevronDown className="file-tree-caret" size={13} />
-                      {renderFileTreeDirectoryIcon(entry, Boolean(expandedProjectFolders[entry.path]))}
-                      <span className="file-tree-name">{entry.name}</span>
-                    </button>
+                      <button
+                        aria-label={expandedProjectFolders[entry.path] ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
+                        className="file-tree-caret-button"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleProjectFolder(entry.path);
+                        }}
+                      >
+                        <ChevronDown className="file-tree-caret" size={13} />
+                      </button>
+                      <button className="file-tree-directory-button" type="button" onClick={() => selectProjectFolder(entry.path)}>
+                        {renderFileTreeDirectoryIcon(entry, Boolean(expandedProjectFolders[entry.path]))}
+                        <span className="file-tree-name">{entry.name}</span>
+                      </button>
+                    </div>
                   ))}
                 </div>
               </aside>}
               {ideEditorPaneOpen && <section className="file-editor-main">
-                {ideFindOpen && !fileEditor.binary && <div className="file-editor-search">
+                {ideFindOpen && !selectedProjectFolderPath && !fileEditor.binary && <div className="file-editor-search">
                   <label>
                     <Search size={15} />
                     <input
@@ -12452,7 +12600,9 @@ function App() {
                     <ArrowDown size={15} />
                   </button>
                 </div>}
-                {fileEditor.loading ? (
+                {selectedProjectFolderPath ? (
+                  renderProjectFolderView()
+                ) : fileEditor.loading ? (
                   <div className="empty">Загружаю файл...</div>
                 ) : fileEditor.binary && fileEditor.mimeType?.startsWith("image/") ? (
                   renderImagePreview(fileEditor)
