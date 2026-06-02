@@ -4753,7 +4753,7 @@ button.message-attachment.image:hover {
   gap: 2px;
 }
 
-.ide-chat-panel strong {
+.ide-chat-panel header strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4789,11 +4789,28 @@ button.message-attachment.image:hover {
   background: var(--field);
 }
 
-.ide-chat-message span {
+.ide-chat-message-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ide-chat-message-author {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 11px;
   font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-transform: uppercase;
+}
+
+.ide-chat-message-meta small {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .ide-chat-message p {
@@ -4802,6 +4819,54 @@ button.message-attachment.image:hover {
   color: var(--text);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.ide-chat-body {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ide-chat-body.rich-text {
+  gap: 7px;
+}
+
+.ide-chat-body h3 {
+  font-size: 13px;
+  line-height: 1.28;
+}
+
+.ide-chat-body ul,
+.ide-chat-body ol {
+  padding-left: 18px;
+}
+
+.ide-chat-body li + li {
+  margin-top: 3px;
+}
+
+.ide-chat-body code {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.ide-chat-body .rich-code {
+  max-width: 100%;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+}
+
+.ide-chat-message .system-message-body.ide-chat-body {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.ide-chat-message .message-attachments {
+  margin-top: 2px;
 }
 
 .ide-chat-empty,

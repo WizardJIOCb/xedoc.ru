@@ -11459,12 +11459,33 @@ function App() {
                   </header>
                   <div className="ide-chat-feed">
                     {activeChat ? (
-                      ideChatMessages.length ? ideChatMessages.map((message) => (
-                        <article className={`ide-chat-message ${message.role}`} key={message.id}>
-                          <span>{message.role === "user" ? (currentUser?.nickname || "You") : message.role === "assistant" ? "Codex" : message.role}</span>
-                          <p>{truncateCommitPart(cleanCommitSummary(message.content) || normalizeDisplayText(message.content), 260)}</p>
-                        </article>
-                      )) : <div className="ide-chat-empty">В этом чате пока нет сообщений.</div>
+                      ideChatMessages.length ? ideChatMessages.map((message) => {
+                        const richTextOptions: RichTextOptions | undefined = selectedRepo ? {
+                          onFileReference: openProjectFile,
+                          projectRoot: selectedRepo.pathMasked,
+                          projectRoots: [
+                            selectedRepo.pathMasked,
+                            selectedRepo.serverPath
+                          ],
+                          projectReferenceNames: [
+                            selectedRepo.id,
+                            selectedRepo.name,
+                            selectedRepo.domain
+                          ]
+                        } : undefined;
+                        return (
+                          <article className={`ide-chat-message ${message.role}`} key={message.id}>
+                            <div className="ide-chat-message-meta">
+                              <span className="ide-chat-message-author">{message.role === "user" ? (currentUser?.nickname || "You") : message.role === "assistant" ? "Codex" : message.role}</span>
+                              <small>{formatDateTime(message.createdAt)}</small>
+                            </div>
+                            {message.role === "system"
+                              ? <div className="system-message-body ide-chat-body">{normalizeDisplayText(message.content).trim()}</div>
+                              : renderRichText(message.content, "rich-text compact ide-chat-body", richTextOptions)}
+                            {renderMessageAttachments(message.attachments, setImagePreview)}
+                          </article>
+                        );
+                      }) : <div className="ide-chat-empty">В этом чате пока нет сообщений.</div>
                     ) : (
                       <div className="ide-chat-empty">Выбери чат или отправь первую задачу прямо из IDE.</div>
                     )}
