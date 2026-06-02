@@ -2727,6 +2727,11 @@ function MonacoCodeEditor({
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       onSaveRef.current?.();
     });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyA, () => {
+      editor.setSelection(model.getFullModelRange());
+      editor.revealPosition({ lineNumber: 1, column: 1 }, monaco.editor.ScrollType.Immediate);
+      editor.focus();
+    });
     const openFileAtPosition = (position: monaco.Position | null) => {
       const target = projectFileTargetAtEditorPosition(editor, model, pathRef.current, projectFilesRef.current, position);
       if (!target) return false;
@@ -11214,21 +11219,6 @@ function App() {
               label: "Format Document",
               shortcut: "Shift+Alt+F",
               onClick: () => triggerEditorCommand("format")
-            })}
-          </>
-        ))}
-        {renderIdeMenuGroup("selection", "Selection", (
-          <>
-            {renderIdeMenuItem({
-              icon: <FilePenLine size={14} />,
-              label: "Focus Editor",
-              onClick: () => triggerEditorCommand("focus")
-            })}
-            {renderIdeMenuItem({
-              icon: <FilePenLine size={14} />,
-              label: "Select All",
-              shortcut: "Ctrl+A",
-              onClick: () => triggerEditorCommand("selectAll")
             })}
           </>
         ))}

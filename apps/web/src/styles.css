@@ -7936,18 +7936,40 @@ button:disabled {
 
   .file-editor-modal {
     place-items: stretch;
-    padding: max(6px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+    padding: max(3px, env(safe-area-inset-top)) max(3px, env(safe-area-inset-right)) max(3px, env(safe-area-inset-bottom)) max(3px, env(safe-area-inset-left));
   }
 
   .file-editor-panel {
     width: 100%;
-    height: calc(100dvh - 12px);
+    height: calc(100dvh - 6px);
+    gap: 5px;
+    padding: 5px;
+    border-radius: 6px;
   }
 
   .file-editor-menubar {
     align-items: center;
+    min-height: 30px;
+    padding: 0 4px;
+    border-radius: 5px;
     overflow-x: auto;
     overflow-y: visible;
+  }
+
+  .ide-menu-brand {
+    gap: 5px;
+    padding: 0 6px 0 2px;
+  }
+
+  .ide-menu-brand img {
+    width: 16px;
+    height: 16px;
+  }
+
+  .ide-menu-trigger {
+    min-height: 26px;
+    padding: 0 7px;
+    font-size: 11.5px;
   }
 
   .file-editor-menubar .ide-menu,
@@ -7962,22 +7984,42 @@ button:disabled {
 
   .ide-menu-dropdown {
     position: fixed;
-    left: 12px;
-    right: 12px;
-    top: 104px;
+    left: 8px;
+    right: 8px;
+    top: 72px;
     min-width: 0;
     width: auto;
     max-width: none;
   }
 
+  .file-editor-tabs {
+    min-height: 29px;
+    gap: 2px;
+  }
+
+  .file-editor-tab {
+    min-width: 92px;
+    min-height: 28px;
+    gap: 4px;
+    padding: 4px 6px;
+    border-radius: 5px 5px 0 0;
+    font-size: 11.5px;
+  }
+
+  .tab-close {
+    width: 18px;
+    height: 18px;
+  }
+
   .file-editor-workspace {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(120px, 28dvh) minmax(0, 1fr);
+    grid-template-rows: minmax(84px, 16dvh) minmax(0, 1fr);
+    gap: 5px;
   }
 
   .file-editor-workspace.with-chat {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(120px, 24dvh) minmax(0, 1fr) minmax(180px, 28dvh);
+    grid-template-rows: minmax(84px, 15dvh) minmax(220px, 1fr) minmax(124px, 22dvh);
   }
 
   .file-editor-workspace.without-explorer {
@@ -7987,17 +8029,17 @@ button:disabled {
 
   .file-editor-workspace.without-explorer.with-chat {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(180px, 28dvh);
+    grid-template-rows: minmax(0, 1fr) minmax(124px, 22dvh);
   }
 
   .file-editor-workspace.without-editor {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(180px, 1fr);
+    grid-template-rows: minmax(140px, 1fr);
   }
 
   .file-editor-workspace.without-editor.with-chat {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(120px, 28dvh) minmax(0, 1fr);
+    grid-template-rows: minmax(84px, 16dvh) minmax(0, 1fr);
   }
 
   .file-editor-workspace.without-explorer.without-editor {
@@ -8012,15 +8054,99 @@ button:disabled {
 
   .file-explorer {
     overflow: hidden;
+    gap: 5px;
+    padding: 5px;
+    border-radius: 6px;
+  }
+
+  .file-explorer-head h2 {
+    font-size: 12px;
+  }
+
+  .file-tree-search {
+    padding: 0 7px;
+    border-radius: 6px;
+  }
+
+  .file-tree-search input,
+  .file-editor-search input {
+    min-height: 27px;
+    font-size: 12px;
+  }
+
+  .file-tree {
+    gap: 1px;
+  }
+
+  .file-tree-row {
+    min-height: 24px;
+    gap: 5px;
+    padding: 3px 6px;
+    border-radius: 5px;
+    font-size: 12px;
   }
 
   .ide-chat-panel {
-    min-height: 180px;
+    --ide-chat-font-size: 11.5px;
+    --ide-chat-heading-size: 12px;
+    --ide-chat-feed-gap: 5px;
+    --ide-chat-message-padding: 6px;
+    min-height: 124px;
+    gap: 5px;
+    padding: 6px;
+    border-radius: 6px;
+  }
+
+  .ide-chat-panel header strong {
+    font-size: 12px;
+  }
+
+  .ide-chat-panel small,
+  .ide-chat-message-author,
+  .ide-chat-message-meta small {
+    font-size: 10px;
+  }
+
+  .ide-chat-composer {
+    gap: 5px;
+  }
+
+  .ide-chat-composer textarea {
+    min-height: 58px;
+    max-height: 110px;
+    font-size: 12px;
+  }
+
+  .ide-chat-submit-button {
+    min-height: 30px;
+    padding-left: 10px;
+  }
+
+  .ide-chat-settings-toggle {
+    width: 27px;
+    min-height: 22px;
   }
 
   .code-line-gutter {
-    width: 42px;
-    font-size: 11px;
+    width: 36px;
+    padding-right: 6px;
+    font-size: 10.5px;
+  }
+
+  .monaco-editor-host {
+    border-radius: 5px;
+  }
+
+  .file-editor-status-bar {
+    min-height: 22px;
+    gap: 8px;
+    padding: 0 6px;
+    border-radius: 5px;
+    font-size: 10.5px;
+  }
+
+  .file-editor-status-meta {
+    gap: 7px;
   }
 
   .chat-work {
