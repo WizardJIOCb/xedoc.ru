@@ -5211,6 +5211,123 @@ button.message-attachment.image:hover {
   font-weight: 900;
 }
 
+.ide-chat-runner-selector {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--surface));
+  color: var(--text);
+  font-size: 11px;
+}
+
+.ide-chat-runner-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  gap: 7px;
+}
+
+.ide-chat-runner-fields label,
+.ide-chat-runner-group {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ide-chat-runner-fields span,
+.ide-chat-runner-group > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ide-chat-runner-fields select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 28px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--panel);
+  font: inherit;
+  font-weight: 800;
+}
+
+.ide-chat-runner-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 1px 0;
+  color: var(--muted);
+}
+
+.ide-chat-runner-meta span,
+.ide-chat-runner-meta small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ide-chat-runner-meta span {
+  color: var(--text);
+  font-weight: 900;
+}
+
+.ide-chat-runner-meta small {
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.ide-chat-runner-segmented {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.ide-chat-runner-segmented.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.ide-chat-composer .ide-chat-runner-segmented button {
+  min-height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.ide-chat-composer .ide-chat-runner-segmented button:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+}
+
+.ide-chat-composer .ide-chat-runner-segmented button.selected {
+  color: var(--accent-text);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+@media (max-width: 980px) {
+  .ide-chat-runner-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ide-chat-runner-segmented {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .attachment-remove {
   width: 26px;
   height: 26px;

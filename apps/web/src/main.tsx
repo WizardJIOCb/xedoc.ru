@@ -10389,6 +10389,106 @@ function App() {
     );
   }
 
+  function setReasoningForKind(kind: JobKind, value: ReasoningEffort) {
+    if (kind === "grok") setGrokReasoningEffort(value);
+    else if (kind === "gemini" || kind === "gemini-cli") setGeminiReasoningEffort(value);
+    else setCodexReasoningEffort(value);
+  }
+
+  function setModelForKind(kind: JobKind, value: string) {
+    if (kind === "grok") setGrokModel(value);
+    else if (kind === "gemini-cli") setGeminiCliModel(value);
+    else if (kind === "gemini") setGeminiModel(value);
+    else setCodexModel(value);
+  }
+
+  function changeJobKind(nextKind: JobKind) {
+    setJobKind(nextKind);
+    const currentModel = modelValueForKind(nextKind, codexModel, grokModel, geminiCliModel, geminiModel);
+    const nextModelOptions = modelOptionsForKind(nextKind);
+    const fallbackModel = nextModelOptions[0]?.value;
+    if (fallbackModel && !nextModelOptions.some((option) => option.value === currentModel)) {
+      setModelForKind(nextKind, fallbackModel);
+    }
+  }
+
+  function renderIdeChatRunnerSelector() {
+    const currentModelOptions = modelOptionsForKind(jobKind);
+    const selectedModel = modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel);
+    const selectedReasoning = reasoningValueForKind(jobKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort);
+    const selectedRunner = RUNNER_OPTIONS.find((option) => option.value === jobKind)
+      ?? { value: "codex" as const, label: "Codex", note: "OpenAI Codex CLI" };
+
+    return (
+      <div className="ide-chat-runner-selector" aria-label="IDE chat model settings">
+        <div className="ide-chat-runner-fields">
+          <label>
+            <span>Provider</span>
+            <select
+              aria-label="Provider"
+              value={jobKind}
+              onChange={(event) => changeJobKind(event.target.value as JobKind)}
+            >
+              {RUNNER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Model</span>
+            <select
+              aria-label="Model"
+              title={selectedModel}
+              value={selectedModel}
+              onChange={(event) => setModelForKind(jobKind, event.target.value)}
+            >
+              {currentModelOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="ide-chat-runner-meta">
+          <span title={selectedRunner.note}>{selectedRunner.label}</span>
+          <small>{currentModelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel}</small>
+        </div>
+        <div className="ide-chat-runner-group" aria-label="Intelligence">
+          <span>Mode</span>
+          <div className="ide-chat-runner-segmented">
+            {REASONING_OPTIONS.map((option) => (
+              <button
+                className={selectedReasoning === option.value ? "selected" : ""}
+                key={option.value}
+                type="button"
+                onClick={() => setReasoningForKind(jobKind, option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {jobKind === "codex" && (
+          <div className="ide-chat-runner-group compact" aria-label="Codex speed">
+            <span>Speed</span>
+            <div className="ide-chat-runner-segmented two">
+              {SPEED_OPTIONS.map((option) => (
+                <button
+                  className={codexSpeed === option.value ? "selected" : ""}
+                  key={option.value}
+                  title={option.note}
+                  type="button"
+                  onClick={() => setCodexSpeed(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderComposer() {
     if (!selectedRepo) return null;
     const canSubmit = Boolean(prompt.trim() || attachments.length);
@@ -10406,17 +10506,6 @@ function App() {
     const showCodexBusy = localCodexBusy || activeRunBusy;
     const activeRunnerLabel = jobRunnerLabel(activeJob);
     const busyLabel = activeRunBusy ? `${activeRunnerLabel} занят` : "Codex занят";
-    const setReasoningForKind = (kind: JobKind, value: ReasoningEffort) => {
-      if (kind === "grok") setGrokReasoningEffort(value);
-      else if (kind === "gemini" || kind === "gemini-cli") setGeminiReasoningEffort(value);
-      else setCodexReasoningEffort(value);
-    };
-    const setModelForKind = (kind: JobKind, value: string) => {
-      if (kind === "grok") setGrokModel(value);
-      else if (kind === "gemini-cli") setGeminiCliModel(value);
-      else if (kind === "gemini") setGeminiModel(value);
-      else setCodexModel(value);
-    };
     const runnerKindForMenuAgent = (agent: RunnerAgent) => defaultKindForAgent(agent, jobKind);
     const ensureRunnerConfigOpen = (agent: RunnerAgent) => {
       setOpenRunnerConfigAgents((current) => current.includes(agent) ? current : [...current, agent]);
@@ -12451,6 +12540,7 @@ function App() {
                       {ideChatSending || localCodexBusy || activeRunBusy ? <RefreshCw className="spin" size={15} /> : <Play size={15} />}
                       Send
                     </button>
+                    {renderIdeChatRunnerSelector()}
                   </form>
                 </aside>
               )}
