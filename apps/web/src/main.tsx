@@ -1541,6 +1541,17 @@ function hasProgressChanges(progress: JobProgress | null | undefined) {
   );
 }
 
+function mergeJobProgress(previous: JobProgress | null | undefined, incoming: JobProgress): JobProgress {
+  if (!previous || hasProgressChanges(incoming) || !hasProgressChanges(previous)) return incoming;
+  return {
+    ...incoming,
+    filesChanged: incoming.filesChanged ?? previous.filesChanged,
+    added: incoming.added ?? previous.added,
+    deleted: incoming.deleted ?? previous.deleted,
+    files: incoming.files?.length ? incoming.files : previous.files
+  };
+}
+
 function jobDurationSeconds(job: Job) {
   const start = Date.parse(job.startedAt || job.createdAt);
   const finish = Date.parse(job.finishedAt || new Date().toISOString());
@@ -4056,14 +4067,15 @@ function App() {
     }
 
     if (jobProgress.size) {
-      const progressMessages = [...jobProgress.values()];
+      const progressMessages = [...jobProgress.values()] as JobProgress[];
       const progressById = new Map(progressMessages.map((message) => [message.jobId, message]));
       setProgressByJob((current) => {
         let changed = false;
         const next = { ...current };
         for (const message of progressMessages) {
-          if (next[message.jobId] !== message) {
-            next[message.jobId] = message;
+          const merged = mergeJobProgress(next[message.jobId], message);
+          if (next[message.jobId] !== merged) {
+            next[message.jobId] = merged;
             changed = true;
           }
         }
@@ -4071,7 +4083,7 @@ function App() {
       });
       const patchJob = (job: Job): Job => {
         const progress = progressById.get(job.id);
-        return progress ? { ...job, status: "running", progress } : job;
+        return progress ? { ...job, status: "running", progress: mergeJobProgress(job.progress, progress) } : job;
       };
       const patchJobs = (current: Job[]) => current.some((job) => progressById.has(job.id)) ? current.map(patchJob) : current;
       setAllJobs(patchJobs);
@@ -9195,6 +9207,7 @@ function App() {
     const promptAlreadyVisible = messages.some((message) => isJobPromptMessage(message, activeJob.id));
     const showActiveDiff = hasProgressChanges(activeProgress);
     const runnerLabel = jobRunnerLabel(activeJob);
+    const activeFiles = activeProgress?.files ?? [];
     return (
       <>
         {!promptAlreadyVisible && (
@@ -9204,8 +9217,8 @@ function App() {
           </div>
         )}
         {renderLiveActivity()}
-        {activeProgress && showActiveDiff && (
-          <div className="progress-wrap">
+        {activeProgress && (
+          <div className={`progress-wrap ${showActiveDiff ? "" : "empty"}`}>
             <div className="progress-panel">
               <div>
                 <span className="progress-label">{jobProgressLabel(activeProgress, "Выполняется", runnerLabel)}</span>
@@ -9217,9 +9230,9 @@ function App() {
                 <span>-{activeProgress.deleted ?? 0}</span>
               </div>
             </div>
-            {activeProgress.files?.length ? (
-              <div className="progress-files">
-                {(activeProgress.files ?? []).slice(0, 8).map((file) => (
+            <div className="progress-files">
+              {activeFiles.length ? (
+                activeFiles.slice(0, 8).map((file) => (
                   <div key={file.path}>
                     <span>{file.path}</span>
                     <small className="diff-meta">
@@ -9227,9 +9240,14 @@ function App() {
                       <span className="diff-deleted">-{file.deleted}</span>
                     </small>
                   </div>
-                ))}
-              </div>
-            ) : null}
+                ))
+              ) : (
+                <div className="progress-files-empty">
+                  <span>Изменений файлов пока нет</span>
+                  <small>проверяю рабочую папку</small>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </>

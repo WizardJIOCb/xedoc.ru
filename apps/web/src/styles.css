@@ -5976,6 +5976,7 @@ h2 > strong {
   gap: 6px;
   min-width: 0;
   max-width: 100%;
+  min-height: 100px;
 }
 
 .progress-panel {
@@ -6049,6 +6050,7 @@ h2 > strong {
 .progress-files {
   min-width: 0;
   max-width: 100%;
+  min-height: 36px;
   display: grid;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -6079,6 +6081,20 @@ h2 > strong {
 .progress-files small {
   color: var(--accent-2);
   font-weight: 800;
+}
+
+.progress-wrap.empty .progress-panel,
+.progress-wrap.empty .progress-files {
+  background: color-mix(in srgb, var(--panel) 82%, var(--field));
+}
+
+.progress-files-empty span {
+  color: var(--muted);
+}
+
+.progress-files-empty small {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .live-activity-card {
@@ -6147,7 +6163,8 @@ h2 > strong {
   display: grid;
   gap: 0;
   min-width: 0;
-  max-height: 44vh;
+  height: clamp(220px, 34vh, 360px);
+  max-height: min(44vh, 420px);
   overflow-y: auto;
   overflow-anchor: none;
   scroll-behavior: auto;
@@ -7429,6 +7446,11 @@ button:disabled {
 
   .live-activity-toggle em {
     display: none;
+  }
+
+  .live-activity-timeline {
+    height: clamp(180px, 32dvh, 260px);
+    max-height: 38dvh;
   }
 
   .live-command-row {
