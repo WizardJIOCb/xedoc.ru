@@ -10032,9 +10032,13 @@ function App() {
     return (
       <div className="ide-menu" key={id}>
         <button
+          aria-expanded={ideMenuOpen === id}
+          aria-haspopup="menu"
           className={ideMenuOpen === id ? "ide-menu-trigger active" : "ide-menu-trigger"}
           type="button"
-          onClick={() => setIdeMenuOpen((current) => current === id ? "" : id)}
+          onFocus={() => setIdeMenuOpen(id)}
+          onMouseEnter={() => setIdeMenuOpen(id)}
+          onClick={() => setIdeMenuOpen(id)}
         >
           {label}
         </button>
@@ -10050,7 +10054,12 @@ function App() {
   function renderIdeMenubar(editor: ProjectFileEditor) {
     const outputAvailable = Boolean(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice);
     return (
-      <nav className="file-editor-menubar" ref={ideMenuRef} aria-label="Xedoc IDE menu">
+      <nav
+        className="file-editor-menubar"
+        ref={ideMenuRef}
+        aria-label="Xedoc IDE menu"
+        onMouseLeave={() => setIdeMenuOpen("")}
+      >
         <div className="ide-menu-brand">
           <img src="/favicon.svg" alt="" />
           <span>Xedoc IDE</span>
