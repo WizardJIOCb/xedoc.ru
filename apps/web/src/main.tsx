@@ -925,11 +925,11 @@ function AnimatedStreamingRichText({
 
   const isAnimating = displayText !== normalized;
   const shouldShowCaret = showCaret || isAnimating;
+  const caret = shouldShowCaret ? <span className="stream-caret" key="stream-caret" aria-hidden="true" /> : undefined;
 
   return (
     <div className={className}>
-      {displayText ? renderRichText(displayText, "rich-text compact live-activity-rich-body", options) : null}
-      {shouldShowCaret && <span className="stream-caret" aria-hidden="true" />}
+      {displayText || caret ? renderRichText(displayText, "rich-text compact live-activity-rich-body", options, caret) : null}
     </div>
   );
 }
@@ -2371,7 +2371,11 @@ function renderInlineMarkdown(text: string, keyPrefix = "inline", options?: Rich
   return nodes;
 }
 
-function renderRichText(value: string, className = "rich-text", options?: RichTextOptions) {
+function appendInlineTail(children: React.ReactNode[], inlineTail?: React.ReactNode) {
+  return inlineTail ? [...children, inlineTail] : children;
+}
+
+function renderRichText(value: string, className = "rich-text", options?: RichTextOptions, inlineTail?: React.ReactNode) {
   const lines = normalizeDisplayText(value).trim().split("\n");
   const blocks: React.ReactNode[] = [];
   let index = 0;
@@ -2394,7 +2398,7 @@ function renderRichText(value: string, className = "rich-text", options?: RichTe
       if (index < lines.length) index += 1;
       blocks.push(
         <pre className="rich-code" key={blocks.length}>
-          <code>{code.join("\n")}</code>
+          <code>{index >= lines.length && inlineTail ? [code.join("\n"), inlineTail] : code.join("\n")}</code>
         </pre>
       );
       continue;
@@ -2402,8 +2406,10 @@ function renderRichText(value: string, className = "rich-text", options?: RichTe
 
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading?.[2]) {
-      blocks.push(<h3 key={blocks.length}>{renderInlineMarkdown(heading[2], `block:${blocks.length}:heading`, options)}</h3>);
+      const blockIndex = blocks.length;
       index += 1;
+      const children = renderInlineMarkdown(heading[2], `block:${blockIndex}:heading`, options);
+      blocks.push(<h3 key={blockIndex}>{index >= lines.length ? appendInlineTail(children, inlineTail) : children}</h3>);
       continue;
     }
 
@@ -2416,7 +2422,9 @@ function renderRichText(value: string, className = "rich-text", options?: RichTe
         quoteLines.push(quoteLine[1] ?? "");
         index += 1;
       }
-      blocks.push(<blockquote key={blocks.length}>{renderInlineMarkdown(quoteLines.join(" "), `block:${blocks.length}:quote`, options)}</blockquote>);
+      const blockIndex = blocks.length;
+      const children = renderInlineMarkdown(quoteLines.join(" "), `block:${blockIndex}:quote`, options);
+      blocks.push(<blockquote key={blockIndex}>{index >= lines.length ? appendInlineTail(children, inlineTail) : children}</blockquote>);
       continue;
     }
 
@@ -2432,8 +2440,16 @@ function renderRichText(value: string, className = "rich-text", options?: RichTe
         items.push(item[1] ?? "");
         index += 1;
       }
-      const children = items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `block:${blocks.length}:li:${itemIndex}`, options)}</li>);
-      blocks.push(ordered ? <ol key={blocks.length}>{children}</ol> : <ul key={blocks.length}>{children}</ul>);
+      const blockIndex = blocks.length;
+      const children = items.map((item, itemIndex) => {
+        const itemChildren = renderInlineMarkdown(item, `block:${blockIndex}:li:${itemIndex}`, options);
+        return (
+          <li key={itemIndex}>
+            {index >= lines.length && itemIndex === items.length - 1 ? appendInlineTail(itemChildren, inlineTail) : itemChildren}
+          </li>
+        );
+      });
+      blocks.push(ordered ? <ol key={blockIndex}>{children}</ol> : <ul key={blockIndex}>{children}</ul>);
       continue;
     }
 
@@ -2450,10 +2466,12 @@ function renderRichText(value: string, className = "rich-text", options?: RichTe
       paragraph.push(lines[index] ?? "");
       index += 1;
     }
-    blocks.push(<p key={blocks.length}>{renderInlineMarkdown(paragraph.join("\n"), `block:${blocks.length}:p`, options)}</p>);
+    const blockIndex = blocks.length;
+    const children = renderInlineMarkdown(paragraph.join("\n"), `block:${blockIndex}:p`, options);
+    blocks.push(<p key={blockIndex}>{index >= lines.length ? appendInlineTail(children, inlineTail) : children}</p>);
   }
 
-  return <div className={className}>{blocks.length ? blocks : <p>{value}</p>}</div>;
+  return <div className={className}>{blocks.length ? blocks : <p>{inlineTail ? [value, inlineTail] : value}</p>}</div>;
 }
 
 function attachmentDataUrl(attachment: MessageAttachment) {

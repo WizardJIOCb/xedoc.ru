@@ -6262,15 +6262,20 @@ h2 > strong {
 }
 
 .stream-caret {
-  width: 0.55em;
-  height: 1.05em;
   display: inline-block;
+  width: 0.48em;
+  height: 1.04em;
   margin-left: 2px;
-  border-radius: 999px;
+  border-radius: 3px;
   background: currentColor;
   opacity: 0.32;
-  transform: translateY(0.16em);
-  animation: stream-caret-blink 680ms steps(2, end) infinite;
+  vertical-align: -0.15em;
+  transform: translate3d(0, 0.06em, 0) scaleY(0.96);
+  transform-origin: 50% 100%;
+  animation:
+    stream-caret-settle 150ms cubic-bezier(0.2, 0.9, 0.2, 1) both,
+    stream-caret-blink 680ms steps(2, end) infinite 150ms;
+  will-change: opacity, transform;
 }
 
 @keyframes stream-letter-in {
@@ -6292,6 +6297,17 @@ h2 > strong {
   46%,
   100% {
     opacity: 0;
+  }
+}
+
+@keyframes stream-caret-settle {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 0.2em, 0) scaleY(0.72);
+  }
+  to {
+    opacity: 0.34;
+    transform: translate3d(0, 0.06em, 0) scaleY(0.96);
   }
 }
 
