@@ -778,17 +778,22 @@ function commonPrefixLength(left: string, right: string) {
   return index;
 }
 
-function streamingRevealStep(backlog: number) {
-  if (backlog > 2400) return 96;
-  if (backlog > 1200) return 58;
-  if (backlog > 600) return 34;
-  if (backlog > 240) return 18;
-  if (backlog > 80) return 9;
-  if (backlog > 30) return 5;
-  return 2;
+const STREAM_FRAME_MS = 1000 / 60;
+const STREAM_MAX_FRAME_CATCHUP = 3;
+
+function streamingRevealStep(backlog: number, elapsedMs: number) {
+  const frameFactor = Math.min(STREAM_MAX_FRAME_CATCHUP, Math.max(0.75, elapsedMs / STREAM_FRAME_MS));
+  let baseStep = 2;
+  if (backlog > 2800) baseStep = 28;
+  else if (backlog > 1400) baseStep = 22;
+  else if (backlog > 700) baseStep = 16;
+  else if (backlog > 320) baseStep = 10;
+  else if (backlog > 120) baseStep = 6;
+  else if (backlog > 40) baseStep = 4;
+  return Math.min(backlog, Math.max(1, Math.round(baseStep * frameFactor)));
 }
 
-const STREAM_LETTER_ANIMATION_MS = 260;
+const STREAM_LETTER_ANIMATION_MS = 140;
 const STREAM_CARET_HIDE_DELAY_MS = STREAM_LETTER_ANIMATION_MS + 40;
 
 function AnimatedStreamingRichText({
@@ -808,6 +813,7 @@ function AnimatedStreamingRichText({
   const displayTextRef = useRef("");
   const targetTextRef = useRef(normalized);
   const frameRef = useRef<number | null>(null);
+  const lastFrameAtRef = useRef<number | null>(null);
   const caretHideTimerRef = useRef<number | null>(null);
   const onFrameRef = useRef(onFrame);
 
@@ -828,6 +834,7 @@ function AnimatedStreamingRichText({
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
       }
+      lastFrameAtRef.current = null;
       displayTextRef.current = normalized;
       setDisplayText(normalized);
       return undefined;
@@ -835,20 +842,26 @@ function AnimatedStreamingRichText({
 
     const tick = () => {
       frameRef.current = null;
+      const now = window.performance.now();
+      const elapsedMs = lastFrameAtRef.current === null ? STREAM_FRAME_MS : now - lastFrameAtRef.current;
+      lastFrameAtRef.current = now;
       const current = displayTextRef.current;
       const target = targetTextRef.current;
-      if (current === target) return;
+      if (current === target) {
+        lastFrameAtRef.current = null;
+        return;
+      }
 
       let next = target;
       if (target.startsWith(current)) {
         const backlog = target.length - current.length;
-        next = target.slice(0, current.length + streamingRevealStep(backlog));
+        next = target.slice(0, current.length + streamingRevealStep(backlog, elapsedMs));
       } else {
         const prefix = commonPrefixLength(current, target);
         const isSmallRewrite = prefix >= Math.max(0, current.length - 24);
         if (isSmallRewrite && prefix < target.length) {
           const backlog = target.length - prefix;
-          next = target.slice(0, prefix + streamingRevealStep(backlog));
+          next = target.slice(0, prefix + streamingRevealStep(backlog, elapsedMs));
         }
       }
 
@@ -856,10 +869,13 @@ function AnimatedStreamingRichText({
       setDisplayText(next);
       if (next !== targetTextRef.current) {
         frameRef.current = window.requestAnimationFrame(tick);
+      } else {
+        lastFrameAtRef.current = null;
       }
     };
 
     if (frameRef.current === null) {
+      lastFrameAtRef.current = window.performance.now();
       frameRef.current = window.requestAnimationFrame(tick);
     }
 
@@ -868,6 +884,7 @@ function AnimatedStreamingRichText({
         window.cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
       }
+      lastFrameAtRef.current = null;
     };
   }, [normalized]);
 
