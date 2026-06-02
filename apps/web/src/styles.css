@@ -5206,16 +5206,70 @@ button.message-attachment.image:hover {
   font-size: 13px;
 }
 
-.ide-chat-composer button {
+.ide-chat-send-control {
+  position: relative;
+  min-width: 0;
+}
+
+.ide-chat-submit-button {
+  width: 100%;
   min-height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-width: 0;
+  padding: 0 45px 0 12px;
   border-radius: 7px;
   color: var(--accent-text);
   background: var(--accent);
   font-weight: 900;
+}
+
+.ide-chat-submit-button > span {
+  flex: 0 0 auto;
+}
+
+.ide-chat-submit-button > small {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--accent-text) 78%, transparent);
+  font-size: 11px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ide-chat-submit-button:disabled > small {
+  color: color-mix(in srgb, var(--accent-text) 54%, transparent);
+}
+
+.ide-chat-settings-toggle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 28px;
+  height: calc(100% - 8px);
+  min-height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--accent-text) 22%, transparent);
+  border-radius: 6px;
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+}
+
+.ide-chat-settings-toggle:hover {
+  background: color-mix(in srgb, var(--accent-text) 18%, transparent);
+}
+
+.ide-chat-settings-toggle .open {
+  transform: rotate(180deg);
+}
+
+.ide-chat-settings-toggle svg {
+  transition: transform 140ms ease;
 }
 
 .ide-chat-runner-selector {

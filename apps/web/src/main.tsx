@@ -4415,6 +4415,7 @@ function App() {
   const [ideChatPrompt, setIdeChatPrompt] = useState("");
   const [ideChatNotice, setIdeChatNotice] = useState("");
   const [ideChatSending, setIdeChatSending] = useState(false);
+  const [ideChatRunnerSettingsOpen, setIdeChatRunnerSettingsOpen] = useState(false);
   const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null);
   const [fileProperties, setFileProperties] = useState<ProjectFileEntry | null>(null);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
@@ -10412,6 +10413,16 @@ function App() {
     }
   }
 
+  function ideChatRunnerSummary() {
+    const selectedModel = modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel);
+    const modelLabel = modelOptionsForKind(jobKind).find((option) => option.value === selectedModel)?.label ?? selectedModel;
+    const runnerLabel = RUNNER_OPTIONS.find((option) => option.value === jobKind)?.label ?? jobKind;
+    const reasoning = reasoningValueForKind(jobKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort);
+    const reasoningLabel = REASONING_OPTIONS.find((option) => option.value === reasoning)?.label ?? reasoning;
+    const speedLabel = SPEED_OPTIONS.find((option) => option.value === codexSpeed)?.label ?? codexSpeed;
+    return [runnerLabel, modelLabel, reasoningLabel, jobKind === "codex" ? speedLabel : ""].filter(Boolean).join(" · ");
+  }
+
   function renderIdeChatRunnerSelector() {
     const currentModelOptions = modelOptionsForKind(jobKind);
     const selectedModel = modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel);
@@ -12541,11 +12552,29 @@ function App() {
                         }
                       }}
                     />
-                    <button disabled={!ideChatPrompt.trim() || ideChatSending || localCodexBusy || activeRunBusy} type="submit">
-                      {ideChatSending || localCodexBusy || activeRunBusy ? <RefreshCw className="spin" size={15} /> : <Play size={15} />}
-                      Send
-                    </button>
-                    {renderIdeChatRunnerSelector()}
+                    <div className="ide-chat-send-control">
+                      <button
+                        className="ide-chat-submit-button"
+                        disabled={!ideChatPrompt.trim() || ideChatSending || localCodexBusy || activeRunBusy}
+                        title={ideChatRunnerSummary()}
+                        type="submit"
+                      >
+                        {ideChatSending || localCodexBusy || activeRunBusy ? <RefreshCw className="spin" size={15} /> : <Rocket size={15} />}
+                        <span>Send</span>
+                        <small>{ideChatRunnerSummary()}</small>
+                      </button>
+                      <button
+                        aria-expanded={ideChatRunnerSettingsOpen}
+                        aria-label="Model settings"
+                        className="ide-chat-settings-toggle"
+                        title="Model settings"
+                        type="button"
+                        onClick={() => setIdeChatRunnerSettingsOpen((value) => !value)}
+                      >
+                        <ChevronDown className={ideChatRunnerSettingsOpen ? "open" : ""} size={16} />
+                      </button>
+                    </div>
+                    {ideChatRunnerSettingsOpen && renderIdeChatRunnerSelector()}
                   </form>
                 </aside>
               )}
