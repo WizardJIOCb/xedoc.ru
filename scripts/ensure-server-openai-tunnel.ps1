@@ -122,6 +122,13 @@ if ($NoRestart) {
     Write-Warn "Stopping stale runner PowerShell PID $($_.ProcessId)"
     Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
   }
+
+  $remoteSocksPort = ($RemoteSocksBind -split ":")[-1]
+  if ($remoteSocksPort -match "^\d+$") {
+    Write-Step "Clearing stale server reverse SOCKS listener"
+    $cleanupOutput = & $ssh $SshHost "fuser -k $remoteSocksPort/tcp >/dev/null 2>&1 || true" 2>&1
+    $cleanupOutput | ForEach-Object { Write-Host $_ }
+  }
 }
 
 Start-ScheduledTask -TaskName $TaskName
@@ -169,7 +176,8 @@ systemctl is-active codex-agent-linux.service || true
 
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-$remoteOutput = & $ssh $SshHost $remoteCheck 2>&1
+$remoteCheckLf = $remoteCheck -replace "`r`n", "`n"
+$remoteOutput = $remoteCheckLf | & $ssh $SshHost "bash" "-s" 2>&1
 $remoteExit = $LASTEXITCODE
 $ErrorActionPreference = $previousErrorActionPreference
 $remoteOutput | ForEach-Object { Write-Host $_ }

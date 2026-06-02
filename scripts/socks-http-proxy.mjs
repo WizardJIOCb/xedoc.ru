@@ -44,22 +44,26 @@ function createReader(socket) {
     }
   };
 
-  socket.on("data", (chunk) => {
+  const onData = (chunk) => {
     buffered = Buffer.concat([buffered, chunk]);
     drain();
-  });
+  };
 
-  socket.once("error", (error) => {
+  const onError = (error) => {
     while (reads.length > 0) {
       reads.shift().reject(error);
     }
-  });
+  };
 
-  socket.once("close", () => {
+  const onClose = () => {
     while (reads.length > 0) {
       reads.shift().reject(new Error("socket closed during SOCKS handshake"));
     }
-  });
+  };
+
+  socket.on("data", onData);
+  socket.once("error", onError);
+  socket.once("close", onClose);
 
   return {
     read(size) {
@@ -71,6 +75,11 @@ function createReader(socket) {
       return new Promise((resolve, reject) => {
         reads.push({ size, resolve, reject });
       });
+    },
+    dispose() {
+      socket.off("data", onData);
+      socket.off("error", onError);
+      socket.off("close", onClose);
     },
   };
 }
@@ -128,8 +137,16 @@ async function connectViaSocks(targetHost, targetPort) {
     throw new Error(`unsupported SOCKS address type: ${reply[3]}`);
   }
 
+  reader.dispose();
   socket.setTimeout(0);
   return socket;
+}
+
+function destroyQuietly(socket) {
+  if (!socket || socket.destroyed) {
+    return;
+  }
+  socket.destroy();
 }
 
 const server = http.createServer((req, res) => {
@@ -139,9 +156,21 @@ const server = http.createServer((req, res) => {
 
 server.on("connect", async (req, clientSocket, head) => {
   let upstream;
+  clientSocket.on("error", () => {
+    destroyQuietly(upstream);
+  });
+  clientSocket.on("close", () => {
+    destroyQuietly(upstream);
+  });
   try {
     const [targetHost, targetPort] = parseHostPort(req.url, 443);
     upstream = await connectViaSocks(targetHost, targetPort);
+    upstream.on("error", () => {
+      destroyQuietly(clientSocket);
+    });
+    upstream.on("close", () => {
+      destroyQuietly(clientSocket);
+    });
     clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     if (head.length > 0) {
       upstream.write(head);
@@ -150,10 +179,16 @@ server.on("connect", async (req, clientSocket, head) => {
     clientSocket.pipe(upstream);
   } catch (error) {
     console.error(`[proxy] CONNECT ${req.url || ""} failed:`, error.message);
-    clientSocket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+    if (!clientSocket.destroyed) {
+      clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+    }
     clientSocket.destroy();
     upstream?.destroy();
   }
+});
+
+server.on("clientError", (_error, socket) => {
+  socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
 });
 
 server.listen(listenPort, listenHost, () => {
