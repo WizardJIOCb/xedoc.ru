@@ -3918,21 +3918,28 @@ button.message-attachment.image:hover {
   gap: 10px;
 }
 
-.file-editor-head > div:first-child {
+.file-editor-title {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 2px;
 }
 
-.file-editor-head strong {
+.file-editor-project-name,
+.file-editor-current-file {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.file-editor-project-name {
+  font-size: 16px;
+  line-height: 1.15;
+}
+
 .file-editor-head small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 750;
 }
 

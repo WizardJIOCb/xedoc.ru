@@ -11521,9 +11521,9 @@ function App() {
         <div className={`file-editor-modal${fileEditorFullscreen ? " fullscreen" : ""}`} role="dialog" aria-modal="true" aria-label={fileEditor.path} onClick={closeProjectFileEditor}>
           <section className={`file-editor-panel ide ${editorThemeIsDark(editorTheme) ? "editor-shell-dark" : "editor-shell-light"}${fileEditorFullscreen ? " fullscreen" : ""}`} onClick={(event) => event.stopPropagation()}>
             <header className="file-editor-head">
-              <div>
-                <strong title={fileEditor.path}>{fileEditor.path}</strong>
-                <small>{fileEditor.repoName}</small>
+              <div className="file-editor-title">
+                <strong className="file-editor-project-name" title={fileEditor.repoName}>{fileEditor.repoName}</strong>
+                <small className="file-editor-current-file" title={fileEditor.path}>{fileEditor.path}</small>
               </div>
               <div className="file-editor-actions">
                 <button
