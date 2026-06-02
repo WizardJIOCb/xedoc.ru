@@ -673,6 +673,12 @@ type EditorCursorState = {
 
 type FolderViewMode = "list" | "grid";
 
+type FolderImagePreview = {
+  src: string;
+  loading: boolean;
+  error: string;
+};
+
 type ProjectFileEntry = {
   path: string;
   name: string;
@@ -4352,6 +4358,7 @@ function App() {
       return "list";
     }
   });
+  const [folderImagePreviews, setFolderImagePreviews] = useState<Record<string, FolderImagePreview>>({});
   const [editorFindQuery, setEditorFindQuery] = useState("");
   const [editorFindIndex, setEditorFindIndex] = useState(0);
   const [ideChatPanelOpen, setIdeChatPanelOpen] = useState(() => {
@@ -6442,6 +6449,54 @@ function App() {
       // Folder layout is local preference only.
     }
   }, [folderViewMode]);
+
+  useEffect(() => {
+    if (!selectedRepo || !selectedProjectFolderPath) return;
+    const imageEntries = selectedProjectFolderItems
+      .filter((entry) => entry.type === "file" && imageMimeTypeFromPath(entry.path))
+      .slice(0, 80);
+    const missingEntries = imageEntries.filter((entry) => {
+      const key = `${selectedRepo.agentId}:${selectedRepo.id}:${entry.path}`;
+      return !folderImagePreviews[key]?.src && !folderImagePreviews[key]?.loading && !folderImagePreviews[key]?.error;
+    });
+    if (!missingEntries.length) return;
+    let cancelled = false;
+    setFolderImagePreviews((current) => {
+      const next = { ...current };
+      for (const entry of missingEntries) {
+        next[`${selectedRepo.agentId}:${selectedRepo.id}:${entry.path}`] = { src: "", loading: true, error: "" };
+      }
+      return next;
+    });
+    for (const entry of missingEntries) {
+      const key = `${selectedRepo.agentId}:${selectedRepo.id}:${entry.path}`;
+      void api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/read?path=${encodeURIComponent(entry.path)}`)
+        .then(async (response) => {
+          const data = await response.json().catch(() => ({}));
+          if (cancelled) return;
+          const mimeType = data.mimeType || imageMimeTypeFromPath(entry.path);
+          const src = response.ok && data.binary && data.dataBase64 && mimeType.startsWith("image/")
+            ? `data:${mimeType};base64,${data.dataBase64}`
+            : "";
+          setFolderImagePreviews((current) => ({
+            ...current,
+            [key]: src
+              ? { src, loading: false, error: "" }
+              : { src: "", loading: false, error: data.error || "Preview unavailable" }
+          }));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setFolderImagePreviews((current) => ({
+            ...current,
+            [key]: { src: "", loading: false, error: "Preview unavailable" }
+          }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProjectFolderItems, selectedProjectFolderPath, selectedRepo]);
 
   useEffect(() => {
     if (!fileEditor) return undefined;
@@ -11583,6 +11638,9 @@ function App() {
           <div className={`folder-view-items ${folderViewMode}`}>
             {selectedProjectFolderItems.map((entry) => {
               const directory = entry.type === "directory";
+              const image = !directory && Boolean(imageMimeTypeFromPath(entry.path));
+              const previewKey = selectedRepo ? `${selectedRepo.agentId}:${selectedRepo.id}:${entry.path}` : "";
+              const preview = previewKey ? folderImagePreviews[previewKey] : undefined;
               return (
                 <button
                   className={`folder-view-item ${entry.type}`}
@@ -11602,7 +11660,13 @@ function App() {
                     else void openProjectFile(entry.path);
                   }}
                 >
-                  {directory
+                  {image ? (
+                    <span className={`folder-view-thumb${preview?.loading ? " loading" : ""}`}>
+                      {preview?.src
+                        ? <img alt="" loading="lazy" src={preview.src} />
+                        : renderFileTreeFileIcon(entry)}
+                    </span>
+                  ) : directory
                     ? renderFileTreeDirectoryIcon(entry, Boolean(expandedProjectFolders[entry.path]))
                     : renderFileTreeFileIcon(entry)}
                   <span>{entry.name}</span>
