@@ -1576,12 +1576,88 @@ function jobDurationSeconds(job: Job) {
   return Math.max(0, Math.floor((finish - start) / 1000));
 }
 
+const DIFF_COUNT_ANIMATION_MS = 340;
+
+function AnimatedNumber({
+  value,
+  className = "",
+  prefix = "",
+  suffix = ""
+}: {
+  value: number;
+  className?: string;
+  prefix?: string;
+  suffix?: string;
+}) {
+  const safeValue = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+  const [displayValue, setDisplayValue] = useState(safeValue);
+  const displayValueRef = useRef(safeValue);
+  const frameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    const startValue = displayValueRef.current;
+    const endValue = safeValue;
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (startValue === endValue || prefersReducedMotion) {
+      displayValueRef.current = endValue;
+      setDisplayValue(endValue);
+      return undefined;
+    }
+    const startedAt = window.performance.now();
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / DIFF_COUNT_ANIMATION_MS);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const nextValue = Math.round(startValue + (endValue - startValue) * eased);
+      displayValueRef.current = nextValue;
+      setDisplayValue(nextValue);
+      if (progress < 1) {
+        frameRef.current = window.requestAnimationFrame(animate);
+      } else {
+        frameRef.current = null;
+      }
+    };
+    frameRef.current = window.requestAnimationFrame(animate);
+    return () => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, [safeValue]);
+
+  return (
+    <span className={`animated-number ${className}`.trim()} key={`${prefix}${safeValue}${suffix}`}>
+      {prefix && <span className="animated-number-sign">{prefix}</span>}
+      <span className="animated-number-value">{displayValue}</span>
+      {suffix && <span className="animated-number-suffix">{suffix}</span>}
+    </span>
+  );
+}
+
+function AnimatedDiffNumber({ value, type }: { value: number; type: "added" | "deleted" }) {
+  return (
+    <AnimatedNumber
+      className={`diff-${type}`}
+      prefix={type === "added" ? "+" : "-"}
+      value={value}
+    />
+  );
+}
+
+function AnimatedFileCount({ value }: { value: number }) {
+  return <AnimatedNumber className="diff-files" suffix="files" value={value} />;
+}
+
 function renderDiffRowMeta(row: DiffRow) {
   if (row.added !== null && row.deleted !== null && (row.added || row.deleted)) {
     return (
       <>
-        <span className="diff-added">+{row.added}</span>
-        <span className="diff-deleted">-{row.deleted}</span>
+        <AnimatedDiffNumber type="added" value={row.added} />
+        <AnimatedDiffNumber type="deleted" value={row.deleted} />
       </>
     );
   }
@@ -9039,8 +9115,8 @@ function App() {
               <strong>Edited {summary.files} {summary.files === 1 ? "file" : "files"}</strong>
               <small>
                 {durationSeconds > 0 && <span className="duration">Worked for {formatDuration(durationSeconds)}</span>}
-                {summary.added !== null && <span className="added">+{summary.added}</span>}
-                {summary.deleted !== null && <span className="deleted">-{summary.deleted}</span>}
+                {summary.added !== null && <AnimatedDiffNumber type="added" value={summary.added} />}
+                {summary.deleted !== null && <AnimatedDiffNumber type="deleted" value={summary.deleted} />}
               </small>
             </div>
           </div>
@@ -9260,9 +9336,9 @@ function App() {
                 <strong>{jobProgressMessage(activeProgress, runnerLabel)}</strong>
               </div>
               <div className="progress-stats">
-                <span>{activeProgress.filesChanged ?? 0} files</span>
-                <span>+{activeProgress.added ?? 0}</span>
-                <span>-{activeProgress.deleted ?? 0}</span>
+                <AnimatedFileCount value={activeProgress.filesChanged ?? 0} />
+                <AnimatedDiffNumber type="added" value={activeProgress.added ?? 0} />
+                <AnimatedDiffNumber type="deleted" value={activeProgress.deleted ?? 0} />
               </div>
             </div>
             <div className="progress-files">
@@ -9271,8 +9347,8 @@ function App() {
                   <div key={file.path}>
                     <span>{file.path}</span>
                     <small className="diff-meta">
-                      <span className="diff-added">+{file.added}</span>
-                      <span className="diff-deleted">-{file.deleted}</span>
+                      <AnimatedDiffNumber type="added" value={file.added} />
+                      <AnimatedDiffNumber type="deleted" value={file.deleted} />
                     </small>
                   </div>
                 ))

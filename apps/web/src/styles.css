@@ -5782,14 +5782,6 @@ h2 > strong {
   color: var(--muted);
 }
 
-.codex-change-title small .added {
-  color: var(--accent-2);
-}
-
-.codex-change-title small .deleted {
-  color: var(--danger);
-}
-
 .change-icon {
   width: 38px;
   height: 38px;
@@ -5942,16 +5934,69 @@ h2 > strong {
   white-space: nowrap;
 }
 
-.diff-meta .diff-added {
+.animated-number {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 1px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  animation: animated-number-pop 260ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.animated-number-sign {
+  min-width: 0.7ch;
+}
+
+.animated-number-value {
+  min-width: 1ch;
+  text-align: right;
+}
+
+.animated-number-suffix {
+  margin-left: 3px;
+  color: var(--muted);
+}
+
+.diff-meta .animated-number {
+  min-width: 3ch;
+  justify-content: flex-end;
+}
+
+.diff-added {
   color: var(--accent-2);
 }
 
-.diff-meta .diff-deleted {
+.diff-deleted {
   color: var(--danger);
+}
+
+.diff-files {
+  color: var(--text);
 }
 
 .diff-meta .diff-neutral {
   color: var(--muted);
+}
+
+@keyframes animated-number-pop {
+  from {
+    opacity: 0.58;
+    transform: translateY(0.18em) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animated-number {
+    animation: none;
+  }
 }
 
 .show-more-files {
@@ -6070,7 +6115,7 @@ h2 > strong {
   border-top: 1px solid var(--line);
 }
 
-.progress-files span {
+.progress-files div > span {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
@@ -6081,6 +6126,18 @@ h2 > strong {
 .progress-files small {
   color: var(--accent-2);
   font-weight: 800;
+}
+
+.codex-change-title small .diff-added,
+.codex-change-file-row .diff-added,
+.progress-files .diff-added {
+  color: var(--accent-2);
+}
+
+.codex-change-title small .diff-deleted,
+.codex-change-file-row .diff-deleted,
+.progress-files .diff-deleted {
+  color: var(--danger);
 }
 
 .progress-wrap.empty .progress-panel,
@@ -6407,7 +6464,7 @@ h2 > strong {
   font-weight: 700;
 }
 
-.progress-stats span,
+.progress-stats > span,
 .metric-grid div {
   padding: 7px 9px;
   border-radius: 7px;
@@ -6415,6 +6472,18 @@ h2 > strong {
   border: 1px solid var(--line);
   font-size: 12px;
   font-weight: 800;
+}
+
+.progress-stats > .diff-added {
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent-2) 28%, var(--line));
+}
+
+.progress-stats > .diff-deleted {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, var(--panel));
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
 }
 
 pre {
@@ -7357,7 +7426,7 @@ button:disabled {
 
   .progress-panel,
   .progress-files div,
-  .progress-stats span,
+  .progress-stats > span,
   .metric-grid div {
     padding: 7px;
     font-size: 11px;
