@@ -11429,9 +11429,14 @@ function App() {
               {dirty && <i aria-label="Unsaved changes" />}
               <span
                 className="tab-close"
+                draggable={false}
                 role="button"
                 tabIndex={0}
                 title="Close tab"
+                onDragStart={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
                 onClick={(event) => {
                   event.stopPropagation();
                   closeProjectFileTab(tab);

@@ -4419,11 +4419,13 @@ button.message-attachment.image:hover {
   place-items: center;
   border-radius: 5px;
   color: var(--muted);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .tab-close:hover {
   color: var(--text);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
 }
 
 .file-editor-workspace {
@@ -4523,6 +4525,11 @@ button.message-attachment.image:hover {
   background: transparent;
   font: inherit;
   font-size: 13px;
+}
+
+.file-tree-search input:focus {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .file-editor-search > span {
