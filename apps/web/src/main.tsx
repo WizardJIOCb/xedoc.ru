@@ -23,8 +23,24 @@ import {
   Database,
   Download,
   ExternalLink,
+  Braces,
+  CodeXml,
+  File as FileIcon,
+  FileArchive,
+  FileCode2,
+  FileCog,
+  FileImage,
+  FileJson2,
   FilePenLine,
+  FileTerminal,
+  FileText,
+  FileType,
+  Folder,
+  FolderArchive,
+  FolderCode,
   FolderGit2,
+  FolderOpen,
+  FolderOpenDot,
   Github,
   GitBranch,
   KeyRound,
@@ -42,6 +58,7 @@ import {
   PanelLeftOpen,
   Play,
   Plus,
+  Package,
   RefreshCw,
   Rocket,
   Save,
@@ -1086,6 +1103,96 @@ function repoKeyFor(repo: Pick<Repo, "agentId" | "id">) {
 
 function normalizeProjectFilePath(path: string) {
   return path.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "");
+}
+
+function projectFileLeaf(path: string) {
+  return normalizeProjectFilePath(path).split("/").filter(Boolean).pop() ?? path;
+}
+
+function projectFileExtension(path: string) {
+  const name = projectFileLeaf(path).toLowerCase();
+  if (!name || (name.startsWith(".") && !name.slice(1).includes("."))) return "";
+  const dotIndex = name.lastIndexOf(".");
+  return dotIndex > 0 ? name.slice(dotIndex + 1) : "";
+}
+
+function fileTreeIconShell(kind: string, icon: React.ReactNode) {
+  return <span aria-hidden="true" className={`file-tree-icon ${kind}`}>{icon}</span>;
+}
+
+function renderFileTreeFileIcon(entry: ProjectFileEntry) {
+  const lowerPath = normalizeProjectFilePath(entry.path).toLowerCase();
+  const name = projectFileLeaf(entry.path).toLowerCase();
+  const extension = projectFileExtension(entry.path);
+  if (name === "package.json" || name === "package-lock.json" || name === "pnpm-lock.yaml" || name === "yarn.lock") {
+    return fileTreeIconShell("package", <Package size={14} />);
+  }
+  if (name === "dockerfile" || name.startsWith("docker-compose")) {
+    return fileTreeIconShell("terminal", <FileTerminal size={14} />);
+  }
+  if (
+    name.startsWith(".env") ||
+    name.startsWith(".git") ||
+    name.includes("config") ||
+    [".npmrc", ".prettierrc", ".eslintrc", "tsconfig.json", "vite.config.ts"].includes(name) ||
+    ["yaml", "yml", "toml", "ini"].includes(extension)
+  ) {
+    return fileTreeIconShell("config", <FileCog size={14} />);
+  }
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "ico"].includes(extension)) {
+    return fileTreeIconShell("image", <FileImage size={14} />);
+  }
+  if (["js", "jsx", "ts", "tsx", "mjs", "cjs", "vue", "svelte"].includes(extension)) {
+    return fileTreeIconShell("code", <FileCode2 size={14} />);
+  }
+  if (["css", "scss", "sass", "less", "styl"].includes(extension)) {
+    return fileTreeIconShell("style", <FileType size={14} />);
+  }
+  if (["html", "htm", "xml"].includes(extension)) {
+    return fileTreeIconShell("markup", <CodeXml size={14} />);
+  }
+  if (["json", "jsonc", "map"].includes(extension)) {
+    return fileTreeIconShell("json", <FileJson2 size={14} />);
+  }
+  if (["md", "mdx", "txt"].includes(extension) || ["readme", "license", "changelog"].some((prefix) => name.startsWith(prefix))) {
+    return fileTreeIconShell("text", <FileText size={14} />);
+  }
+  if (["sql", "db", "sqlite", "sqlite3"].includes(extension) || lowerPath.includes("/db/") || lowerPath.includes("/database/")) {
+    return fileTreeIconShell("database", <Database size={14} />);
+  }
+  if (["sh", "bash", "zsh", "ps1", "bat", "cmd"].includes(extension)) {
+    return fileTreeIconShell("terminal", <FileTerminal size={14} />);
+  }
+  if (["zip", "tar", "gz", "tgz", "rar", "7z"].includes(extension)) {
+    return fileTreeIconShell("archive", <FileArchive size={14} />);
+  }
+  if (["graphql", "gql"].includes(extension)) {
+    return fileTreeIconShell("data", <Braces size={14} />);
+  }
+  return fileTreeIconShell("default", <FileIcon size={14} />);
+}
+
+function renderFileTreeDirectoryIcon(entry: ProjectFileEntry, open: boolean) {
+  const name = projectFileLeaf(entry.path).toLowerCase();
+  if (["src", "app", "apps", "components", "server", "scripts", "lib", "packages"].includes(name)) {
+    return fileTreeIconShell("folder-code", <FolderCode size={14} />);
+  }
+  if (["public", "assets", "asset", "images", "img", "media", "static"].includes(name)) {
+    return fileTreeIconShell("folder-assets", <FolderOpenDot size={14} />);
+  }
+  if (["db", "data", "database", "migrations"].includes(name)) {
+    return fileTreeIconShell("folder-data", <Database size={14} />);
+  }
+  if (["dist", "build", "out", "coverage"].includes(name)) {
+    return fileTreeIconShell("folder-archive", <FolderArchive size={14} />);
+  }
+  if (["node_modules", "vendor"].includes(name)) {
+    return fileTreeIconShell("folder-package", <Package size={14} />);
+  }
+  if (name.startsWith(".") || ["config", "configs"].includes(name)) {
+    return fileTreeIconShell("folder-config", <FileCog size={14} />);
+  }
+  return fileTreeIconShell(open ? "folder-open" : "folder", open ? <FolderOpen size={14} /> : <Folder size={14} />);
 }
 
 function fileFolderAncestors(path: string) {
@@ -11370,8 +11477,8 @@ function App() {
                       onClick={() => openProjectFile(entry.path)}
                     >
                       <span className="file-tree-caret-spacer" aria-hidden="true" />
-                      <FilePenLine size={14} />
-                      <span>{entry.name}</span>
+                      {renderFileTreeFileIcon(entry)}
+                      <span className="file-tree-name">{entry.name}</span>
                       {entry.size !== undefined && <small>{formatBytes(entry.size)}</small>}
                     </button>
                   ) : (
@@ -11386,8 +11493,8 @@ function App() {
                       type="button"
                     >
                       <ChevronDown className="file-tree-caret" size={13} />
-                      <FolderGit2 size={14} />
-                      <span>{entry.name}</span>
+                      {renderFileTreeDirectoryIcon(entry, Boolean(expandedProjectFolders[entry.path]))}
+                      <span className="file-tree-name">{entry.name}</span>
                     </button>
                   ))}
                 </div>

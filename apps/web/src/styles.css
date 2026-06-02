@@ -4449,11 +4449,80 @@ button.message-attachment.image:hover {
   text-align: left;
 }
 
-.file-tree-row span {
+.file-tree-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.file-tree-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.file-tree-icon svg {
+  display: block;
+  stroke-width: 2;
+}
+
+.file-tree-icon.code,
+.file-tree-icon.folder-code {
+  color: #2f81f7;
+}
+
+.file-tree-icon.style {
+  color: #a855f7;
+}
+
+.file-tree-icon.markup {
+  color: #f97316;
+}
+
+.file-tree-icon.json,
+.file-tree-icon.data {
+  color: #d29922;
+}
+
+.file-tree-icon.image,
+.file-tree-icon.folder-assets {
+  color: #10a37f;
+}
+
+.file-tree-icon.database,
+.file-tree-icon.folder-data {
+  color: #06b6d4;
+}
+
+.file-tree-icon.terminal {
+  color: #7c3aed;
+}
+
+.file-tree-icon.config,
+.file-tree-icon.folder-config {
+  color: #64748b;
+}
+
+.file-tree-icon.package,
+.file-tree-icon.folder-package {
+  color: #b45309;
+}
+
+.file-tree-icon.text {
+  color: #4b5563;
+}
+
+.file-tree-icon.archive,
+.file-tree-icon.folder-archive {
+  color: #8b5cf6;
+}
+
+.file-tree-icon.folder,
+.file-tree-icon.folder-open {
+  color: #6b7280;
 }
 
 .file-tree-row small {
