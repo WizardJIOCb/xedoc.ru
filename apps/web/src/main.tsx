@@ -11641,9 +11641,14 @@ function App() {
               const image = !directory && Boolean(imageMimeTypeFromPath(entry.path));
               const previewKey = selectedRepo ? `${selectedRepo.agentId}:${selectedRepo.id}:${entry.path}` : "";
               const preview = previewKey ? folderImagePreviews[previewKey] : undefined;
+              const itemClassName = [
+                "folder-view-item",
+                entry.type,
+                image ? "previewable" : "compact"
+              ].join(" ");
               return (
                 <button
-                  className={`folder-view-item ${entry.type}`}
+                  className={itemClassName}
                   key={entry.path}
                   title={entry.path}
                   type="button"
