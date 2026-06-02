@@ -10036,9 +10036,13 @@ function App() {
           aria-haspopup="menu"
           className={ideMenuOpen === id ? "ide-menu-trigger active" : "ide-menu-trigger"}
           type="button"
-          onFocus={() => setIdeMenuOpen(id)}
-          onMouseEnter={() => setIdeMenuOpen(id)}
-          onClick={() => setIdeMenuOpen(id)}
+          onFocus={() => {
+            if (ideMenuOpen) setIdeMenuOpen(id);
+          }}
+          onMouseEnter={() => {
+            if (ideMenuOpen) setIdeMenuOpen(id);
+          }}
+          onClick={() => setIdeMenuOpen((current) => current === id ? "" : id)}
         >
           {label}
         </button>
