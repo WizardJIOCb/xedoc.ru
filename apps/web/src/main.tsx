@@ -9958,6 +9958,18 @@ function App() {
                   <span>Open</span>
                 </button>
                 <div className="menu-divider" />
+                <button
+                  disabled={!selectedRepo}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    setActionMenuOpen(false);
+                    void openProjectIde(activeChat ?? undefined);
+                  }}
+                >
+                  <FilePenLine size={16} />
+                  <span>Open Online Editor</span>
+                </button>
                 <button disabled={vscodeBusy} role="menuitem" type="button" onClick={() => runVscodeCommand("openSidebar")}>
                   <PanelLeftOpen size={16} />
                   <span>Open VS Code Codex</span>
