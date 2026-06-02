@@ -3668,6 +3668,10 @@ function App() {
   const syncRepoAgent = syncRepo ? agents.find((agent) => agent.id === syncRepo.agentId) : undefined;
   const onlineAgent = agents.find((agent) => agent.status === "online");
   const selectedAgent = selectedRepoAgent ?? onlineAgent ?? agents[0];
+  const defaultNewProjectAgent =
+    agents.find((agent) => agent.status === "online" && isLinuxAgent(agent))
+    ?? agents.find((agent) => isLinuxAgent(agent))
+    ?? selectedAgent;
   const syncControlAgent = syncRepoAgent ?? selectedAgent;
   const chromeAgent = view === "sync" ? syncControlAgent : selectedAgent;
   const chromeRepo = view === "sync" ? syncRepo : selectedRepo;
@@ -5073,8 +5077,9 @@ function App() {
   }
 
   function openNewProject() {
-    const defaults = defaultProjectValues("New Project", selectedAgent, currentUser);
-    const defaultMode = defaultDeployModeForAgent(selectedAgent);
+    const targetAgent = defaultNewProjectAgent;
+    const defaults = defaultProjectValues("New Project", targetAgent, currentUser);
+    const defaultMode = defaultDeployModeForAgent(targetAgent);
     setMobileMenuOpen(false);
     setView("projects");
     setRepoKey("");
@@ -5086,7 +5091,7 @@ function App() {
     setChatMenuId("");
     setProjectActionsOpen(false);
     setProjectName("New Project");
-    setProjectAgentId(selectedAgent?.id ?? agents[0]?.id ?? "");
+    setProjectAgentId(targetAgent?.id ?? agents[0]?.id ?? "");
     setProjectPath(defaults.path);
     setProjectGithubUrl(defaults.githubUrl);
     setProjectGitMode("blank");
@@ -5099,12 +5104,12 @@ function App() {
     setProjectDeployEnabled(true);
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
-    setProjectDeploySourceDir(defaultDeploySourceDirForAgent(selectedAgent, defaultMode));
+    setProjectDeploySourceDir(defaultDeploySourceDirForAgent(targetAgent, defaultMode));
     setProjectDeployRemoteSubdir("");
-    setProjectDeployBuildCommand(defaultDeployBuildCommandForAgent(selectedAgent, defaultMode));
+    setProjectDeployBuildCommand(defaultDeployBuildCommandForAgent(targetAgent, defaultMode));
     setProjectDeployCleanRemote(false);
-    setProjectDataLocation(isLinuxAgent(selectedAgent) ? "server" : "local");
-    setProjectDataPath(defaultProjectDataPath(isLinuxAgent(selectedAgent) ? "server" : "local", defaults.path, defaults.serverPath));
+    setProjectDataLocation(isLinuxAgent(targetAgent) ? "server" : "local");
+    setProjectDataPath(defaultProjectDataPath(isLinuxAgent(targetAgent) ? "server" : "local", defaults.path, defaults.serverPath));
     setProjectStartPrompt("");
     setOriginalProjectPath("");
     setProjectWizardStep("project");

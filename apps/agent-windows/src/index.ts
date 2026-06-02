@@ -1,6 +1,6 @@
 import os from "node:os";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import WebSocket from "ws";
 import { ServerToAgentSchema, type AgentToServer, type CodexUsage, type LocalCodexActivity, type ServerToAgent } from "@cmc/protocol";
 import { loadAgentConfig, saveAgentConfig } from "./config.js";
@@ -76,6 +76,12 @@ type LocalChatSyncOptions = {
   };
   minIntervalMs?: number;
   shouldContinue?: () => boolean;
+};
+
+type BuildCommand = {
+  command: string;
+  args: string[];
+  timeoutMs?: number;
 };
 
 function shortId(value: string | undefined): string {
@@ -581,6 +587,15 @@ async function gitSync(
     output.push("No staged changes to commit.");
   }
 
+  const head = await runGit(["rev-parse", "--verify", "HEAD"], 15000, [0, 128]);
+  if (head.exitCode !== 0) {
+    const entries = projectFolderEntries(repo.path);
+    const folderState = entries.length
+      ? "The configured project folder has no committed files."
+      : "The configured project folder is empty except for Git metadata.";
+    throw new Error(`${folderState} Launch is using ${repo.path}. Check Project settings or create the app in this folder before GitHub sync.`);
+  }
+
   const upstream = await runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], 15000, [0, 128]);
   let branch = (await runGit(["branch", "--show-current"], 15000)).stdout.trim();
   if (!branch) branch = "main";
@@ -593,7 +608,26 @@ async function gitSync(
   return [...output, status.stdout.trim() || "Git sync completed."].filter(Boolean).join("\n");
 }
 
-function inferBuildCommand(repoPath: string): { command: string; args: string[]; timeoutMs: number } | undefined {
+function projectFolderEntries(repoPath: string): string[] {
+  try {
+    return readdirSync(repoPath).filter((name) => name !== ".git");
+  } catch {
+    return [];
+  }
+}
+
+function packageCommandNeedsPackageJson(command: string): boolean {
+  return new Set(["npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd", "bun", "bun.cmd"])
+    .has(basename(command).toLowerCase());
+}
+
+function ensurePackageJsonForBuild(repoPath: string, build: BuildCommand): void {
+  if (!packageCommandNeedsPackageJson(build.command)) return;
+  if (existsSync(join(repoPath, "package.json"))) return;
+  throw new Error(`Configured project folder has no package.json: ${repoPath}. Point Project settings to the app folder or create the app in this folder before Build/Deploy.`);
+}
+
+function inferBuildCommand(repoPath: string): BuildCommand | undefined {
   const packageJsonPath = join(repoPath, "package.json");
   if (!existsSync(packageJsonPath)) return undefined;
   try {
@@ -614,6 +648,7 @@ async function buildProject(repoId: string): Promise<string> {
   if (!repo) throw new Error("Project not found in agent config.");
   const build = repo.deploy?.buildCommand ?? inferBuildCommand(repo.path);
   if (!build) throw new Error("Project build command is not configured and package.json has no build script.");
+  ensurePackageJsonForBuild(repo.path, build);
   const label = [build.command, ...build.args].join(" ");
   const result = await runCapture(build.command, build.args, repo.path, build.timeoutMs ?? 120000);
   const output = [`$ ${label}`];
@@ -656,7 +691,10 @@ async function deployProject(repoId: string): Promise<string> {
   };
 
   const build = repo.deploy.buildCommand;
-  if (build) await runStep([build.command, ...build.args].join(" "), build.command, build.args, repo.path, build.timeoutMs);
+  if (build) {
+    ensurePackageJsonForBuild(repo.path, build);
+    await runStep([build.command, ...build.args].join(" "), build.command, build.args, repo.path, build.timeoutMs);
+  }
 
   const sourceDir = resolveProjectPath(repo.path, repo.deploy.sourceDir);
   const remotePath = repo.serverPath.replace(/\/+$/g, "");
