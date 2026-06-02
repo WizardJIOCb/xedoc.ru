@@ -526,6 +526,22 @@ type PublicProject = {
   latestChats: Chat[];
 };
 
+type PublicProjectFile = {
+  project: {
+    id: string;
+    agentId: string;
+    name: string;
+    domain?: string | null;
+  };
+  path: string;
+  content: string;
+  binary: boolean;
+  mimeType?: string;
+  dataBase64?: string;
+  size?: number;
+  mtimeMs?: number;
+};
+
 type PublicChatPayload = {
   chat: Chat;
   messages: ChatMessage[];
@@ -2882,8 +2898,98 @@ function publicProfileSlugFromLocation() {
   return match ? decodeURIComponent(match[1] ?? "") : "";
 }
 
+function publicFileFromLocation() {
+  if (window.location.pathname !== "/" && window.location.pathname !== "") return null;
+  const params = new URLSearchParams(window.location.search);
+  const agentId = params.get("agent")?.trim() ?? "";
+  const repoId = params.get("repo")?.trim() ?? "";
+  const path = params.get("file")?.trim() ?? "";
+  if (!agentId || !repoId || !path) return null;
+  return { agentId, repoId, path };
+}
+
 function registrationOpenFromLocation() {
   return new URLSearchParams(window.location.search).get("cango") === "sure";
+}
+
+function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: string; path: string } }) {
+  const [file, setFile] = useState<PublicProjectFile | null>(null);
+  const [notice, setNotice] = useState("Загружаю публичный файл...");
+
+  useEffect(() => {
+    let cancelled = false;
+    api(`/api/public/projects/${encodeURIComponent(target.agentId)}/${encodeURIComponent(target.repoId)}/files/read?path=${encodeURIComponent(target.path)}`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) {
+          setNotice(data.error === "not_found" ? "Файл не найден или проект не публичный." : data.error || "Не удалось загрузить файл.");
+          return;
+        }
+        setFile(data as PublicProjectFile);
+        setNotice("");
+      })
+      .catch(() => {
+        if (!cancelled) setNotice("Не удалось загрузить файл.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [target.agentId, target.repoId, target.path]);
+
+  const name = (file?.path || target.path).split("/").pop() || target.path;
+  const projectLink = projectUrl(file?.project.domain ?? "");
+  const imageMimeType = file ? (file.mimeType || imageMimeTypeFromPath(file.path)) : "";
+  const imageSrc = file?.binary && file.dataBase64 && imageMimeType.startsWith("image/")
+    ? `data:${imageMimeType || "application/octet-stream"};base64,${file.dataBase64}`
+    : "";
+
+  return (
+    <main className="share-page public-file-page">
+      <header className="share-hero">
+        <div>
+          <img className="brand-logo" src="/favicon.svg" alt="" />
+          <span>xedoc.ru</span>
+        </div>
+        <h1>{name}</h1>
+        <p>
+          {file?.project.name ?? target.repoId}
+          {" · "}
+          {file?.path ?? target.path}
+          {file?.size !== undefined ? ` · ${formatBytes(file.size)}` : ""}
+        </p>
+        {projectLink && (
+          <a className="share-project-link" href={projectLink} target="_blank" rel="noreferrer">
+            <ExternalLink size={17} />
+            <span>Открыть проект</span>
+            <strong>{file?.project.domain}</strong>
+          </a>
+        )}
+      </header>
+
+      {notice && <section className="share-card">{notice}</section>}
+
+      {file && (
+        <section className="share-card public-file-viewer">
+          <span>Public file</span>
+          {imageSrc ? (
+            <figure className="public-file-image">
+              <img src={imageSrc} alt={name} />
+              <figcaption>{imageMimeType || "image"}{file.mtimeMs ? ` · ${formatDateTime(new Date(file.mtimeMs).toISOString())}` : ""}</figcaption>
+            </figure>
+          ) : file.binary ? (
+            <div className="public-file-empty">
+              <FileIcon size={24} />
+              <strong>Бинарный файл</strong>
+              <small>{file.mimeType || "application/octet-stream"}{file.size !== undefined ? ` · ${formatBytes(file.size)}` : ""}</small>
+            </div>
+          ) : (
+            <pre className="public-file-code">{file.content}</pre>
+          )}
+        </section>
+      )}
+    </main>
+  );
 }
 
 function SharedChatPage({ token }: { token: string }) {
@@ -3838,8 +3944,20 @@ function App() {
   const [expandedProjectFolders, setExpandedProjectFolders] = useState<Record<string, boolean>>({});
   const [editorFindQuery, setEditorFindQuery] = useState("");
   const [editorFindIndex, setEditorFindIndex] = useState(0);
-  const [ideChatPanelOpen, setIdeChatPanelOpen] = useState(true);
-  const [ideExplorerOpen, setIdeExplorerOpen] = useState(true);
+  const [ideChatPanelOpen, setIdeChatPanelOpen] = useState(() => {
+    try {
+      return localStorage.getItem("cmc.ideChatPanelOpen") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [ideExplorerOpen, setIdeExplorerOpen] = useState(() => {
+    try {
+      return localStorage.getItem("cmc.ideExplorerOpen") !== "0";
+    } catch {
+      return true;
+    }
+  });
   const [ideEditorPaneOpen, setIdeEditorPaneOpen] = useState(() => {
     try {
       return localStorage.getItem("cmc.ideEditorPaneOpen") !== "0";
@@ -3847,8 +3965,20 @@ function App() {
       return true;
     }
   });
-  const [ideFindOpen, setIdeFindOpen] = useState(true);
-  const [ideOutputOpen, setIdeOutputOpen] = useState(false);
+  const [ideFindOpen, setIdeFindOpen] = useState(() => {
+    try {
+      return localStorage.getItem("cmc.ideFindOpen") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [ideOutputOpen, setIdeOutputOpen] = useState(() => {
+    try {
+      return localStorage.getItem("cmc.ideOutputOpen") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [ideMenuOpen, setIdeMenuOpen] = useState("");
   const [ideCommandPaletteOpen, setIdeCommandPaletteOpen] = useState(false);
   const [ideCommandQuery, setIdeCommandQuery] = useState("");
@@ -5818,6 +5948,38 @@ function App() {
       // IDE layout is local preference only.
     }
   }, [ideEditorPaneOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.ideExplorerOpen", ideExplorerOpen ? "1" : "0");
+    } catch {
+      // IDE layout is local preference only.
+    }
+  }, [ideExplorerOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.ideFindOpen", ideFindOpen ? "1" : "0");
+    } catch {
+      // IDE layout is local preference only.
+    }
+  }, [ideFindOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.ideChatPanelOpen", ideChatPanelOpen ? "1" : "0");
+    } catch {
+      // IDE layout is local preference only.
+    }
+  }, [ideChatPanelOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.ideOutputOpen", ideOutputOpen ? "1" : "0");
+    } catch {
+      // IDE layout is local preference only.
+    }
+  }, [ideOutputOpen]);
 
   useEffect(() => {
     try {
@@ -11874,10 +12036,13 @@ function App() {
 
 const sharedToken = shareTokenFromLocation();
 const publicProfileSlug = publicProfileSlugFromLocation();
+const publicFileTarget = publicFileFromLocation();
 createRoot(document.getElementById("root")!).render(
   sharedToken
     ? <SharedChatPage token={sharedToken} />
     : publicProfileSlug
       ? <PublicProfilePage slug={publicProfileSlug} />
-      : <App />
+      : publicFileTarget
+        ? <PublicProjectFilePage target={publicFileTarget} />
+        : <App />
 );

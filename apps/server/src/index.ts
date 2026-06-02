@@ -3047,6 +3047,48 @@ async function createApp(): Promise<FastifyInstance> {
     return { chats: publicChatSummaries(agentId, repoId, project.user_id, 100) };
   });
 
+  app.get("/api/public/projects/:agentId/:repoId/files/read", async (request, reply) => {
+    const { agentId, repoId } = request.params as { agentId: string; repoId: string };
+    const project = db.prepare(`
+      SELECT r.id, r.agent_id, r.name, r.domain
+      FROM repos r
+      JOIN agents a ON a.id = r.agent_id
+      JOIN users u ON u.id = r.user_id
+      WHERE r.agent_id = ? AND r.id = ? AND r.visibility = 'public' AND u.blocked_at IS NULL
+    `).get(agentId, repoId) as Pick<RepoRow, "id" | "agent_id" | "name" | "domain"> | undefined;
+    if (!project) return reply.code(404).send({ error: "not_found" });
+    const parsed = ProjectFileReadQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_file", details: parsed.error.flatten() });
+    try {
+      const result = await requestAgentFile(agentId, {
+        type: "file.read",
+        requestId: id("req"),
+        repoId,
+        path: parsed.data.path
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error ?? "file_read_failed" });
+      reply.header("Cache-Control", "public, max-age=60");
+      return {
+        ok: true,
+        project: {
+          agentId: project.agent_id,
+          id: project.id,
+          name: project.name,
+          domain: project.domain
+        },
+        path: result.path ?? parsed.data.path,
+        content: result.content ?? "",
+        binary: Boolean(result.binary),
+        mimeType: result.mimeType,
+        dataBase64: result.dataBase64,
+        size: result.size,
+        mtimeMs: result.mtimeMs
+      };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
   app.get("/api/public/chats/:id", async (request, reply) => {
     const chatId = (request.params as { id: string }).id;
     const chat = db.prepare(`
