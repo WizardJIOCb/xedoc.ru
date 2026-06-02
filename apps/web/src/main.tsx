@@ -7709,9 +7709,11 @@ function App() {
         setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(loadingTab) ? failedTab : tab));
         return;
       }
+      const loadedPath = data.path || filePath;
+      const loadedSize = typeof data.size === "number" ? data.size : new Blob([String(data.content ?? "")]).size;
       const loadedTab: ProjectFileEditor = {
         ...loadingTab,
-        path: data.path || filePath,
+        path: loadedPath,
         content: data.content ?? "",
         originalContent: data.content ?? "",
         binary: Boolean(data.binary),
@@ -7720,7 +7722,7 @@ function App() {
         size: typeof data.size === "number" ? data.size : undefined,
         mtimeMs: typeof data.mtimeMs === "number" ? data.mtimeMs : undefined,
         loading: false,
-        notice: "",
+        notice: `Загружено ${projectFileLeaf(loadedPath)} · ${formatBytes(loadedSize)}`,
         error: ""
       };
       setFileEditor((current) => current && editorFileKey(current) === editorFileKey(loadingTab) ? loadedTab : current);
