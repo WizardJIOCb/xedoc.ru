@@ -4738,6 +4738,67 @@ button.message-attachment.image:hover {
   outline: 1px solid rgba(188, 139, 0, 0.55);
 }
 
+.file-editor-status-bar {
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--panel-2);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.file-editor-status-bar.ok {
+  color: #047857;
+}
+
+.file-editor-status-bar.warn {
+  color: #9a5b00;
+}
+
+.file-editor-status-bar.danger {
+  color: var(--danger);
+}
+
+.file-editor-status-bar.busy {
+  color: #0969da;
+}
+
+.file-editor-status-message,
+.file-editor-status-meta {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.file-editor-status-message {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-editor-status-meta {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  color: var(--muted);
+  overflow: hidden;
+}
+
+.file-editor-status-meta span {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
 .file-editor-textarea {
   flex: 1;
   min-height: 0;

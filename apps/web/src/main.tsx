@@ -665,6 +665,12 @@ type ProjectFileEditor = {
   error: string;
 };
 
+type EditorCursorState = {
+  lineNumber: number;
+  column: number;
+  selectionLength: number;
+};
+
 type ProjectFileEntry = {
   path: string;
   name: string;
@@ -2391,6 +2397,51 @@ function editorLanguageFromPath(path: string): string {
   return "plaintext";
 }
 
+function editorLanguageLabel(path: string) {
+  const language = editorLanguageFromPath(path);
+  const labels: Record<string, string> = {
+    bat: "Batch",
+    csharp: "C#",
+    clojure: "Clojure",
+    cpp: "C++",
+    css: "CSS",
+    dart: "Dart",
+    dockerfile: "Dockerfile",
+    elixir: "Elixir",
+    fsharp: "F#",
+    go: "Go",
+    graphql: "GraphQL",
+    html: "HTML",
+    ini: "INI",
+    java: "Java",
+    javascript: "JavaScript",
+    json: "JSON",
+    kotlin: "Kotlin",
+    less: "Less",
+    lua: "Lua",
+    markdown: "Markdown",
+    mdx: "MDX",
+    perl: "Perl",
+    php: "PHP",
+    plaintext: "Plain Text",
+    powershell: "PowerShell",
+    python: "Python",
+    r: "R",
+    ruby: "Ruby",
+    rust: "Rust",
+    scala: "Scala",
+    scss: "SCSS",
+    shell: "Shell",
+    sql: "SQL",
+    swift: "Swift",
+    typescript: "TypeScript",
+    vb: "Visual Basic",
+    xml: "XML",
+    yaml: "YAML"
+  };
+  return labels[language] ?? language;
+}
+
 type MonacoCodeEditorProps = {
   value: string;
   path: string;
@@ -2400,15 +2451,17 @@ type MonacoCodeEditorProps = {
   command?: IdeEditorCommandRequest | null;
   onChange: (value: string) => void;
   onSave?: () => void;
+  onCursorChange?: (cursor: EditorCursorState) => void;
 };
 
-function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, onChange, onSave }: MonacoCodeEditorProps) {
+function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, onChange, onSave, onCursorChange }: MonacoCodeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
   const decorationRef = useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
+  const onCursorChangeRef = useRef(onCursorChange);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -2417,6 +2470,10 @@ function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, o
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
+
+  useEffect(() => {
+    onCursorChangeRef.current = onCursorChange;
+  }, [onCursorChange]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -2456,11 +2513,28 @@ function MonacoCodeEditor({ value, path, theme, findQuery, findIndex, command, o
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       onSaveRef.current?.();
     });
+    const reportCursor = () => {
+      const position = editor.getPosition();
+      if (!position) return;
+      const selection = editor.getSelection();
+      const selectionLength = selection ? model.getValueInRange(selection).length : 0;
+      onCursorChangeRef.current?.({
+        lineNumber: position.lineNumber,
+        column: position.column,
+        selectionLength
+      });
+    };
+    reportCursor();
     const subscription = editor.onDidChangeModelContent(() => {
       onChangeRef.current(model.getValue());
+      reportCursor();
     });
+    const cursorSubscription = editor.onDidChangeCursorPosition(reportCursor);
+    const selectionSubscription = editor.onDidChangeCursorSelection(reportCursor);
     return () => {
       subscription.dispose();
+      cursorSubscription.dispose();
+      selectionSubscription.dispose();
       decorationRef.current?.clear();
       decorationRef.current = null;
       editor.dispose();
@@ -4021,6 +4095,7 @@ function App() {
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const [fileEditor, setFileEditor] = useState<ProjectFileEditor | null>(null);
   const [fileEditorTabs, setFileEditorTabs] = useState<ProjectFileEditor[]>([]);
+  const [editorCursor, setEditorCursor] = useState<EditorCursorState>({ lineNumber: 1, column: 1, selectionLength: 0 });
   const fileEditorTabDragKeyRef = useRef("");
   const [draggingFileEditorTabKey, setDraggingFileEditorTabKey] = useState("");
   const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
@@ -5778,6 +5853,10 @@ function App() {
   useEffect(() => {
     if (!csrf) loadAuthOAuthProviders();
   }, [csrf]);
+
+  useEffect(() => {
+    setEditorCursor({ lineNumber: 1, column: 1, selectionLength: 0 });
+  }, [fileEditor?.agentId, fileEditor?.repoId, fileEditor?.path]);
 
   useEffect(() => {
     if (!csrf || !isAdminRoute || currentUser?.role !== "admin") return;
@@ -11062,6 +11141,46 @@ function App() {
     );
   }
 
+  function renderFileEditorStatusBar(editor: ProjectFileEditor) {
+    const dirty = !editor.binary && editor.content !== editor.originalContent;
+    const status = editor.error
+      ? { text: editor.error, tone: "danger" }
+      : editor.loading
+        ? { text: "Загружаю файл...", tone: "busy" }
+        : editor.saving
+          ? { text: "Сохраняю файл...", tone: "busy" }
+          : dirty
+            ? { text: "Несохранённые изменения", tone: "warn" }
+            : editor.notice
+              ? { text: editor.notice, tone: "ok" }
+              : { text: "Сохранено", tone: "ok" };
+    const lineCount = editor.binary ? undefined : Math.max(1, editor.content.split(/\r\n|\r|\n/).length);
+    const charCount = editor.binary ? undefined : editor.content.length;
+    const size = editor.size !== undefined
+      ? editor.size
+      : editor.binary
+        ? undefined
+        : new Blob([editor.content]).size;
+    const meta = [
+      editor.binary ? (editor.mimeType || "Binary") : editorLanguageLabel(editor.path),
+      editor.binary ? "Read only" : "UTF-8",
+      !editor.binary ? `Стр ${editorCursor.lineNumber}` : "",
+      !editor.binary ? `Симв ${editorCursor.column}` : "",
+      !editor.binary && editorCursor.selectionLength ? `Выделено ${editorCursor.selectionLength}` : "",
+      lineCount !== undefined ? `Строк ${lineCount}` : "",
+      charCount !== undefined ? `Символов ${charCount}` : "",
+      size !== undefined ? formatBytes(size) : ""
+    ].filter(Boolean);
+    return (
+      <footer className={`file-editor-status-bar ${status.tone}`} aria-live="polite">
+        <span className="file-editor-status-message" title={status.text}>{status.text}</span>
+        <span className="file-editor-status-meta">
+          {meta.map((item, index) => <span key={`${index}:${item}`}>{item}</span>)}
+        </span>
+      </footer>
+    );
+  }
+
   function renderFileContextMenu() {
     if (!fileContextMenu || !selectedRepo) return null;
     const { entry, x, y } = fileContextMenu;
@@ -11994,8 +12113,6 @@ function App() {
                     <ArrowDown size={15} />
                   </button>
                 </div>}
-                {fileEditor.error && <div className="notice danger">{fileEditor.error}</div>}
-                {fileEditor.notice && <div className="notice success">{fileEditor.notice}</div>}
                 {fileEditor.loading ? (
                   <div className="empty">Загружаю файл...</div>
                 ) : fileEditor.binary && fileEditor.mimeType?.startsWith("image/") ? (
@@ -12016,6 +12133,7 @@ function App() {
                     theme={editorTheme}
                     value={fileEditor.content}
                     onSave={saveProjectFile}
+                    onCursorChange={setEditorCursor}
                     onChange={(value) => {
                       setFileEditor((current) => current ? { ...current, content: value, notice: "" } : current);
                       setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, content: value, notice: "" } : tab));
@@ -12093,6 +12211,7 @@ function App() {
               {renderFileContextMenu()}
               {renderFileProperties()}
             </div>
+            {renderFileEditorStatusBar(fileEditor)}
           </section>
         </div>
       )}
