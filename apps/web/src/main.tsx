@@ -1084,10 +1084,6 @@ function isIdeChatTextStyle(value: string | null): value is IdeChatTextStyle {
   return IDE_CHAT_TEXT_STYLE_OPTIONS.some((option) => option.value === value);
 }
 
-function editorThemeLabel(value: EditorTheme) {
-  return EDITOR_THEME_OPTIONS.find((option) => option.value === value)?.label ?? value;
-}
-
 function editorThemeIsDark(value: EditorTheme) {
   return value === "vs-dark" || value === "hc-black" || value === "xedoc-dark" || value === "xedoc-aurora" || value === "xedoc-midnight";
 }
@@ -11330,7 +11326,31 @@ function App() {
           <MessageSquare size={13} />
           {ideChatPanelOpen ? "Chat on" : "Chat off"}
         </button>
-        <span className="ide-menu-status">{editorThemeLabel(editorTheme)}</span>
+        <span className="ide-menu-status project" title={selectedRepo?.name ?? editor.repoName}>{selectedRepo?.name ?? editor.repoName}</span>
+        <div className="file-editor-actions in-menubar">
+          <button
+            className="secondary compact"
+            disabled={!csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent}
+            onClick={saveProjectFile}
+            type="button"
+          >
+            <Save size={15} />
+            {editor.saving ? "Saving" : "Save"}
+          </button>
+          <button
+            aria-label={fileEditorFullscreen ? "Exit full screen" : "Open editor full screen"}
+            aria-pressed={fileEditorFullscreen}
+            className="icon tiny"
+            onClick={() => setFileEditorFullscreen((value) => !value)}
+            title={fileEditorFullscreen ? "Exit full screen (F11)" : "Full screen (F11)"}
+            type="button"
+          >
+            {fileEditorFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+          <button aria-label="Close file editor" className="icon tiny" onClick={closeProjectFileEditor} type="button">
+            <X size={16} />
+          </button>
+        </div>
       </nav>
     );
   }
@@ -12315,36 +12335,6 @@ function App() {
       {fileEditor && (
         <div className={`file-editor-modal${fileEditorFullscreen ? " fullscreen" : ""}`} role="dialog" aria-modal="true" aria-label={fileEditor.path} onClick={closeProjectFileEditor}>
           <section className={`file-editor-panel ide ${editorThemeIsDark(editorTheme) ? "editor-shell-dark" : "editor-shell-light"}${fileEditorFullscreen ? " fullscreen" : ""}`} onClick={(event) => event.stopPropagation()}>
-            <header className="file-editor-head">
-              <div className="file-editor-title">
-                <strong className="file-editor-project-name" title={fileEditor.repoName}>{fileEditor.repoName}</strong>
-                <small className="file-editor-current-file" title={fileEditor.path}>{fileEditor.path}</small>
-              </div>
-              <div className="file-editor-actions">
-                <button
-                  className="secondary compact"
-                  disabled={!csrf || fileEditor.binary || fileEditor.loading || fileEditor.saving || fileEditor.content === fileEditor.originalContent}
-                  onClick={saveProjectFile}
-                  type="button"
-                >
-                  <Save size={15} />
-                  {fileEditor.saving ? "Saving" : "Save"}
-                </button>
-                <button
-                  aria-label={fileEditorFullscreen ? "Exit full screen" : "Open editor full screen"}
-                  aria-pressed={fileEditorFullscreen}
-                  className="icon tiny"
-                  onClick={() => setFileEditorFullscreen((value) => !value)}
-                  title={fileEditorFullscreen ? "Exit full screen (F11)" : "Full screen (F11)"}
-                  type="button"
-                >
-                  {fileEditorFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                </button>
-                <button aria-label="Close file editor" className="icon tiny" onClick={closeProjectFileEditor} type="button">
-                  <X size={16} />
-                </button>
-              </div>
-            </header>
             {renderIdeMenubar(fileEditor)}
             {renderIdeCommandPalette(fileEditor)}
             {ideEditorPaneOpen && renderFileEditorTabs()}

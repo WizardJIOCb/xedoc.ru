@@ -3985,43 +3985,16 @@ button.message-attachment.image:hover {
   color: var(--text);
 }
 
-.file-editor-head {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.file-editor-title {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.file-editor-project-name,
-.file-editor-current-file {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-editor-project-name {
-  font-size: 16px;
-  line-height: 1.15;
-}
-
-.file-editor-head small {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 750;
-}
-
 .file-editor-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.file-editor-actions.in-menubar {
+  flex: 0 0 auto;
+  gap: 5px;
+  margin-left: 2px;
 }
 
 .file-editor-actions .secondary.compact {
@@ -4030,6 +4003,35 @@ button.message-attachment.image:hover {
   justify-content: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+.file-editor-actions.in-menubar .secondary.compact {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  color: #d8d8d8;
+  background: #333333;
+  font-size: 11px;
+}
+
+.file-editor-actions.in-menubar .secondary.compact:hover:not(:disabled) {
+  color: #ffffff;
+  background: #3c3c3c;
+}
+
+.file-editor-actions.in-menubar .icon.tiny {
+  width: 28px;
+  height: 26px;
+  border-color: #4a4a4a;
+  border-radius: 4px;
+  color: #d8d8d8;
+  background: #333333;
+}
+
+.file-editor-actions.in-menubar .icon.tiny:hover {
+  color: #ffffff;
+  background: #3c3c3c;
 }
 
 .file-editor-menubar {
@@ -4219,11 +4221,19 @@ button.message-attachment.image:hover {
 }
 
 .ide-menu-status {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
   padding: 0 6px;
   color: #9d9d9d;
   font-size: 11px;
   font-weight: 750;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ide-menu-status.project {
+  color: #d8d8d8;
 }
 
 .ide-command-backdrop {
@@ -5231,6 +5241,8 @@ button.message-attachment.image:hover {
 }
 
 .ide-chat-submit-button > small {
+  position: relative;
+  top: 1px;
   min-width: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--accent-text) 78%, transparent);
@@ -7685,10 +7697,6 @@ button:disabled {
     height: calc(100dvh - 12px);
   }
 
-  .file-editor-head {
-    align-items: flex-start;
-  }
-
   .file-editor-menubar {
     align-items: center;
     overflow-x: auto;
@@ -7698,7 +7706,8 @@ button:disabled {
   .file-editor-menubar .ide-menu,
   .file-editor-menubar .ide-menu-brand,
   .file-editor-menubar .ide-menu-pill,
-  .file-editor-menubar .ide-menu-status {
+  .file-editor-menubar .ide-menu-status,
+  .file-editor-menubar .file-editor-actions {
     width: auto;
     flex: 0 0 auto;
     flex-wrap: nowrap;
