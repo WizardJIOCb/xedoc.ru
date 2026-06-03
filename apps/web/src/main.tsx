@@ -82,6 +82,7 @@ type CodexSpeed = "standard" | "fast";
 type JobKind = "codex" | "grok" | "gemini-cli" | "gemini";
 type RunnerAgent = "codex" | "grok" | "gemini";
 type ProjectVisibility = "private" | "public";
+type ProjectWriteAccess = "owner" | "everyone" | "users";
 type ProjectGitMode = "blank" | "github-create" | "clone";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
 type EditorTheme = "xedoc-light" | "xedoc-dark" | "xedoc-aurora" | "xedoc-midnight" | "vs-light" | "vs-dark" | "hc-black";
@@ -354,6 +355,8 @@ type Repo = {
   serverPath?: string;
   domain?: string;
   visibility?: ProjectVisibility;
+  writeAccess?: ProjectWriteAccess;
+  writeUsers?: string[];
   deploy?: DeployConfig;
   data?: ProjectDataConfig;
   currentBranch?: string;
@@ -998,7 +1001,16 @@ function fileShareUrl(repo: Pick<Repo, "agentId" | "id">, path: string) {
   url.searchParams.set("agent", repo.agentId);
   url.searchParams.set("repo", repo.id);
   url.searchParams.set("file", path);
+  url.searchParams.set("readonly", "1");
   return url.toString();
+}
+
+function projectWriteUsersFromText(value: string) {
+  return [...new Set(value
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  )];
 }
 
 function defaultProjectValues(name: string, agent?: Agent | null, user?: Pick<User, "id" | "email" | "nickname"> | null) {
@@ -2850,12 +2862,38 @@ function registrationOpenFromLocation() {
 }
 
 function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: string; path: string } }) {
+  const [activePath, setActivePath] = useState(target.path);
+  const [entries, setEntries] = useState<ProjectFileEntry[]>([]);
   const [file, setFile] = useState<PublicProjectFile | null>(null);
   const [notice, setNotice] = useState("Загружаю публичный файл...");
+  const [filesNotice, setFilesNotice] = useState("Загружаю файлы...");
 
   useEffect(() => {
     let cancelled = false;
-    api(`/api/public/projects/${encodeURIComponent(target.agentId)}/${encodeURIComponent(target.repoId)}/files/read?path=${encodeURIComponent(target.path)}`)
+    api(`/api/public/projects/${encodeURIComponent(target.agentId)}/${encodeURIComponent(target.repoId)}/files/list`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) {
+          setFilesNotice(data.error === "not_found" ? "Проект не публичный или не найден." : data.error || "Не удалось загрузить файлы.");
+          return;
+        }
+        setEntries(Array.isArray(data.entries) ? data.entries : []);
+        setFilesNotice("");
+      })
+      .catch(() => {
+        if (!cancelled) setFilesNotice("Не удалось загрузить файлы.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [target.agentId, target.repoId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNotice("Загружаю публичный файл...");
+    setFile(null);
+    api(`/api/public/projects/${encodeURIComponent(target.agentId)}/${encodeURIComponent(target.repoId)}/files/read?path=${encodeURIComponent(activePath)}`)
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
         if (cancelled) return;
@@ -2872,61 +2910,97 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
     return () => {
       cancelled = true;
     };
-  }, [target.agentId, target.repoId, target.path]);
+  }, [target.agentId, target.repoId, activePath]);
 
-  const name = (file?.path || target.path).split("/").pop() || target.path;
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("agent", target.agentId);
+    url.searchParams.set("repo", target.repoId);
+    url.searchParams.set("file", activePath);
+    url.searchParams.set("readonly", "1");
+    window.history.replaceState(null, "", url);
+  }, [activePath, target.agentId, target.repoId]);
+
+  const name = (file?.path || activePath).split("/").pop() || activePath;
   const projectLink = projectUrl(file?.project.domain ?? "");
   const imageMimeType = file ? (file.mimeType || imageMimeTypeFromPath(file.path)) : "";
   const imageSrc = file?.binary && file.dataBase64 && imageMimeType.startsWith("image/")
     ? `data:${imageMimeType || "application/octet-stream"};base64,${file.dataBase64}`
     : "";
+  const visibleEntries = entries.filter((entry) => entry.type === "file").sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: "base" }));
 
   return (
-    <main className="share-page public-file-page">
-      <header className="share-hero">
-        <div>
-          <img className="brand-logo" src="/favicon.svg" alt="" />
-          <span>xedoc.ru</span>
-        </div>
-        <h1>{name}</h1>
-        <p>
-          {file?.project.name ?? target.repoId}
-          {" · "}
-          {file?.path ?? target.path}
-          {file?.size !== undefined ? ` · ${formatBytes(file.size)}` : ""}
-        </p>
-        {projectLink && (
-          <a className="share-project-link" href={projectLink} target="_blank" rel="noreferrer">
-            <ExternalLink size={17} />
-            <span>Открыть проект</span>
-            <strong>{file?.project.domain}</strong>
-          </a>
-        )}
-      </header>
-
-      {notice && <section className="share-card">{notice}</section>}
-
-      {file && (
-        <section className="share-card public-file-viewer">
-          <span>Public file</span>
-          {imageSrc ? (
-            <figure className="public-file-image">
-              <img src={imageSrc} alt={name} />
-              <figcaption>{imageMimeType || "image"}{file.mtimeMs ? ` · ${formatDateTime(new Date(file.mtimeMs).toISOString())}` : ""}</figcaption>
-            </figure>
-          ) : file.binary ? (
-            <div className="public-file-empty">
-              <FileIcon size={24} />
-              <strong>Бинарный файл</strong>
-              <small>{file.mimeType || "application/octet-stream"}{file.size !== undefined ? ` · ${formatBytes(file.size)}` : ""}</small>
-            </div>
-          ) : (
-            <React.Suspense fallback={<pre className="public-file-code">{file.content}</pre>}>
-              <MonacoReadOnlyCodeViewer path={file.path} value={file.content} />
-            </React.Suspense>
+    <main className="public-ide-page">
+      <section className="file-editor-panel ide public-readonly-ide">
+        <nav className="file-editor-menubar" aria-label="Xedoc IDE public menu">
+          <div className="ide-menu-brand">
+            <img src="/favicon.svg" alt="" />
+            <span>Xedoc IDE</span>
+          </div>
+          <span className="ide-menu-status project">Read-only public link</span>
+          {projectLink && (
+            <a className="ide-menu-pill" href={projectLink} target="_blank" rel="noreferrer">
+              <ExternalLink size={14} /> Open project site
+            </a>
           )}
-        </section>
-      )}
+        </nav>
+        <div className="file-editor-tabs" role="tablist" aria-label="Open public file">
+          <button className="file-editor-tab active" type="button">
+            <FilePenLine size={14} />
+            <span>{name}</span>
+          </button>
+        </div>
+        <div className="file-editor-workspace without-chat public-readonly-workspace">
+          <aside className="file-explorer" aria-label="Public project files">
+            <div className="file-explorer-head">
+              <h2>Files</h2>
+              <span className="public-readonly-badge">Read only</span>
+            </div>
+            <div className="file-tree">
+              {filesNotice && <div className="file-tree-empty">{filesNotice}</div>}
+              {!filesNotice && !visibleEntries.length && <div className="file-tree-empty">Файлы не найдены.</div>}
+              {visibleEntries.map((entry) => (
+                <button
+                  className={`file-tree-row file${normalizeProjectFilePath(entry.path) === normalizeProjectFilePath(activePath) ? " selected" : ""}`}
+                  key={entry.path}
+                  type="button"
+                  onClick={() => setActivePath(entry.path)}
+                >
+                  <span className="file-tree-caret-spacer" aria-hidden="true" />
+                  {renderFileTreeFileIcon(entry)}
+                  <span className="file-tree-name">{entry.path}</span>
+                  {entry.size !== undefined && <small>{formatBytes(entry.size)}</small>}
+                </button>
+              ))}
+            </div>
+          </aside>
+          <section className="file-editor-main">
+            {notice && <div className="empty">{notice}</div>}
+            {!notice && file && imageSrc ? (
+              <div className="image-preview-pane">
+                <img src={imageSrc} alt={name} />
+              </div>
+            ) : !notice && file?.binary ? (
+              <div className="image-preview-pane empty-preview">
+                <FileIcon size={26} />
+                <strong>Binary preview unavailable</strong>
+                <small>{file.mimeType || file.path}</small>
+              </div>
+            ) : !notice && file ? (
+              <React.Suspense fallback={<pre className="public-file-code">{file.content}</pre>}>
+                <MonacoReadOnlyCodeViewer path={file.path} value={file.content} />
+              </React.Suspense>
+            ) : null}
+          </section>
+        </div>
+        <footer className="file-editor-status-bar ok">
+          <span className="file-editor-status-message">{file?.project.name ?? target.repoId} · public read-only</span>
+          <span className="file-editor-status-meta">
+            <span>{file?.path ?? activePath}</span>
+            {file?.size !== undefined && <span>{formatBytes(file.size)}</span>}
+          </span>
+        </footer>
+      </section>
     </main>
   );
 }
@@ -3764,6 +3838,8 @@ function App() {
   const [projectServerPath, setProjectServerPath] = useState("");
   const [projectDomain, setProjectDomain] = useState("");
   const [projectVisibility, setProjectVisibility] = useState<ProjectVisibility>("private");
+  const [projectWriteAccess, setProjectWriteAccess] = useState<ProjectWriteAccess>("owner");
+  const [projectWriteUsersText, setProjectWriteUsersText] = useState("");
   const [projectDeployMode, setProjectDeployMode] = useState<"ssh" | "local">("ssh");
   const [projectDeploySshTarget, setProjectDeploySshTarget] = useState("");
   const [projectDeploySourceDir, setProjectDeploySourceDir] = useState("dist");
@@ -3964,6 +4040,7 @@ function App() {
   const [ideChatNotice, setIdeChatNotice] = useState("");
   const [ideChatSending, setIdeChatSending] = useState(false);
   const [ideChatRunnerSettingsOpen, setIdeChatRunnerSettingsOpen] = useState(false);
+  const [ideChatMenuOpen, setIdeChatMenuOpen] = useState(false);
   const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null);
   const [fileProperties, setFileProperties] = useState<ProjectFileEntry | null>(null);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
@@ -5531,6 +5608,8 @@ function App() {
     setProjectServerPath(defaults.serverPath);
     setProjectDomain(defaults.domain);
     setProjectVisibility("private");
+    setProjectWriteAccess("owner");
+    setProjectWriteUsersText("");
     setProjectDeployEnabled(true);
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
@@ -5563,6 +5642,8 @@ function App() {
     setProjectServerPath(formServerPath);
     setProjectDomain(repo.domain ?? "");
     setProjectVisibility(repo.visibility ?? "private");
+    setProjectWriteAccess(repo.writeAccess ?? "owner");
+    setProjectWriteUsersText((repo.writeUsers ?? []).join("\n"));
     setProjectDeployMode(deployMode);
     setProjectDeploySshTarget(repo.deploy?.sshTarget ?? "");
     setProjectDeploySourceDir(repo.deploy?.sourceDir ?? defaultDeploySourceDirForAgent(repoAgent, deployMode));
@@ -6586,6 +6667,7 @@ function App() {
     const normalizedDomain = normalizeProjectDomain(projectDomain);
     const deployConfig = projectDraftDeployConfig;
     const dataConfig = projectDraftDataConfig;
+    const projectWriteUsers = projectWriteUsersFromText(projectWriteUsersText);
     const nextGithubUrl = isNew && projectGitMode === "blank" ? "" : projectGithubUrl.trim();
     const body: Record<string, unknown> = isNew ? {
       agentId: targetAgent.id,
@@ -6602,6 +6684,8 @@ function App() {
       serverPath: effectiveProjectServerPath,
       domain: normalizedDomain,
       visibility: projectVisibility,
+      writeAccess: projectWriteAccess,
+      writeUsers: projectWriteUsers,
       deploy: deployConfig,
       data: dataConfig,
       defaultSandbox: sandbox
@@ -6615,6 +6699,8 @@ function App() {
       if (projectGithubUrl.trim() !== (selectedRepo?.githubUrl ?? "")) body.githubUrl = projectGithubUrl.trim();
       if (effectiveProjectServerPath !== (selectedRepo?.serverPath ?? "")) body.serverPath = effectiveProjectServerPath;
       if (normalizedDomain !== (selectedRepo?.domain ?? "")) body.domain = normalizedDomain;
+      if (projectWriteAccess !== (selectedRepo?.writeAccess ?? "owner")) body.writeAccess = projectWriteAccess;
+      if (JSON.stringify(projectWriteUsers) !== JSON.stringify(selectedRepo?.writeUsers ?? [])) body.writeUsers = projectWriteUsers;
       if (JSON.stringify(deployConfig) !== JSON.stringify(selectedRepo?.deploy ?? null)) body.deploy = deployConfig;
       if (JSON.stringify(dataConfig) !== JSON.stringify(selectedRepo?.data ?? null)) body.data = dataConfig;
       if (sandbox !== selectedRepo?.defaultSandbox) body.defaultSandbox = sandbox;
@@ -7610,6 +7696,14 @@ function App() {
     const url = fileShareUrl(selectedRepo, entry.path);
     await navigator.clipboard?.writeText(url).catch(() => undefined);
     setIdeChatNotice(`Ссылка на файл скопирована: ${url}`);
+  }
+
+  async function shareCurrentProjectFile() {
+    if (!selectedRepo || !fileEditor || selectedProjectFolderPath) return;
+    const url = fileShareUrl(selectedRepo, fileEditor.path);
+    await navigator.clipboard?.writeText(url).catch(() => undefined);
+    setIdeChatMenuOpen(false);
+    setIdeChatNotice(`Ссылка на текущий файл скопирована: ${url}`);
   }
 
   function downloadProjectEntry(entry: ProjectFileEntry) {
@@ -9188,6 +9282,24 @@ function App() {
                 <option value="public">Public: проект и его чаты видны в Search</option>
               </select>
             </label>
+            <label>
+              Write access
+              <select value={projectWriteAccess} onChange={(event) => setProjectWriteAccess(event.target.value as ProjectWriteAccess)}>
+                <option value="owner">Owner only: менять проект может только владелец</option>
+                <option value="everyone">All signed-in users: менять могут все авторизованные</option>
+                <option value="users">Specific users: менять могут только пользователи из списка</option>
+              </select>
+            </label>
+            {projectWriteAccess === "users" && (
+              <label>
+                Users allowed to write
+                <textarea
+                  placeholder="email или nickname, каждый с новой строки"
+                  value={projectWriteUsersText}
+                  onChange={(event) => setProjectWriteUsersText(event.target.value)}
+                />
+              </label>
+            )}
             <div className="project-settings-fieldset">
               <span>Default sandbox</span>
               <div className="segments">
@@ -9198,7 +9310,9 @@ function App() {
             </div>
             <div className="project-settings-summary">
               <div><span>Visibility</span><strong>{projectVisibility}</strong></div>
+              <div><span>Write access</span><strong>{projectWriteAccess === "users" ? `${projectWriteUsersFromText(projectWriteUsersText).length} users` : projectWriteAccess}</strong></div>
               <div><span>Default access</span><strong>{SANDBOX_LABELS[sandbox]}</strong></div>
+              <div><span>Public links</span><strong>read-only without login</strong></div>
             </div>
           </div>
         );
@@ -12502,9 +12616,27 @@ function App() {
                       <strong>{activeChat?.title || "Project chat"}</strong>
                       <small>{selectedRepo?.name || fileEditor.repoName}</small>
                     </div>
-                    <button className="icon tiny" type="button" onClick={toggleIdeChatPanel} title="Hide chat">
-                      <X size={15} />
-                    </button>
+                    <div className="ide-chat-header-actions">
+                      <button className="icon tiny" type="button" onClick={() => setIdeChatMenuOpen((value) => !value)} title="Chat menu">
+                        <MoreHorizontal size={15} />
+                      </button>
+                      <button className="icon tiny" type="button" onClick={toggleIdeChatPanel} title="Hide chat">
+                        <X size={15} />
+                      </button>
+                      {ideChatMenuOpen && (
+                        <div className="ide-chat-menu" role="menu">
+                          <button disabled={!fileEditor || Boolean(selectedProjectFolderPath)} role="menuitem" type="button" onClick={() => void shareCurrentProjectFile()}>
+                            <Link2 size={14} /> Поделиться этим файлом
+                          </button>
+                          <button role="menuitem" type="button" onClick={() => {
+                            setIdeChatMenuOpen(false);
+                            selectedRepo && openProjectSettings(selectedRepo);
+                          }}>
+                            <Settings size={14} /> Настройки доступа
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </header>
                   <div className="ide-chat-feed" ref={ideChatFeedRef} onScroll={updateIdeChatScrollDirection}>
                     {activeChat ? (

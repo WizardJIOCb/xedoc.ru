@@ -5,6 +5,8 @@ export type Sandbox = z.infer<typeof SandboxSchema>;
 
 export const ProjectVisibilitySchema = z.enum(["private", "public"]);
 export type ProjectVisibility = z.infer<typeof ProjectVisibilitySchema>;
+export const ProjectWriteAccessSchema = z.enum(["owner", "everyone", "users"]);
+export type ProjectWriteAccess = z.infer<typeof ProjectWriteAccessSchema>;
 
 export const JobStatusSchema = z.enum([
   "queued",
@@ -53,6 +55,8 @@ export const RepoInfoSchema = z.object({
   serverPath: z.string().max(260).optional(),
   domain: z.string().max(253).optional(),
   visibility: ProjectVisibilitySchema.optional(),
+  writeAccess: ProjectWriteAccessSchema.optional(),
+  writeUsers: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
   deploy: DeployConfigSchema.optional(),
   data: ProjectDataConfigSchema.optional(),
   currentBranch: z.string().optional(),
@@ -532,6 +536,8 @@ export const CreateProjectSchema = z.object({
   serverPath: z.string().max(260).optional(),
   domain: z.string().max(253).optional(),
   visibility: ProjectVisibilitySchema.default("private"),
+  writeAccess: ProjectWriteAccessSchema.default("owner"),
+  writeUsers: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
   deploy: DeployConfigSchema.nullish(),
   data: ProjectDataConfigSchema.nullish(),
   defaultSandbox: SandboxSchema.default("danger-full-access")
@@ -546,6 +552,8 @@ export const UpdateProjectSchema = z.object({
   serverPath: z.string().max(260).optional(),
   domain: z.string().max(253).optional(),
   visibility: ProjectVisibilitySchema.optional(),
+  writeAccess: ProjectWriteAccessSchema.optional(),
+  writeUsers: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
   deploy: DeployConfigSchema.nullish(),
   data: ProjectDataConfigSchema.nullish(),
   defaultSandbox: SandboxSchema.optional(),

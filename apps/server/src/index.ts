@@ -91,7 +91,7 @@ type AgentConnection = {
 
 const agents = new Map<string, AgentConnection>();
 const dispatchingAgents = new Set<string>();
-type AuthUser = Pick<UserRow, "id" | "role">;
+type AuthUser = Pick<UserRow, "id" | "role"> & Partial<Pick<UserRow, "email" | "nickname">>;
 type SyncedChat = Extract<AgentToServer, { type: "chat.sync" }>;
 type SyncedChatMessage = SyncedChat["messages"][number];
 const uiClients = new Set<{ user: AuthUser; send: (event: UiEvent) => void }>();
@@ -511,17 +511,55 @@ function adminStatsSeries(days = 30) {
 }
 
 function visibleAgentIds(user: AuthUser): string[] {
-  const rows = isAdmin(user)
-    ? db.prepare("SELECT id FROM agents").all() as Array<{ id: string }>
-    : db.prepare("SELECT id FROM agents WHERE user_id = ?").all(user.id) as Array<{ id: string }>;
-  return rows.map((row) => row.id);
+  if (isAdmin(user)) {
+    return (db.prepare("SELECT id FROM agents").all() as Array<{ id: string }>).map((row) => row.id);
+  }
+  const ownedRows = db.prepare("SELECT id FROM agents WHERE user_id = ?").all(user.id) as Array<{ id: string }>;
+  const ids = new Set(ownedRows.map((row) => row.id));
+  const repoRows = db.prepare(`
+    SELECT agent_id, id
+    FROM repos
+    WHERE user_id = ? OR write_access = 'everyone' OR write_access = 'users'
+  `).all(user.id) as Array<{ agent_id: string; id: string }>;
+  for (const row of repoRows) {
+    if (canAccessRepo(user, row.agent_id, row.id)) ids.add(row.agent_id);
+  }
+  return [...ids];
+}
+
+function safeJsonArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function canAccessRepo(user: AuthUser, agentId: string, repoId: string): boolean {
+  if (isAdmin(user)) return true;
   const row = db.prepare(`
-    SELECT 1 FROM repos r
-    WHERE r.agent_id = ? AND r.id = ? AND r.user_id = ?
-  `).get(agentId, repoId, user.id) as { 1: number } | undefined;
+    SELECT r.user_id, r.write_access, r.write_users_json
+    FROM repos r
+    WHERE r.agent_id = ? AND r.id = ?
+  `).get(agentId, repoId) as Pick<RepoRow, "user_id" | "write_access" | "write_users_json"> | undefined;
+  if (!row) return false;
+  if (row.user_id === user.id) return true;
+  if (row.write_access === "everyone") return true;
+  if (row.write_access !== "users") return false;
+  const resolvedUser = user.email
+    ? user
+    : db.prepare("SELECT email, nickname FROM users WHERE id = ?").get(user.id) as Pick<UserRow, "email" | "nickname"> | undefined;
+  if (!resolvedUser?.email) return false;
+  const allowed = safeJsonArray(row.write_users_json).map((item) => item.trim().toLowerCase()).filter(Boolean);
+  return allowed.includes(resolvedUser.email.toLowerCase()) || Boolean(resolvedUser.nickname && allowed.includes(resolvedUser.nickname.toLowerCase()));
+}
+
+function canOwnRepoSettings(user: AuthUser, agentId: string, repoId: string): boolean {
+  if (isAdmin(user)) return true;
+  const row = db.prepare("SELECT 1 FROM repos WHERE agent_id = ? AND id = ? AND user_id = ?")
+    .get(agentId, repoId, user.id) as { 1: number } | undefined;
   return Boolean(row);
 }
 
@@ -551,14 +589,13 @@ function canAccessPublicChat(chatId: string): boolean {
 
 function canAccessJob(user: AuthUser, jobId: string): boolean {
   const row = db.prepare(`
-    SELECT 1 FROM jobs j
-    JOIN repos r ON r.agent_id = j.agent_id AND r.id = j.repo_id
+    SELECT j.agent_id, j.repo_id, j.chat_id, c.user_id AS chat_user_id
+    FROM jobs j
     LEFT JOIN chats c ON c.id = j.chat_id
     WHERE j.id = ?
-      AND r.user_id = ?
-      AND (j.chat_id IS NULL OR c.user_id IS NULL OR c.user_id = ?)
-  `).get(jobId, user.id, user.id) as { 1: number } | undefined;
-  return Boolean(row);
+  `).get(jobId) as { agent_id: string; repo_id: string; chat_id: string | null; chat_user_id: string | null } | undefined;
+  if (!row || !canAccessRepo(user, row.agent_id, row.repo_id)) return false;
+  return !row.chat_id || row.chat_user_id === null || row.chat_user_id === user.id || isAdmin(user);
 }
 
 function eventAgentId(event: UiEvent): string | undefined {
@@ -815,11 +852,19 @@ function markAgentStatus(agentId: string, status: "online" | "offline"): void {
 
 function repoInfosForAgent(agentId: string, user?: AuthUser): RepoInfo[] {
   const rows = user
-    ? db.prepare("SELECT * FROM repos WHERE agent_id = ? AND user_id = ? ORDER BY name")
-      .all(agentId, user.id) as RepoRow[]
+    ? db.prepare(`
+        SELECT * FROM repos
+        WHERE agent_id = ?
+          AND (
+            user_id = ?
+            OR write_access = 'everyone'
+            OR write_access = 'users'
+          )
+        ORDER BY name
+      `).all(agentId, user.id) as RepoRow[]
     : db.prepare("SELECT * FROM repos WHERE agent_id = ? ORDER BY name")
       .all(agentId) as RepoRow[];
-  return rows.map(mapRepo);
+  return (user ? rows.filter((row) => canAccessRepo(user, row.agent_id, row.id)) : rows).map(mapRepo);
 }
 
 function safeDownloadName(path: string, mimeType: string | undefined): string {
@@ -920,15 +965,17 @@ function moveProjectRowsToAgent(
   repoId: string,
   patch: Extract<ServerToAgent, { type: "project.update" }>["patch"],
   visibility: ProjectVisibility,
-  ownerUserId: string | null
+  ownerUserId: string | null,
+  writeAccess = "owner",
+  writeUsersJson = "[]"
 ): void {
   const stamp = nowIso();
   const allowedSandboxes = patch.allowedSandboxes ?? ["read-only", "workspace-write", "danger-full-access"];
   db.exec("BEGIN");
   try {
     db.prepare(`
-      INSERT OR IGNORE INTO repos (id,user_id,agent_id,name,path_masked,github_url,server_path,domain,visibility,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT OR IGNORE INTO repos (id,user_id,agent_id,name,path_masked,github_url,server_path,domain,visibility,write_access,write_users_json,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       repoId,
       ownerUserId,
@@ -939,6 +986,8 @@ function moveProjectRowsToAgent(
       nullableText(patch.serverPath),
       nullableText(patch.domain),
       visibility,
+      writeAccess,
+      writeUsersJson,
       patch.deploy ? JSON.stringify(patch.deploy) : null,
       patch.data ? JSON.stringify(patch.data) : null,
       null,
@@ -957,6 +1006,8 @@ function moveProjectRowsToAgent(
           server_path = ?,
           domain = ?,
           visibility = ?,
+          write_access = ?,
+          write_users_json = ?,
           deploy_json = ?,
           data_json = ?,
           default_sandbox = ?,
@@ -971,6 +1022,8 @@ function moveProjectRowsToAgent(
       nullableText(patch.serverPath),
       nullableText(patch.domain),
       visibility,
+      writeAccess,
+      writeUsersJson,
       patch.deploy ? JSON.stringify(patch.deploy) : null,
       patch.data ? JSON.stringify(patch.data) : null,
       patch.defaultSandbox ?? "danger-full-access",
@@ -1000,6 +1053,8 @@ function updateControllerProjectSettings(
   repoId: string,
   patch: {
     visibility?: ProjectVisibility;
+    writeAccess?: "owner" | "everyone" | "users";
+    writeUsers?: string[];
     deploy?: DeployConfig | null;
     data?: ProjectDataConfig | null;
   },
@@ -1010,6 +1065,14 @@ function updateControllerProjectSettings(
   if (patch.visibility) {
     assignments.push("visibility = ?");
     values.push(patch.visibility);
+  }
+  if (patch.writeAccess) {
+    assignments.push("write_access = ?");
+    values.push(patch.writeAccess);
+  }
+  if (patch.writeUsers) {
+    assignments.push("write_users_json = ?");
+    values.push(JSON.stringify(patch.writeUsers));
   }
   if (fields.deploy) {
     assignments.push("deploy_json = ?");
@@ -3100,6 +3163,32 @@ async function createApp(): Promise<FastifyInstance> {
     }
   });
 
+  app.get("/api/public/projects/:agentId/:repoId/files/list", async (request, reply) => {
+    const { agentId, repoId } = request.params as { agentId: string; repoId: string };
+    const project = db.prepare(`
+      SELECT r.id
+      FROM repos r
+      JOIN users u ON u.id = r.user_id
+      WHERE r.agent_id = ? AND r.id = ? AND r.visibility = 'public' AND u.blocked_at IS NULL
+    `).get(agentId, repoId) as Pick<RepoRow, "id"> | undefined;
+    if (!project) return reply.code(404).send({ error: "not_found" });
+    const parsed = ProjectFileListQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_path", details: parsed.error.flatten() });
+    try {
+      const result = await requestAgentFile(agentId, {
+        type: "file.list",
+        requestId: id("req"),
+        repoId,
+        path: parsed.data.path ?? ""
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error || "file_list_failed" });
+      reply.header("Cache-Control", "public, max-age=30");
+      return { entries: result.entries ?? [] };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
   app.get("/api/public/chats/:id", async (request, reply) => {
     const chatId = (request.params as { id: string }).id;
     const chat = db.prepare(`
@@ -3507,8 +3596,11 @@ async function createApp(): Promise<FastifyInstance> {
   app.get("/api/agents", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth) return;
-    const rows = db.prepare(`SELECT id,user_id,name,hostname,os,agent_version,codex_version,grok_version,git_version,codex_usage_json,grok_usage_json,local_activity_json,status,current_job_id,last_seen_at,created_at FROM agents ${agentAccessWhere(auth.user)} ORDER BY created_at`)
-      .all(...agentAccessArgs(auth.user)) as AgentRow[];
+    const visibleIds = visibleAgentIds(auth.user);
+    if (visibleIds.length === 0) return { agents: [] };
+    const placeholders = visibleIds.map(() => "?").join(",");
+    const rows = db.prepare(`SELECT id,user_id,name,hostname,os,agent_version,codex_version,grok_version,git_version,codex_usage_json,grok_usage_json,local_activity_json,status,current_job_id,last_seen_at,created_at FROM agents WHERE id IN (${placeholders}) ORDER BY created_at`)
+      .all(...visibleIds) as AgentRow[];
     return {
       agents: rows.map((row) => {
         const online = agents.has(row.id);
@@ -3530,10 +3622,10 @@ async function createApp(): Promise<FastifyInstance> {
     const rows = db.prepare(`
       SELECT r.* FROM repos r
       JOIN agents a ON a.id = r.agent_id
-      WHERE r.user_id = ?
+      WHERE r.user_id = ? OR r.write_access = 'everyone' OR r.write_access = 'users'
       ORDER BY r.name
     `).all(auth.user.id) as RepoRow[];
-    return { repos: rows.map((row) => ({ ...mapRepo(row), agentId: row.agent_id, updatedAt: row.updated_at })) };
+    return { repos: rows.filter((row) => canAccessRepo(auth.user, row.agent_id, row.id)).map((row) => ({ ...mapRepo(row), agentId: row.agent_id, updatedAt: row.updated_at })) };
   });
 
   app.post("/api/projects", async (request, reply) => {
@@ -3577,8 +3669,8 @@ async function createApp(): Promise<FastifyInstance> {
       });
       if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_create_failed" });
       if (result.repos) upsertRepos(parsed.data.agentId, result.repos);
-      db.prepare("UPDATE repos SET user_id = ?, visibility = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
-        .run(auth.user.id, parsed.data.visibility, nowIso(), parsed.data.agentId, repoId);
+      db.prepare("UPDATE repos SET user_id = ?, visibility = ?, write_access = ?, write_users_json = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
+        .run(auth.user.id, parsed.data.visibility, parsed.data.writeAccess, JSON.stringify(parsed.data.writeUsers), nowIso(), parsed.data.agentId, repoId);
       return reply.code(201).send({ repoId, githubUrl });
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
@@ -3589,10 +3681,10 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
-    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canOwnRepoSettings(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = UpdateProjectSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_project", details: parsed.error.flatten() });
-    const { visibility, deploy, data, targetAgentId, ...agentPatch } = parsed.data;
+    const { visibility, writeAccess, writeUsers, deploy, data, targetAgentId, ...agentPatch } = parsed.data;
     const deployProvided = Object.prototype.hasOwnProperty.call(parsed.data, "deploy");
     const dataProvided = Object.prototype.hasOwnProperty.call(parsed.data, "data");
     const agentPatchKeys = Object.keys(agentPatch).filter((key) => (agentPatch as Record<string, unknown>)[key] !== undefined);
@@ -3622,7 +3714,7 @@ async function createApp(): Promise<FastifyInstance> {
         });
         if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_update_failed" });
         if (result.repos) upsertRepos(nextAgentId, result.repos);
-        moveProjectRowsToAgent(params.agentId, nextAgentId, params.repoId, migrationPatch, visibility ?? sourceRepo.visibility, sourceRepo.user_id);
+        moveProjectRowsToAgent(params.agentId, nextAgentId, params.repoId, migrationPatch, visibility ?? sourceRepo.visibility, sourceRepo.user_id, sourceRepo.write_access, sourceRepo.write_users_json);
         broadcast({ type: "repos.updated", agentId: params.agentId, repos: repoInfosForAgent(params.agentId) });
         broadcast({ type: "repos.updated", agentId: nextAgentId, repos: repoInfosForAgent(nextAgentId) });
         broadcast({ type: "chats.updated", agentId: params.agentId, repoId: params.repoId });
@@ -3645,6 +3737,8 @@ async function createApp(): Promise<FastifyInstance> {
       }
       const controllerSettingsUpdated = updateControllerProjectSettings(params.agentId, params.repoId, {
         visibility,
+        writeAccess,
+        writeUsers,
         deploy: deploy ?? null,
         data: data ?? null
       }, { deploy: deployProvided, data: dataProvided });

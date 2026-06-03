@@ -82,6 +82,8 @@ export type RepoRow = {
   server_path: string | null;
   domain: string | null;
   visibility: ProjectVisibility;
+  write_access: "owner" | "everyone" | "users";
+  write_users_json: string;
   deploy_json: string | null;
   data_json: string | null;
   current_branch: string | null;
@@ -241,6 +243,8 @@ export function openDb(path: string): DatabaseSync {
       server_path TEXT,
       domain TEXT,
       visibility TEXT NOT NULL DEFAULT 'private',
+      write_access TEXT NOT NULL DEFAULT 'owner',
+      write_users_json TEXT NOT NULL DEFAULT '[]',
       deploy_json TEXT,
       data_json TEXT,
       current_branch TEXT,
@@ -483,6 +487,12 @@ export function openDb(path: string): DatabaseSync {
   if (!repoColumns.some((column) => column.name === "visibility")) {
     db.exec("ALTER TABLE repos ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'");
   }
+  if (!repoColumns.some((column) => column.name === "write_access")) {
+    db.exec("ALTER TABLE repos ADD COLUMN write_access TEXT NOT NULL DEFAULT 'owner'");
+  }
+  if (!repoColumns.some((column) => column.name === "write_users_json")) {
+    db.exec("ALTER TABLE repos ADD COLUMN write_users_json TEXT NOT NULL DEFAULT '[]'");
+  }
   if (!repoColumns.some((column) => column.name === "deploy_json")) {
     db.exec("ALTER TABLE repos ADD COLUMN deploy_json TEXT");
   }
@@ -578,6 +588,8 @@ export function mapRepo(row: RepoRow): RepoInfo {
     serverPath: row.server_path ?? undefined,
     domain: row.domain ?? undefined,
     visibility: row.visibility,
+    writeAccess: row.write_access ?? "owner",
+    writeUsers: parseStringArray(row.write_users_json),
     deploy: parseDeployConfig(row.deploy_json),
     data: parseProjectDataConfig(row.data_json),
     currentBranch: row.current_branch ?? undefined,
@@ -594,6 +606,16 @@ function parseDeployConfig(value: string | null): DeployConfig | undefined {
     return JSON.parse(value) as DeployConfig;
   } catch {
     return undefined;
+  }
+}
+
+function parseStringArray(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
   }
 }
 

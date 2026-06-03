@@ -383,6 +383,36 @@ textarea:focus {
   color: var(--text);
 }
 
+.public-ide-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: stretch;
+  padding: 8px;
+  background: var(--bg);
+}
+
+.public-readonly-ide {
+  width: 100%;
+  height: calc(100dvh - 16px);
+  max-width: none;
+  max-height: none;
+  box-shadow: none;
+}
+
+.public-readonly-workspace {
+  grid-template-columns: minmax(220px, 310px) minmax(0, 1fr);
+}
+
+.public-readonly-badge {
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--field);
+  font-size: 11px;
+  font-weight: 900;
+}
+
 .login-panel {
   width: min(420px, 100%);
   display: grid;
@@ -5530,6 +5560,53 @@ button.message-attachment.image:hover {
   white-space: nowrap;
 }
 
+.ide-chat-header-actions {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ide-chat-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 12;
+  min-width: 210px;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid #3f3f3f;
+  border-radius: 7px;
+  color: #f5f5f5;
+  background: #242424;
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.25);
+}
+
+.ide-chat-menu button {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.ide-chat-menu button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ide-chat-menu button:disabled {
+  opacity: 0.46;
+}
+
 .ide-chat-panel small {
   color: var(--muted);
   font-size: 11px;
@@ -8356,6 +8433,34 @@ button:disabled {
     transform: translateX(calc(-100% - 8px));
     transition: transform 180ms ease;
     box-shadow: none;
+  }
+
+  .public-readonly-ide .file-editor-menubar {
+    position: static;
+    z-index: auto;
+    width: 100%;
+    height: auto;
+    min-height: 30px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 0 4px;
+    border: 1px solid #3f3f3f;
+    border-radius: 5px;
+    overflow-x: auto;
+    transform: none;
+    transition: none;
+    box-shadow: none;
+  }
+
+  .public-readonly-ide .file-editor-menubar .ide-menu-brand {
+    display: inline-flex;
+  }
+
+  .public-readonly-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(120px, 28dvh) minmax(0, 1fr);
   }
 
   .file-editor-menubar.mobile-open {
