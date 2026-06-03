@@ -995,9 +995,12 @@ async function configureSsl(repoId: string): Promise<string> {
 
   const output: string[] = [];
   output.push(await configureNginx(repoId));
+  const certificatePath = `/etc/letsencrypt/live/${repo.domain}/fullchain.pem`;
+  const certificateKeyPath = `/etc/letsencrypt/live/${repo.domain}/privkey.pem`;
   const certbotCommand = [
     "sudo certbot --nginx",
     `-d ${shellQuote(repo.domain)}`,
+    `--cert-name ${shellQuote(repo.domain)}`,
     "--non-interactive",
     "--agree-tos",
     "--redirect",
@@ -1014,7 +1017,33 @@ async function configureSsl(repoId: string): Promise<string> {
   const text = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
   if (text) output.push(text);
   if (result.exitCode !== 0) throw new Error([...output, `SSL configure failed with exit code ${result.exitCode}`].join("\n"));
-  return [...output, `SSL configured: https://${repo.domain}`].join("\n");
+
+  output.push(await configureNginx(repoId));
+
+  const httpsResolve = `${repo.domain}:443:127.0.0.1`;
+  const httpResolve = `${repo.domain}:80:127.0.0.1`;
+  const httpsUrl = `https://${repo.domain}/`;
+  const httpUrl = `http://${repo.domain}/`;
+  const verifyCommand = [
+    `sudo test -f ${shellQuote(certificatePath)}`,
+    `sudo test -f ${shellQuote(certificateKeyPath)}`,
+    `sudo openssl x509 -checkend 604800 -noout -in ${shellQuote(certificatePath)}`,
+    "sudo nginx -t",
+    "sudo systemctl reload nginx",
+    `https_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 --noproxy '*' --resolve ${shellQuote(httpsResolve)} ${shellQuote(httpsUrl)})`,
+    `case "$https_status" in 000|"") echo "HTTPS check failed for ${repo.domain}"; exit 1;; esac`,
+    `http_location=$(curl --silent --show-error --output /dev/null --write-out '%{redirect_url}' --max-time 15 --noproxy '*' --resolve ${shellQuote(httpResolve)} ${shellQuote(httpUrl)})`,
+    `test "$http_location" = ${shellQuote(httpsUrl)}`,
+    `printf 'Verified certificate, HTTPS status %s, HTTP redirect %s\\n' "$https_status" "$http_location"`
+  ].join(" && ");
+  const verify = localMode
+    ? await runCapture("bash", ["-lc", verifyCommand], repo.path, 120000)
+    : await runCapture("ssh", [repo.deploy.sshTarget!, verifyCommand], repo.path, 120000);
+  output.push(localMode ? `$ local verify ssl ${repo.domain}` : `$ ssh ${repo.deploy.sshTarget} verify ssl ${repo.domain}`);
+  const verifyText = [verify.stdout.trim(), verify.stderr.trim()].filter(Boolean).join("\n");
+  if (verifyText) output.push(verifyText);
+  if (verify.exitCode !== 0) throw new Error([...output, `SSL verification failed with exit code ${verify.exitCode}`].join("\n"));
+  return [...output, `SSL configured and verified: ${httpsUrl}`].join("\n");
 }
 
 function isSafeDomain(value: string): boolean {
