@@ -3768,7 +3768,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
-    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canOwnRepoSettings(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
