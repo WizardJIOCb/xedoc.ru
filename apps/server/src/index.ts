@@ -3095,7 +3095,7 @@ async function createApp(): Promise<FastifyInstance> {
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "SAMEORIGIN");
     reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
-    reply.header("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss: https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; img-src 'self' data: https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; frame-src 'self' https:;");
+    reply.header("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss: https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://mc.yandex.ru https://mc.yandex.com https://yastatic.net; img-src 'self' data: https://mc.yandex.ru https://mc.yandex.com https://yandex.ru https://yastatic.net; frame-src 'self' https:;");
     if (_request.method === "GET") {
       const url = new URL(_request.raw.url ?? "/", `https://${PUBLIC_DOMAIN}`);
       if (url.pathname === "/" && url.searchParams.get("cango") === REGISTRATION_GATE_VALUE) {
