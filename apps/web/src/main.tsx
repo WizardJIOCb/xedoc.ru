@@ -89,6 +89,7 @@ type IdeChatTextSize = "small" | "normal" | "large";
 type IdeChatTextStyle = "cards" | "plain" | "reader";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
 type ProjectSettingsTab = "general" | "git" | "deploy" | "data" | "access" | "automation";
+type IdeMobilePane = "files" | "code" | "chat";
 type ProjectDataLocation = "local" | "server";
 type ProjectDataConfig = {
   location: ProjectDataLocation;
@@ -3929,6 +3930,8 @@ function App() {
     }
   });
   const [ideMenuOpen, setIdeMenuOpen] = useState("");
+  const [ideMobileMenuOpen, setIdeMobileMenuOpen] = useState(false);
+  const [ideMobilePane, setIdeMobilePane] = useState<IdeMobilePane>("code");
   const [ideCommandPaletteOpen, setIdeCommandPaletteOpen] = useState(false);
   const [ideCommandQuery, setIdeCommandQuery] = useState("");
   const [ideEditorCommand, setIdeEditorCommand] = useState<IdeEditorCommandRequest | null>(null);
@@ -7642,6 +7645,7 @@ function App() {
   function ideWorkspaceClassName() {
     return [
       "file-editor-workspace",
+      `mobile-pane-${ideMobilePane}`,
       ideExplorerOpen ? "" : "without-explorer",
       ideEditorPaneOpen ? "" : "without-editor",
       ideChatPanelOpen ? "with-chat" : ""
@@ -7660,6 +7664,7 @@ function App() {
   function runIdeCommandItem(item: { disabled?: boolean; run: () => void | Promise<void> }) {
     if (item.disabled) return;
     setIdeMenuOpen("");
+    setIdeMobileMenuOpen(false);
     setIdeCommandPaletteOpen(false);
     setIdeCommandQuery("");
     void item.run();
@@ -10768,15 +10773,90 @@ function App() {
     );
   }
 
+  function showIdeMobilePane(pane: IdeMobilePane) {
+    setIdeMobilePane(pane);
+    if (pane === "files") setIdeExplorerOpen(true);
+    if (pane === "code") setIdeEditorPaneOpen(true);
+    if (pane === "chat") setIdeChatPanelOpen(true);
+  }
+
+  function renderIdeMobileHeader(editor: ProjectFileEditor) {
+    const projectName = selectedRepo?.name ?? editor.repoName;
+    const fileName = projectFileLeaf(selectedProjectFolderPath || editor.path);
+    return (
+      <header className="ide-mobile-header">
+        <div className="ide-mobile-topline">
+          <button
+            aria-expanded={ideMobileMenuOpen}
+            className="ide-mobile-menu-button"
+            type="button"
+            onClick={() => {
+              setIdeMenuOpen("");
+              setIdeMobileMenuOpen((value) => !value);
+            }}
+          >
+            <Menu size={16} />
+            <span>Menu</span>
+          </button>
+          <div className="ide-mobile-title">
+            <strong>{projectName}</strong>
+            <small>{fileName}</small>
+          </div>
+          <button aria-label="Close file editor" className="icon tiny" onClick={closeProjectFileEditor} type="button">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="ide-mobile-panes" role="tablist" aria-label="IDE areas">
+          <button
+            aria-selected={ideMobilePane === "files"}
+            className={ideMobilePane === "files" ? "active" : ""}
+            type="button"
+            onClick={() => showIdeMobilePane("files")}
+          >
+            <FolderGit2 size={14} />
+            Files
+          </button>
+          <button
+            aria-selected={ideMobilePane === "code"}
+            className={ideMobilePane === "code" ? "active" : ""}
+            type="button"
+            onClick={() => showIdeMobilePane("code")}
+          >
+            <FilePenLine size={14} />
+            Code
+          </button>
+          <button
+            aria-selected={ideMobilePane === "chat"}
+            className={ideMobilePane === "chat" ? "active" : ""}
+            type="button"
+            onClick={() => showIdeMobilePane("chat")}
+          >
+            <MessageSquare size={14} />
+            Chat
+          </button>
+        </div>
+      </header>
+    );
+  }
+
   function renderIdeMenubar(editor: ProjectFileEditor) {
     const outputAvailable = Boolean(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice);
     return (
       <nav
-        className="file-editor-menubar"
+        className={`file-editor-menubar${ideMobileMenuOpen ? " mobile-open" : ""}`}
         ref={ideMenuRef}
         aria-label="Xedoc IDE menu"
         onMouseLeave={() => setIdeMenuOpen("")}
       >
+        <div className="ide-mobile-drawer-head">
+          <strong>Xedoc IDE</strong>
+          <button className="icon tiny" type="button" onClick={() => {
+            setIdeMenuOpen("");
+            setIdeMobileMenuOpen(false);
+          }}>
+            <X size={15} />
+          </button>
+        </div>
         <div className="ide-menu-brand">
           <img src="/favicon.svg" alt="" />
           <span>Xedoc IDE</span>
@@ -12206,6 +12286,18 @@ function App() {
       {fileEditor && (
         <div className={`file-editor-modal${fileEditorFullscreen ? " fullscreen" : ""}`} role="dialog" aria-modal="true" aria-label={fileEditor.path} onClick={closeProjectFileEditor}>
           <section className={`file-editor-panel ide ${editorThemeIsDark(editorTheme) ? "editor-shell-dark" : "editor-shell-light"}${fileEditorFullscreen ? " fullscreen" : ""}`} onClick={(event) => event.stopPropagation()}>
+            {renderIdeMobileHeader(fileEditor)}
+            {ideMobileMenuOpen && (
+              <button
+                aria-label="Close IDE menu"
+                className="ide-mobile-menu-backdrop"
+                type="button"
+                onClick={() => {
+                  setIdeMenuOpen("");
+                  setIdeMobileMenuOpen(false);
+                }}
+              />
+            )}
             {renderIdeMenubar(fileEditor)}
             {renderIdeCommandPalette(fileEditor)}
             {ideEditorPaneOpen && renderFileEditorTabs()}
@@ -12265,7 +12357,10 @@ function App() {
                       title={entry.path}
                       type="button"
                       onContextMenu={(event) => openProjectEntryContextMenu(event, entry)}
-                      onClick={() => openProjectFile(entry.path)}
+                      onClick={() => {
+                        setIdeMobilePane("code");
+                        openProjectFile(entry.path);
+                      }}
                     >
                       <span className="file-tree-caret-spacer" aria-hidden="true" />
                       {renderFileTreeFileIcon(entry)}
@@ -12297,7 +12392,10 @@ function App() {
                       >
                         <ChevronDown className="file-tree-caret" size={13} />
                       </button>
-                      <button className="file-tree-directory-button" type="button" onClick={() => selectProjectFolder(entry.path)}>
+                      <button className="file-tree-directory-button" type="button" onClick={() => {
+                        setIdeMobilePane("code");
+                        selectProjectFolder(entry.path);
+                      }}>
                         {renderFileTreeDirectoryIcon(entry, Boolean(expandedProjectFolders[entry.path]))}
                         <span className="file-tree-name">{entry.name}</span>
                       </button>
