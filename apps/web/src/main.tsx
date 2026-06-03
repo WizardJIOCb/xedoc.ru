@@ -82,7 +82,7 @@ type CodexSpeed = "standard" | "fast";
 type JobKind = "codex" | "grok" | "gemini-cli" | "gemini";
 type RunnerAgent = "codex" | "grok" | "gemini";
 type ProjectVisibility = "private" | "public";
-type ProjectWriteAccess = "owner" | "everyone" | "users";
+type ProjectWriteAccess = "owner" | "everyone" | "users" | "readonly";
 type ProjectGitMode = "blank" | "github-create" | "clone";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
 type EditorTheme = "xedoc-light" | "xedoc-dark" | "xedoc-aurora" | "xedoc-midnight" | "vs-light" | "vs-dark" | "hc-black";
@@ -6674,6 +6674,7 @@ function App() {
     const deployConfig = projectDraftDeployConfig;
     const dataConfig = projectDraftDataConfig;
     const projectWriteUsers = projectWriteUsersFromText(projectWriteUsersText);
+    const effectiveProjectVisibility = projectWriteAccess === "readonly" ? "public" : projectVisibility;
     const nextGithubUrl = isNew && projectGitMode === "blank" ? "" : projectGithubUrl.trim();
     const body: Record<string, unknown> = isNew ? {
       agentId: targetAgent.id,
@@ -6689,14 +6690,14 @@ function App() {
       } : undefined,
       serverPath: effectiveProjectServerPath,
       domain: normalizedDomain,
-      visibility: projectVisibility,
+      visibility: effectiveProjectVisibility,
       writeAccess: projectWriteAccess,
       writeUsers: projectWriteUsers,
       deploy: deployConfig,
       data: dataConfig,
       defaultSandbox: sandbox
     } : {
-      visibility: projectVisibility
+      visibility: effectiveProjectVisibility
     };
     if (!isNew) {
       if (projectTargetAgentChanged && projectAgentId) body.targetAgentId = projectAgentId;
@@ -9279,18 +9280,33 @@ function App() {
         );
       }
       if (projectSettingsTab === "access") {
+        const writeAccessSummary = projectWriteAccess === "readonly"
+          ? "public read-only"
+          : projectWriteAccess === "users"
+            ? `${projectWriteUsersFromText(projectWriteUsersText).length} users`
+            : projectWriteAccess;
         return (
           <div className="project-settings-tab-panel">
             <label>
               Project visibility
-              <select value={projectVisibility} onChange={(event) => setProjectVisibility(event.target.value as ProjectVisibility)}>
+              <select value={projectVisibility} onChange={(event) => {
+                const nextVisibility = event.target.value as ProjectVisibility;
+                setProjectVisibility(nextVisibility);
+                if (nextVisibility === "private" && projectWriteAccess === "readonly") setProjectWriteAccess("owner");
+              }}>
                 <option value="private">Private: виден только владельцу и админам</option>
                 <option value="public">Public: проект и его чаты видны в Search</option>
               </select>
             </label>
             <label>
               Write access
-              <select value={projectWriteAccess} onChange={(event) => setProjectWriteAccess(event.target.value as ProjectWriteAccess)}>
+              <select value={projectWriteAccess} onChange={(event) => {
+                const nextAccess = event.target.value as ProjectWriteAccess;
+                setProjectWriteAccess(nextAccess);
+                if (nextAccess === "readonly") setProjectVisibility("public");
+                if (nextAccess !== "users") setProjectWriteUsersText("");
+              }}>
+                <option value="readonly">Public read-only: видно всем без входа, менять нельзя никому</option>
                 <option value="owner">Owner only: менять проект может только владелец</option>
                 <option value="everyone">All signed-in users: менять могут все авторизованные</option>
                 <option value="users">Specific users: менять могут только пользователи из списка</option>
@@ -9316,7 +9332,7 @@ function App() {
             </div>
             <div className="project-settings-summary">
               <div><span>Visibility</span><strong>{projectVisibility}</strong></div>
-              <div><span>Write access</span><strong>{projectWriteAccess === "users" ? `${projectWriteUsersFromText(projectWriteUsersText).length} users` : projectWriteAccess}</strong></div>
+              <div><span>Write access</span><strong>{writeAccessSummary}</strong></div>
               <div><span>Default access</span><strong>{SANDBOX_LABELS[sandbox]}</strong></div>
               <div><span>Public links</span><strong>read-only without login</strong></div>
             </div>

@@ -5,7 +5,7 @@ export type Sandbox = z.infer<typeof SandboxSchema>;
 
 export const ProjectVisibilitySchema = z.enum(["private", "public"]);
 export type ProjectVisibility = z.infer<typeof ProjectVisibilitySchema>;
-export const ProjectWriteAccessSchema = z.enum(["owner", "everyone", "users"]);
+export const ProjectWriteAccessSchema = z.enum(["owner", "everyone", "users", "readonly"]);
 export type ProjectWriteAccess = z.infer<typeof ProjectWriteAccessSchema>;
 
 export const JobStatusSchema = z.enum([

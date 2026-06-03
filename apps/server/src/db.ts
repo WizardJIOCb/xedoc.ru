@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { CodexUsage, DeployConfig, JobStatus, LocalCodexActivity, ProjectVisibility, RepoInfo, Sandbox } from "@cmc/protocol";
+import type { CodexUsage, DeployConfig, JobStatus, LocalCodexActivity, ProjectVisibility, ProjectWriteAccess, RepoInfo, Sandbox } from "@cmc/protocol";
 
 export type UserRow = {
   id: string;
@@ -82,7 +82,7 @@ export type RepoRow = {
   server_path: string | null;
   domain: string | null;
   visibility: ProjectVisibility;
-  write_access: "owner" | "everyone" | "users";
+  write_access: ProjectWriteAccess;
   write_users_json: string;
   deploy_json: string | null;
   data_json: string | null;

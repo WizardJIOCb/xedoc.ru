@@ -33,6 +33,7 @@ import {
   type LocalCodexActivity,
   type ProjectDataConfig,
   type ProjectVisibility,
+  type ProjectWriteAccess,
   type RepoInfo,
   type ServerToAgent,
   type UiEvent
@@ -556,6 +557,23 @@ function canAccessRepo(user: AuthUser, agentId: string, repoId: string): boolean
   return allowed.includes(resolvedUser.email.toLowerCase()) || Boolean(resolvedUser.nickname && allowed.includes(resolvedUser.nickname.toLowerCase()));
 }
 
+function canWriteRepo(user: AuthUser, agentId: string, repoId: string): boolean {
+  const row = db.prepare(`
+    SELECT r.user_id, r.write_access, r.write_users_json
+    FROM repos r
+    WHERE r.agent_id = ? AND r.id = ?
+  `).get(agentId, repoId) as Pick<RepoRow, "user_id" | "write_access" | "write_users_json"> | undefined;
+  if (!row || row.write_access === "readonly") return false;
+  if (isAdmin(user) || row.user_id === user.id || row.write_access === "everyone") return true;
+  if (row.write_access !== "users") return false;
+  const resolvedUser = user.email
+    ? user
+    : db.prepare("SELECT email, nickname FROM users WHERE id = ?").get(user.id) as Pick<UserRow, "email" | "nickname"> | undefined;
+  if (!resolvedUser?.email) return false;
+  const allowed = safeJsonArray(row.write_users_json).map((item) => item.trim().toLowerCase()).filter(Boolean);
+  return allowed.includes(resolvedUser.email.toLowerCase()) || Boolean(resolvedUser.nickname && allowed.includes(resolvedUser.nickname.toLowerCase()));
+}
+
 function canOwnRepoSettings(user: AuthUser, agentId: string, repoId: string): boolean {
   if (isAdmin(user)) return true;
   const row = db.prepare("SELECT 1 FROM repos WHERE agent_id = ? AND id = ? AND user_id = ?")
@@ -1053,7 +1071,7 @@ function updateControllerProjectSettings(
   repoId: string,
   patch: {
     visibility?: ProjectVisibility;
-    writeAccess?: "owner" | "everyone" | "users";
+    writeAccess?: ProjectWriteAccess;
     writeUsers?: string[];
     deploy?: DeployConfig | null;
     data?: ProjectDataConfig | null;
@@ -3669,8 +3687,9 @@ async function createApp(): Promise<FastifyInstance> {
       });
       if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_create_failed" });
       if (result.repos) upsertRepos(parsed.data.agentId, result.repos);
+      const storedVisibility = parsed.data.writeAccess === "readonly" ? "public" : parsed.data.visibility;
       db.prepare("UPDATE repos SET user_id = ?, visibility = ?, write_access = ?, write_users_json = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
-        .run(auth.user.id, parsed.data.visibility, parsed.data.writeAccess, JSON.stringify(parsed.data.writeUsers), nowIso(), parsed.data.agentId, repoId);
+        .run(auth.user.id, storedVisibility, parsed.data.writeAccess, JSON.stringify(parsed.data.writeUsers), nowIso(), parsed.data.agentId, repoId);
       return reply.code(201).send({ repoId, githubUrl });
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
@@ -3685,6 +3704,7 @@ async function createApp(): Promise<FastifyInstance> {
     const parsed = UpdateProjectSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_project", details: parsed.error.flatten() });
     const { visibility, writeAccess, writeUsers, deploy, data, targetAgentId, ...agentPatch } = parsed.data;
+    const storedVisibility = writeAccess === "readonly" ? "public" : visibility;
     const deployProvided = Object.prototype.hasOwnProperty.call(parsed.data, "deploy");
     const dataProvided = Object.prototype.hasOwnProperty.call(parsed.data, "data");
     const agentPatchKeys = Object.keys(agentPatch).filter((key) => (agentPatch as Record<string, unknown>)[key] !== undefined);
@@ -3714,7 +3734,16 @@ async function createApp(): Promise<FastifyInstance> {
         });
         if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_update_failed" });
         if (result.repos) upsertRepos(nextAgentId, result.repos);
-        moveProjectRowsToAgent(params.agentId, nextAgentId, params.repoId, migrationPatch, visibility ?? sourceRepo.visibility, sourceRepo.user_id, sourceRepo.write_access, sourceRepo.write_users_json);
+        moveProjectRowsToAgent(
+          params.agentId,
+          nextAgentId,
+          params.repoId,
+          migrationPatch,
+          storedVisibility ?? sourceRepo.visibility,
+          sourceRepo.user_id,
+          writeAccess ?? sourceRepo.write_access,
+          writeUsers ? JSON.stringify(writeUsers) : sourceRepo.write_users_json
+        );
         broadcast({ type: "repos.updated", agentId: params.agentId, repos: repoInfosForAgent(params.agentId) });
         broadcast({ type: "repos.updated", agentId: nextAgentId, repos: repoInfosForAgent(nextAgentId) });
         broadcast({ type: "chats.updated", agentId: params.agentId, repoId: params.repoId });
@@ -3736,7 +3765,7 @@ async function createApp(): Promise<FastifyInstance> {
         if (result.repos) upsertRepos(params.agentId, result.repos);
       }
       const controllerSettingsUpdated = updateControllerProjectSettings(params.agentId, params.repoId, {
-        visibility,
+        visibility: storedVisibility,
         writeAccess,
         writeUsers,
         deploy: deploy ?? null,
@@ -3811,7 +3840,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
-    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canWriteRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = GitSyncSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_git_sync", details: parsed.error.flatten() });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
@@ -3898,7 +3927,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
-    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canWriteRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = DeploySchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "invalid_deploy", details: parsed.error.flatten() });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
@@ -3976,7 +4005,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
-    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canWriteRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
@@ -4022,7 +4051,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
-    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canWriteRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = NginxSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "invalid_nginx", details: parsed.error.flatten() });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
@@ -4100,7 +4129,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
-    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canWriteRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = SslSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "invalid_ssl", details: parsed.error.flatten() });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
@@ -4280,7 +4309,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
-    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canWriteRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = ProjectFileWriteSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "invalid_file", details: parsed.error.flatten() });
     try {
@@ -4331,7 +4360,7 @@ async function createApp(): Promise<FastifyInstance> {
     if (!auth || !requireCsrf(db, request, reply)) return;
     const parsed = CreateChatSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_chat", details: parsed.error.flatten() });
-    if (!canAccessRepo(auth.user, parsed.data.agentId, parsed.data.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canWriteRepo(auth.user, parsed.data.agentId, parsed.data.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(parsed.data.agentId, parsed.data.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
@@ -4547,7 +4576,7 @@ async function createApp(): Promise<FastifyInstance> {
     if (!auth || !requireCsrf(db, request, reply)) return;
     const parsed = CreateJobSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_job", details: parsed.error.flatten() });
-    if (!canAccessRepo(auth.user, parsed.data.agentId, parsed.data.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    if (!canWriteRepo(auth.user, parsed.data.agentId, parsed.data.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(parsed.data.agentId, parsed.data.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
