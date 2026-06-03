@@ -5547,7 +5547,7 @@ button.message-attachment.image:hover {
   gap: 8px;
 }
 
-.ide-chat-panel header > div {
+.ide-chat-panel header > div:not(.ide-chat-header-actions) {
   min-width: 0;
   display: grid;
   gap: 2px;
@@ -5565,7 +5565,14 @@ button.message-attachment.image:hover {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-direction: row;
+  flex-wrap: nowrap;
   gap: 4px;
+}
+
+.ide-chat-header-actions .icon.tiny {
+  flex: 0 0 auto;
 }
 
 .ide-chat-menu {
