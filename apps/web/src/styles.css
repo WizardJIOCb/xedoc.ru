@@ -3985,6 +3985,233 @@ button.message-attachment.image:hover {
   color: var(--text);
 }
 
+.project-settings-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1120;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  background: rgba(24, 24, 22, 0.64);
+  backdrop-filter: blur(4px);
+}
+
+.project-settings-dialog {
+  width: min(980px, 96vw);
+  max-height: min(780px, 92dvh);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+}
+
+.project-settings-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.project-settings-header div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.project-settings-header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.project-settings-header h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.project-settings-header small {
+  min-width: 0;
+  color: var(--muted);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.project-settings-form {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.project-settings-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.project-settings-tabs {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+  background: var(--panel-2);
+  overflow: auto;
+}
+
+.project-settings-tabs button {
+  min-height: 36px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.project-settings-tabs button:hover,
+.project-settings-tabs button.active {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.project-settings-tabs button.active {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.project-settings-content {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+  overflow: auto;
+}
+
+.project-settings-content-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.project-settings-content-head div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.project-settings-content-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.project-settings-content-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+
+.project-settings-tab-panel,
+.project-settings-grid,
+.project-settings-fieldset {
+  display: grid;
+  gap: 12px;
+}
+
+.project-settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.project-settings-wide {
+  grid-column: 1 / -1;
+}
+
+.project-settings-fieldset {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.project-settings-fieldset > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.project-settings-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.project-settings-summary div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+}
+
+.project-settings-summary span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.project-settings-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.project-settings-footer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.project-settings-save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.danger-button.compact {
+  min-height: 36px;
+  width: auto;
+  padding: 0 12px;
+}
+
 .file-editor-actions {
   display: inline-flex;
   align-items: center;
@@ -7834,6 +8061,66 @@ button:disabled {
   .project-preview {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .project-settings-modal {
+    padding: max(8px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+  }
+
+  .project-settings-dialog {
+    width: 100%;
+    max-height: calc(100dvh - 16px);
+  }
+
+  .project-settings-header {
+    padding: 10px;
+  }
+
+  .project-settings-header h2 {
+    font-size: 17px;
+  }
+
+  .project-settings-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .project-settings-tabs {
+    flex-direction: row;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .project-settings-tabs button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 7px 9px;
+  }
+
+  .project-settings-tabs button.active {
+    box-shadow: inset 0 -3px 0 var(--accent);
+  }
+
+  .project-settings-content,
+  .project-settings-footer {
+    padding: 10px;
+  }
+
+  .project-settings-content-head,
+  .project-settings-grid,
+  .project-settings-summary,
+  .project-settings-footer {
+    grid-template-columns: 1fr;
+  }
+
+  .project-settings-save-actions {
+    justify-content: stretch;
+  }
+
+  .project-settings-save-actions button,
+  .project-settings-footer .danger-button {
+    width: 100%;
   }
 
   .project-home-head {

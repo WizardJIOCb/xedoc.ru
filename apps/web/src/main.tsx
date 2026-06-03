@@ -88,6 +88,7 @@ type EditorTheme = "xedoc-light" | "xedoc-dark" | "xedoc-aurora" | "xedoc-midnig
 type IdeChatTextSize = "small" | "normal" | "large";
 type IdeChatTextStyle = "cards" | "plain" | "reader";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
+type ProjectSettingsTab = "general" | "git" | "deploy" | "data" | "access" | "automation";
 type ProjectDataLocation = "local" | "server";
 type ProjectDataConfig = {
   location: ProjectDataLocation;
@@ -191,6 +192,14 @@ const PROJECT_WIZARD_STEPS: Array<{ id: ProjectWizardStep; label: string }> = [
   { id: "deploy", label: "Deploy" },
   { id: "data", label: "Data" },
   { id: "ready", label: "Ready" }
+];
+const PROJECT_SETTINGS_TABS: Array<{ id: ProjectSettingsTab; label: string; icon: React.ReactNode }> = [
+  { id: "general", label: "General", icon: <FolderGit2 size={15} /> },
+  { id: "git", label: "Git & Agent", icon: <Github size={15} /> },
+  { id: "deploy", label: "Deploy", icon: <UploadCloud size={15} /> },
+  { id: "data", label: "Data", icon: <Database size={15} /> },
+  { id: "access", label: "Access", icon: <ShieldCheck size={15} /> },
+  { id: "automation", label: "Automation", icon: <Bot size={15} /> }
 ];
 const LOCAL_CHAT_SYNC_REFRESH_DELAYS_MS = [0, 800, 2000, 4000, 8000, 15000];
 type VscodeCommand = "ping" | "openSidebar" | "newChat" | "newCodexPanel" | "addToThread" | "addFileToThread" | "openThread" | "reopenThread" | "refreshThreadIfOpen";
@@ -3761,6 +3770,7 @@ function App() {
   const [projectDeployBuildCommand, setProjectDeployBuildCommand] = useState(defaultBuildCommandForAgent(null));
   const [projectDeployCleanRemote, setProjectDeployCleanRemote] = useState(false);
   const [projectDeployEnabled, setProjectDeployEnabled] = useState(true);
+  const [projectSettingsTab, setProjectSettingsTab] = useState<ProjectSettingsTab>("general");
   const [projectDataLocation, setProjectDataLocation] = useState<ProjectDataLocation>("local");
   const [projectDataPath, setProjectDataPath] = useState("");
   const [projectStartPrompt, setProjectStartPrompt] = useState("");
@@ -5539,6 +5549,7 @@ function App() {
     setProjectStartPrompt("");
     setOriginalProjectPath(repo.pathMasked);
     setSandbox(repo.defaultSandbox);
+    setProjectSettingsTab("general");
     setProjectPanel("settings");
     setProjectNotice("");
   }
@@ -9047,76 +9058,201 @@ function App() {
   }
 
   function renderProjectSettingsForm() {
+    const closeSettings = () => setProjectPanel(null);
+    const tabLabel = PROJECT_SETTINGS_TABS.find((tab) => tab.id === projectSettingsTab)?.label ?? "Settings";
+    const renderTabPanel = () => {
+      if (projectSettingsTab === "general") {
+        return (
+          <div className="project-settings-tab-panel">
+            <div className="project-settings-grid">
+              <label>
+                Name
+                <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
+              </label>
+              <label>
+                Domain or subdomain
+                <input
+                  placeholder={`playground or playground.${PROJECT_DOMAIN_ROOT}`}
+                  value={projectDomain}
+                  onBlur={() => setProjectDomain(normalizeProjectDomain(projectDomain))}
+                  onChange={(event) => handleProjectDomainChange(event.target.value)}
+                />
+              </label>
+              <label className="project-settings-wide">
+                Project folder on server
+                <input value={projectPath} onChange={(event) => handleProjectPathChange(event.target.value)} />
+              </label>
+            </div>
+            <div className="project-settings-summary">
+              <div><span>Project URL</span><strong>{projectUrl(projectDomain) || "not configured"}</strong></div>
+              <div><span>Current project</span><strong>{selectedRepo?.name ?? projectName}</strong></div>
+            </div>
+          </div>
+        );
+      }
+      if (projectSettingsTab === "git") {
+        return (
+          <div className="project-settings-tab-panel">
+            <div className="project-settings-grid">
+              <label>
+                Project agent
+                <select value={projectAgentId || selectedRepo?.agentId || ""} onChange={(event) => handleProjectAgentChange(event.target.value)}>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name} · {agent.status}{isLinuxAgent(agent) ? " · Linux" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                GitHub repository
+                <input placeholder="https://github.com/WizardJIOCb/project.git" value={projectGithubUrl} onChange={(event) => setProjectGithubUrl(event.target.value)} />
+              </label>
+            </div>
+            <div className="project-settings-summary">
+              <div><span>Branch</span><strong>{selectedRepo?.currentBranch || "no branch"}</strong></div>
+              <div><span>Working tree</span><strong>{selectedRepo?.dirty ? "dirty" : "clean"}</strong></div>
+              <div><span>Agent status</span><strong>{projectFormAgent?.status ?? "unknown"}</strong></div>
+            </div>
+          </div>
+        );
+      }
+      if (projectSettingsTab === "deploy") {
+        return (
+          <div className="project-settings-tab-panel">
+            {renderDeployModeSelect()}
+            {renderDeployFields()}
+            <div className="project-settings-summary">
+              <div><span>Build</span><strong>{projectDeployBuildCommand.trim() || "not configured"}</strong></div>
+              <div><span>Source</span><strong>{projectDeploySourceDir.trim() || "dist"}</strong></div>
+              <div><span>Target</span><strong>{effectiveProjectServerPath || "not configured"}</strong></div>
+            </div>
+          </div>
+        );
+      }
+      if (projectSettingsTab === "data") {
+        return (
+          <div className="project-settings-tab-panel">
+            {renderDataFields()}
+            <div className="project-settings-summary">
+              <div><span>Location</span><strong>{projectDraftDataConfig?.location ?? "not configured"}</strong></div>
+              <div><span>Folder</span><strong>{projectDraftDataConfig?.path ?? "not configured"}</strong></div>
+            </div>
+          </div>
+        );
+      }
+      if (projectSettingsTab === "access") {
+        return (
+          <div className="project-settings-tab-panel">
+            <label>
+              Project visibility
+              <select value={projectVisibility} onChange={(event) => setProjectVisibility(event.target.value as ProjectVisibility)}>
+                <option value="private">Private: виден только владельцу и админам</option>
+                <option value="public">Public: проект и его чаты видны в Search</option>
+              </select>
+            </label>
+            <div className="project-settings-fieldset">
+              <span>Default sandbox</span>
+              <div className="segments">
+                {SANDBOXES.map((item) => (
+                  <button className={sandbox === item ? "active" : ""} key={item} type="button" onClick={() => setSandbox(item)}>{SANDBOX_LABELS[item]}</button>
+                ))}
+              </div>
+            </div>
+            <div className="project-settings-summary">
+              <div><span>Visibility</span><strong>{projectVisibility}</strong></div>
+              <div><span>Default access</span><strong>{SANDBOX_LABELS[sandbox]}</strong></div>
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div className="project-settings-tab-panel">
+          <label>
+            Start prompt
+            <textarea
+              placeholder="Опишите первый шаг для Codex после сохранения проекта"
+              value={projectStartPrompt}
+              onChange={(event) => setProjectStartPrompt(event.target.value)}
+            />
+          </label>
+          <div className="project-settings-summary">
+            <div><span>Save & run</span><strong>{projectStartPrompt.trim() ? "ready" : "prompt is empty"}</strong></div>
+            <div><span>Runner access</span><strong>{SANDBOX_LABELS[sandbox]}</strong></div>
+          </div>
+        </div>
+      );
+    };
+
     return (
-      <form className="project-form" onSubmit={saveProject}>
-        <div className="section-head">
-          <h2>Project settings</h2>
-          <div className="section-actions">
-            <button className="secondary" type="button" onClick={() => applyProjectDefaultsToForm({ includePath: false })}>
-              <SlidersHorizontal size={15} /> Defaults
-            </button>
-            <button className="secondary" type="button" onClick={() => setProjectPanel(null)}>Close</button>
-          </div>
-        </div>
-        <label>
-          Name
-          <input value={projectName} onChange={(event) => handleProjectNameChange(event.target.value)} />
-        </label>
-        <label>
-          Project agent
-          <select value={projectAgentId || selectedRepo?.agentId || ""} onChange={(event) => handleProjectAgentChange(event.target.value)}>
-            {agents.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name} · {agent.status}{isLinuxAgent(agent) ? " · Linux" : ""}
-              </option>
+      <form className="project-form project-settings-form" onSubmit={saveProject}>
+        <div className="project-settings-body">
+          <aside className="project-settings-tabs" aria-label="Project settings sections">
+            {PROJECT_SETTINGS_TABS.map((tab) => (
+              <button
+                className={projectSettingsTab === tab.id ? "active" : ""}
+                key={tab.id}
+                type="button"
+                onClick={() => setProjectSettingsTab(tab.id)}
+              >
+                {tab.icon}
+                <span>{tab.label}</span>
+              </button>
             ))}
-          </select>
-        </label>
-        <label>
-          Project folder on server
-          <input value={projectPath} onChange={(event) => handleProjectPathChange(event.target.value)} />
-        </label>
-        <label>
-          GitHub repository
-          <input placeholder="https://github.com/WizardJIOCb/project.git" value={projectGithubUrl} onChange={(event) => setProjectGithubUrl(event.target.value)} />
-        </label>
-        {renderDeployModeSelect()}
-        {renderDeployFields()}
-        <label>
-          Project visibility
-          <select value={projectVisibility} onChange={(event) => setProjectVisibility(event.target.value as ProjectVisibility)}>
-            <option value="private">Private: виден только владельцу и админам</option>
-            <option value="public">Public: проект и его чаты видны в Search</option>
-          </select>
-        </label>
-        {renderDataFields()}
-        <label>
-          Start prompt
-          <textarea
-            placeholder="Опишите первый шаг для Codex после сохранения проекта"
-            value={projectStartPrompt}
-            onChange={(event) => setProjectStartPrompt(event.target.value)}
-          />
-        </label>
-        <div className="segments">
-          {SANDBOXES.map((item) => (
-            <button className={sandbox === item ? "active" : ""} key={item} type="button" onClick={() => setSandbox(item)}>{SANDBOX_LABELS[item]}</button>
-          ))}
+          </aside>
+          <section className="project-settings-content" aria-label={tabLabel}>
+            <div className="project-settings-content-head">
+              <div>
+                <span>{tabLabel}</span>
+                <strong>{projectName || selectedRepo?.name || "Project"}</strong>
+              </div>
+              <button className="secondary compact" type="button" onClick={() => applyProjectDefaultsToForm({ includePath: false })}>
+                <SlidersHorizontal size={15} /> Defaults
+              </button>
+            </div>
+            {renderTabPanel()}
+            {projectNotice && <div className="notice danger">{projectNotice}</div>}
+            {projectPanel === "settings" && !projectSaveAgentOnline && (
+              <div className="notice">
+                {projectSettingsNeedsAgent
+                  ? "Выбранный агент offline: перенос проекта, имя, путь, GitHub, домен и sandbox сохранятся после подключения агента. Public/Private, Deploy и Data можно сохранить сейчас."
+                  : "Агент проекта offline: Public/Private, Deploy и Data можно сохранить прямо сейчас."}
+              </div>
+            )}
+          </section>
         </div>
-        {projectNotice && <div className="notice danger">{projectNotice}</div>}
-        {projectPanel === "settings" && !projectSaveAgentOnline && (
-          <div className="notice">
-            {projectSettingsNeedsAgent
-              ? "Выбранный агент offline: перенос проекта, имя, путь, GitHub, домен и sandbox сохранятся после подключения агента. Public/Private, Deploy и Data можно сохранить сейчас."
-              : "Агент проекта offline: Public/Private, Deploy и Data можно сохранить прямо сейчас."}
+        <footer className="project-settings-footer">
+          <button className="danger-button compact" disabled={busy || !selectedRepo} type="button" onClick={deleteProject}>
+            <Trash2 size={15} /> Remove project
+          </button>
+          <div className="project-settings-save-actions">
+            <button className="secondary" type="button" onClick={closeSettings}>Cancel</button>
+            <button disabled={!canSaveProject} type="submit" value="save"><Save size={16} /> Save project</button>
+            <button className="secondary" disabled={!canSaveAndRunProject} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
           </div>
-        )}
-        <div className="project-form-actions">
-          <button disabled={!canSaveProject} type="submit" value="save"><Save size={16} /> Save project</button>
-          <button className="secondary" disabled={!canSaveAndRunProject} type="submit" value="run-prompt"><Play size={16} /> Save & run prompt</button>
-        </div>
-        <button className="danger-button" disabled={busy || !selectedRepo} type="button" onClick={deleteProject}>Remove project from service</button>
+        </footer>
       </form>
+    );
+  }
+
+  function renderProjectSettingsModal() {
+    if (projectPanel !== "settings" || !selectedRepo) return null;
+    return (
+      <div className="project-settings-modal" role="dialog" aria-modal="true" aria-label="Project settings" onClick={() => setProjectPanel(null)}>
+        <section className="project-settings-dialog" onClick={(event) => event.stopPropagation()}>
+          <header className="project-settings-header">
+            <div>
+              <span><Settings size={16} /> Project Settings</span>
+              <h2>{projectName || selectedRepo.name}</h2>
+              <small>{selectedRepo.pathMasked}{effectiveProjectServerPath ? ` -> ${effectiveProjectServerPath}` : ""}</small>
+            </div>
+            <button className="icon" type="button" onClick={() => setProjectPanel(null)} title="Close project settings">
+              <X size={18} />
+            </button>
+          </header>
+          {renderProjectSettingsForm()}
+        </section>
+      </div>
     );
   }
 
@@ -11567,7 +11703,7 @@ function App() {
           </div>
           <div className="top-title">
             <span className={`status ${chromeOnline ? "ok" : "bad"}`}>{chromeOnline ? <Wifi size={16} /> : <WifiOff size={16} />} {chromeAgentStatusLabel}</span>
-            <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : view === "search" ? "Search" : projectPanel === "new" ? "New project" : projectPanel === "settings" ? "Project settings" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
+            <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : view === "search" ? "Search" : projectPanel === "new" ? "New project" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
           </div>
           <div className="top-actions">
             {selectedRepo && <button className="icon" onClick={clearProjectSelection} title="Проекты"><ArrowLeft size={18} /></button>}
@@ -11641,8 +11777,8 @@ function App() {
         </section>
       )}
 
-      {view === "projects" && projectPanel && (
-        projectPanel === "new" ? renderProjectWizard() : renderProjectSettingsForm()
+      {view === "projects" && projectPanel === "new" && (
+        renderProjectWizard()
       )}
 
       {view === "projects" && selectedRepo && (
@@ -12322,6 +12458,7 @@ function App() {
           </section>
         </div>
       )}
+      {renderProjectSettingsModal()}
       {imagePreview && (
         <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={imagePreview.name} onClick={() => setImagePreview(null)}>
           <figure onClick={(event) => event.stopPropagation()}>
