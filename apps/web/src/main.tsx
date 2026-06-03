@@ -2943,6 +2943,8 @@ function registrationOpenFromLocation() {
 function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: string; path: string } }) {
   const [activePath, setActivePath] = useState(target.path);
   const [entries, setEntries] = useState<ProjectFileEntry[]>([]);
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>(() => expandedFolderRecord(fileFolderAncestors(target.path)));
+  const [fileTreeQuery, setFileTreeQuery] = useState("");
   const [file, setFile] = useState<PublicProjectFile | null>(null);
   const [notice, setNotice] = useState("Загружаю публичный файл...");
   const [filesNotice, setFilesNotice] = useState("Загружаю файлы...");
@@ -3000,13 +3002,47 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
     window.history.replaceState(null, "", url);
   }, [activePath, target.agentId, target.repoId]);
 
+  useEffect(() => {
+    const ancestors = fileFolderAncestors(activePath);
+    if (!ancestors.length) return;
+    setExpandedFolders((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const ancestor of ancestors) {
+        if (next[ancestor]) continue;
+        next[ancestor] = true;
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [activePath]);
+
   const name = (file?.path || activePath).split("/").pop() || activePath;
   const projectLink = projectUrl(file?.project.domain ?? "");
   const imageMimeType = file ? (file.mimeType || imageMimeTypeFromPath(file.path)) : "";
   const imageSrc = file?.binary && file.dataBase64 && imageMimeType.startsWith("image/")
     ? `data:${imageMimeType || "application/octet-stream"};base64,${file.dataBase64}`
     : "";
-  const visibleEntries = entries.filter((entry) => entry.type === "file").sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: "base" }));
+  const visibleEntries = useMemo(() => {
+    const query = fileTreeQuery.trim().toLowerCase();
+    if (!query) return entries.filter((entry) => entry.depth === 0 || parentFoldersExpanded(entry.path, expandedFolders));
+    const visiblePaths = new Set<string>();
+    const matches = entries.filter((entry) => entry.path.toLowerCase().includes(query) || entry.name.toLowerCase().includes(query));
+    for (const match of matches) {
+      visiblePaths.add(match.path);
+      fileFolderAncestors(match.path).forEach((folder) => visiblePaths.add(folder));
+      if (match.type === "directory") {
+        entries.forEach((entry) => {
+          if (projectFileIsInFolder(entry.path, match.path)) visiblePaths.add(entry.path);
+        });
+      }
+    }
+    return entries.filter((entry) => visiblePaths.has(entry.path));
+  }, [entries, expandedFolders, fileTreeQuery]);
+  const visibleFileEntries = entries.filter((entry) => entry.type === "file");
+  const toggleFolder = (path: string) => {
+    setExpandedFolders((current) => ({ ...current, [path]: !current[path] }));
+  };
 
   return (
     <main className="public-ide-page">
@@ -3035,21 +3071,58 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
               <h2>Files</h2>
               <span className="public-readonly-badge">Read only</span>
             </div>
-            <div className="file-tree">
+            <label className="file-tree-search">
+              <Search size={15} />
+              <input
+                aria-label="Search public project files"
+                placeholder="Search files"
+                value={fileTreeQuery}
+                onChange={(event) => setFileTreeQuery(event.target.value)}
+              />
+            </label>
+            <div className="file-tree" role="tree">
               {filesNotice && <div className="file-tree-empty">{filesNotice}</div>}
-              {!filesNotice && !visibleEntries.length && <div className="file-tree-empty">Файлы не найдены.</div>}
-              {visibleEntries.map((entry) => (
+              {!filesNotice && !visibleEntries.length && <div className="file-tree-empty">{fileTreeQuery.trim() ? "No matches" : "Файлы не найдены."}</div>}
+              {visibleEntries.map((entry) => entry.type === "file" ? (
                 <button
-                  className={`file-tree-row file${normalizeProjectFilePath(entry.path) === normalizeProjectFilePath(activePath) ? " selected" : ""}`}
+                  className={`file-tree-row file${normalizeProjectFilePath(entry.path) === normalizeProjectFilePath(activePath) ? " active" : ""}`}
                   key={entry.path}
+                  role="treeitem"
+                  style={{ paddingLeft: `${8 + entry.depth * 18}px` }}
+                  title={entry.path}
                   type="button"
                   onClick={() => setActivePath(entry.path)}
                 >
                   <span className="file-tree-caret-spacer" aria-hidden="true" />
                   {renderFileTreeFileIcon(entry)}
-                  <span className="file-tree-name">{entry.path}</span>
+                  <span className="file-tree-name">{entry.name}</span>
                   {entry.size !== undefined && <small>{formatBytes(entry.size)}</small>}
                 </button>
+              ) : (
+                <div
+                  aria-expanded={Boolean(expandedFolders[entry.path])}
+                  className={["file-tree-row directory", expandedFolders[entry.path] ? "open" : ""].filter(Boolean).join(" ")}
+                  key={entry.path}
+                  role="treeitem"
+                  style={{ paddingLeft: `${8 + entry.depth * 18}px` }}
+                  title={entry.path}
+                >
+                  <button
+                    aria-label={expandedFolders[entry.path] ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
+                    className="file-tree-caret-button"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleFolder(entry.path);
+                    }}
+                  >
+                    <ChevronDown className="file-tree-caret" size={13} />
+                  </button>
+                  <button className="file-tree-directory-button" type="button" onClick={() => toggleFolder(entry.path)}>
+                    {renderFileTreeDirectoryIcon(entry, Boolean(expandedFolders[entry.path]))}
+                    <span className="file-tree-name">{entry.name}</span>
+                  </button>
+                </div>
               ))}
             </div>
           </aside>
@@ -3070,7 +3143,7 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
                 {renderRichText(file.content, "markdown-preview rich-text", {
                   onFileReference: (path) => {
                     const normalized = normalizeProjectFilePath(path).toLowerCase();
-                    const match = visibleEntries.find((entry) => normalizeProjectFilePath(entry.path).toLowerCase() === normalized);
+                    const match = visibleFileEntries.find((entry) => normalizeProjectFilePath(entry.path).toLowerCase() === normalized);
                     if (match) setActivePath(match.path);
                   },
                   projectReferenceNames: [file.project.name, target.repoId]
@@ -4043,6 +4116,7 @@ function App() {
   const [editorCursor, setEditorCursor] = useState<EditorCursorState>({ lineNumber: 1, column: 1, selectionLength: 0 });
   const [markdownPreviewMode, setMarkdownPreviewMode] = useState(true);
   const fileEditorTabDragKeyRef = useRef("");
+  const markdownPreviewFileKeyRef = useRef("");
   const [draggingFileEditorTabKey, setDraggingFileEditorTabKey] = useState("");
   const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
   const [projectFilesRepoKey, setProjectFilesRepoKey] = useState("");
@@ -5859,6 +5933,13 @@ function App() {
   useEffect(() => {
     setEditorCursor({ lineNumber: 1, column: 1, selectionLength: 0 });
   }, [fileEditor?.agentId, fileEditor?.repoId, fileEditor?.path]);
+
+  useEffect(() => {
+    const key = fileEditor ? editorFileKey(fileEditor) : "";
+    if (key === markdownPreviewFileKeyRef.current) return;
+    markdownPreviewFileKeyRef.current = key;
+    if (fileEditor && !fileEditor.binary && isMarkdownPath(fileEditor.path)) setMarkdownPreviewMode(true);
+  }, [fileEditor?.agentId, fileEditor?.binary, fileEditor?.path, fileEditor?.repoId]);
 
   useEffect(() => {
     if (!ideChatNotice) return;
