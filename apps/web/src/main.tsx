@@ -11548,7 +11548,7 @@ function App() {
       <div className="file-editor-tabs" role="tablist" aria-label="Open files">
         {fileEditorTabs.map((tab) => {
           const tabKey = editorFileKey(tab);
-          const active = tabKey === editorFileKey(fileEditor);
+          const active = !selectedProjectFolderPath && tabKey === editorFileKey(fileEditor);
           const dirty = !tab.binary && tab.content !== tab.originalContent;
           return (
             <button
@@ -12619,7 +12619,7 @@ function App() {
                   )}
                   {!projectFilesLoading && visibleProjectFiles.map((entry) => entry.type === "file" ? (
                     <button
-                      className={`file-tree-row file${entry.path === fileEditor.path ? " active" : ""}`}
+                      className={`file-tree-row file${!selectedProjectFolderPath && entry.path === fileEditor.path ? " active" : ""}`}
                       key={entry.path}
                       role="treeitem"
                       style={{ paddingLeft: `${8 + entry.depth * 18}px` }}
