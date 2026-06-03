@@ -8230,23 +8230,29 @@ button:disabled {
   .file-editor-modal {
     place-items: stretch;
     padding: max(3px, env(safe-area-inset-top)) max(3px, env(safe-area-inset-right)) max(3px, env(safe-area-inset-bottom)) max(3px, env(safe-area-inset-left));
+    overflow: hidden;
   }
 
   .file-editor-panel {
-    width: 100%;
+    width: calc(100vw - 6px);
+    max-width: calc(100vw - 6px);
     height: calc(100dvh - 6px);
+    min-width: 0;
     gap: 6px;
     padding: 6px;
     border-radius: 6px;
+    overflow: hidden;
   }
 
   .ide-mobile-header {
     display: grid;
     gap: 6px;
+    min-width: 0;
     padding: 6px;
     border: 1px solid var(--line);
     border-radius: 7px;
     background: var(--panel-2);
+    overflow: hidden;
   }
 
   .ide-mobile-topline {
@@ -8301,6 +8307,7 @@ button:disabled {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
+    min-width: 0;
   }
 
   .ide-mobile-panes button {
@@ -8438,12 +8445,21 @@ button:disabled {
   }
 
   .file-editor-tabs {
+    width: 100%;
+    min-width: 0;
     min-height: 29px;
     gap: 2px;
+    padding-bottom: 0;
+    scrollbar-width: none;
+  }
+
+  .file-editor-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .file-editor-tab {
     min-width: 92px;
+    max-width: 156px;
     min-height: 28px;
     gap: 4px;
     padding: 4px 6px;
@@ -8457,9 +8473,11 @@ button:disabled {
   }
 
   .file-editor-workspace {
+    min-width: 0;
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr);
     gap: 5px;
+    overflow: hidden;
   }
 
   .file-editor-workspace.with-chat {
@@ -8509,10 +8527,23 @@ button:disabled {
   .file-editor-workspace.mobile-pane-files > .file-explorer,
   .file-editor-workspace.mobile-pane-code > .file-editor-main,
   .file-editor-workspace.mobile-pane-chat > .ide-chat-panel {
+    min-width: 0;
     display: flex;
   }
 
+  .file-editor-main,
+  .file-viewer,
+  .file-folder-view,
+  .image-preview,
+  .code-preview {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
   .file-explorer {
+    min-width: 0;
+    max-width: 100%;
     overflow: hidden;
     gap: 5px;
     padding: 5px;
@@ -8594,19 +8625,26 @@ button:disabled {
   }
 
   .monaco-editor-host {
+    min-width: 0;
+    max-width: 100%;
     border-radius: 5px;
+    overflow: hidden;
   }
 
   .file-editor-status-bar {
+    min-width: 0;
     min-height: 22px;
     gap: 8px;
     padding: 0 6px;
     border-radius: 5px;
     font-size: 10.5px;
+    overflow: hidden;
   }
 
   .file-editor-status-meta {
+    min-width: 0;
     gap: 7px;
+    overflow: hidden;
   }
 
   .chat-work {
@@ -9071,6 +9109,117 @@ button:disabled {
 
   .sticky-submit .run-button {
     font-size: 13px;
+  }
+
+  .file-editor-modal {
+    padding: 0;
+  }
+
+  .file-editor-panel {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    gap: 4px;
+    padding: max(4px, env(safe-area-inset-top)) 4px max(4px, env(safe-area-inset-bottom));
+    border: 0;
+    border-radius: 0;
+  }
+
+  .ide-mobile-header {
+    gap: 5px;
+    padding: 5px;
+    border-radius: 5px;
+  }
+
+  .ide-mobile-topline {
+    gap: 6px;
+  }
+
+  .ide-mobile-menu-button {
+    min-height: 28px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .ide-mobile-title strong {
+    font-size: 12px;
+  }
+
+  .ide-mobile-title small {
+    font-size: 10.5px;
+  }
+
+  .ide-mobile-panes {
+    gap: 3px;
+  }
+
+  .ide-mobile-panes button {
+    min-height: 28px;
+    gap: 4px;
+    padding: 0 4px;
+    font-size: 11px;
+  }
+
+  .file-editor-tabs {
+    min-height: 27px;
+  }
+
+  .file-editor-tab {
+    min-width: 78px;
+    max-width: 132px;
+    min-height: 26px;
+    gap: 3px;
+    padding: 3px 4px;
+    font-size: 10.5px;
+  }
+
+  .file-editor-tab svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .tab-close {
+    width: 16px;
+    height: 16px;
+  }
+
+  .file-editor-workspace {
+    gap: 4px;
+  }
+
+  .file-editor-search {
+    min-height: 30px;
+    padding: 0 7px;
+    border-radius: 5px;
+  }
+
+  .code-line-gutter {
+    width: 30px;
+    padding-right: 5px;
+    font-size: 10px;
+  }
+
+  .file-editor-status-bar {
+    min-height: 20px;
+    gap: 5px;
+    padding: 0 5px;
+    font-size: 10px;
+  }
+
+  .file-editor-status-main {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-editor-status-meta {
+    flex: 0 1 auto;
+    justify-content: flex-end;
+  }
+
+  .file-editor-status-meta span:nth-child(n + 4) {
+    display: none;
   }
 }
 

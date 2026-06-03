@@ -439,6 +439,7 @@ export function MonacoCodeEditor({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const compactEditor = typeof window !== "undefined" && window.matchMedia("(max-width: 480px)").matches;
     const uri = monaco.Uri.parse(`file:///${path.replace(/\\/g, "/").replace(/^\/+/, "")}`);
     const model = monaco.editor.createModel(value, editorLanguageFromPath(path), uri);
     modelRef.current = model;
@@ -446,12 +447,15 @@ export function MonacoCodeEditor({
       model,
       theme,
       automaticLayout: true,
-      minimap: { enabled: true, maxColumn: 90, renderCharacters: false, scale: 0.72 },
+      minimap: compactEditor ? { enabled: false } : { enabled: true, maxColumn: 90, renderCharacters: false, scale: 0.72 },
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace",
-      fontSize: 13,
-      lineHeight: 20,
+      fontSize: compactEditor ? 12 : 13,
+      lineHeight: compactEditor ? 18 : 20,
       scrollBeyondLastLine: false,
-      wordWrap: "off",
+      scrollBeyondLastColumn: compactEditor ? 0 : 5,
+      wordWrap: compactEditor ? "on" : "off",
+      wrappingIndent: "same",
+      lineNumbersMinChars: compactEditor ? 2 : 5,
       tabSize: 2,
       insertSpaces: true,
       renderWhitespace: "selection",
