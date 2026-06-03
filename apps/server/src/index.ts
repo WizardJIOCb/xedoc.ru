@@ -21,6 +21,7 @@ import {
   ProjectFileListQuerySchema,
   PasswordUpdateSchema,
   ProjectFileReadQuerySchema,
+  ProjectFileShareSchema,
   ProjectFileWriteSchema,
   ProfileUpdateSchema,
   RegisterSchema,
@@ -52,6 +53,7 @@ import {
   type ChatMessageRow,
   type ChatRow,
   type ChatShareRow,
+  type FileShareRow,
   type GithubConnectionRow,
   type JobRow,
   type LogRow,
@@ -124,6 +126,10 @@ type PublicProjectRow = RepoRow & {
   author_bio: string | null;
   author_created_at: string;
   chat_count: number;
+};
+type PublicFileShareRow = FileShareRow & {
+  repo_name: string;
+  repo_domain: string | null;
 };
 type AdminChatRow = ChatRow & {
   agent_name: string;
@@ -2141,6 +2147,72 @@ function publicShareUrl(request: { protocol: string; hostname: string }, token: 
   return `${publicOrigin(request)}/share/${encodeURIComponent(token)}`;
 }
 
+function publicFileShareUrl(request: { protocol: string; hostname: string }, token: string): string {
+  return `${publicOrigin(request)}/f/${encodeURIComponent(token)}`;
+}
+
+function validFileShareToken(token: string): boolean {
+  return /^file_[A-Za-z0-9_-]{20,120}$/.test(token);
+}
+
+function publicFileShareForToken(token: string): PublicFileShareRow | undefined {
+  if (!validFileShareToken(token)) return undefined;
+  return db.prepare(`
+    SELECT
+      fs.*,
+      r.name AS repo_name,
+      r.domain AS repo_domain
+    FROM file_shares fs
+    JOIN repos r ON r.agent_id = fs.agent_id AND r.id = fs.repo_id
+    JOIN users u ON u.id = r.user_id
+    WHERE fs.token = ? AND r.visibility = 'public' AND u.blocked_at IS NULL
+  `).get(token) as PublicFileShareRow | undefined;
+}
+
+function serializePublicFileShare(row: PublicFileShareRow, request: { protocol: string; hostname: string }) {
+  return {
+    token: row.token,
+    url: publicFileShareUrl(request, row.token),
+    path: row.path,
+    project: {
+      name: row.repo_name,
+      domain: row.repo_domain
+    },
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function upsertProjectFileShare(user: AuthUser, repo: RepoRow, path: string, request: { protocol: string; hostname: string }) {
+  const stamp = nowIso();
+  const existing = db.prepare("SELECT * FROM file_shares WHERE agent_id = ? AND repo_id = ? AND path = ?")
+    .get(repo.agent_id, repo.id, path) as FileShareRow | undefined;
+  if (existing) {
+    db.prepare("UPDATE file_shares SET updated_at = ? WHERE token = ?").run(stamp, existing.token);
+    return {
+      share: {
+        token: existing.token,
+        url: publicFileShareUrl(request, existing.token),
+        path,
+        createdAt: existing.created_at,
+        updatedAt: stamp
+      }
+    };
+  }
+  const token = randomToken("file");
+  db.prepare("INSERT INTO file_shares (token,agent_id,repo_id,path,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)")
+    .run(token, repo.agent_id, repo.id, path, user.id ?? null, stamp, stamp);
+  return {
+    share: {
+      token,
+      url: publicFileShareUrl(request, token),
+      path,
+      createdAt: stamp,
+      updatedAt: stamp
+    }
+  };
+}
+
 function projectUrlFromDomain(domain: string | null | undefined): string | null {
   const normalized = domain?.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/g, "");
   return normalized ? `https://${normalized}` : null;
@@ -3046,6 +3118,72 @@ async function createApp(): Promise<FastifyInstance> {
     if (!share) return reply.code(404).send({ error: "not_found" });
     reply.header("Cache-Control", "public, max-age=60");
     return { share: serializeShare(share, request) };
+  });
+
+  app.get("/api/public/file-shares/:token", async (request, reply) => {
+    const token = (request.params as { token: string }).token;
+    const share = publicFileShareForToken(token);
+    if (!share) return reply.code(404).send({ error: "not_found" });
+    reply.header("Cache-Control", "public, max-age=60");
+    return { share: serializePublicFileShare(share, request) };
+  });
+
+  app.get("/api/public/file-shares/:token/files/list", async (request, reply) => {
+    const token = (request.params as { token: string }).token;
+    const share = publicFileShareForToken(token);
+    if (!share) return reply.code(404).send({ error: "not_found" });
+    const parsed = ProjectFileListQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_path", details: parsed.error.flatten() });
+    try {
+      const result = await requestAgentFile(share.agent_id, {
+        type: "file.list",
+        requestId: id("req"),
+        repoId: share.repo_id,
+        path: parsed.data.path ?? ""
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error || "file_list_failed" });
+      reply.header("Cache-Control", "public, max-age=30");
+      return { entries: result.entries ?? [] };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
+  });
+
+  app.get("/api/public/file-shares/:token/files/read", async (request, reply) => {
+    const token = (request.params as { token: string }).token;
+    const share = publicFileShareForToken(token);
+    if (!share) return reply.code(404).send({ error: "not_found" });
+    const query = request.query as { path?: unknown };
+    const parsed = ProjectFileReadQuerySchema.safeParse({
+      path: typeof query.path === "string" && query.path.trim() ? query.path : share.path
+    });
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_file", details: parsed.error.flatten() });
+    try {
+      const result = await requestAgentFile(share.agent_id, {
+        type: "file.read",
+        requestId: id("req"),
+        repoId: share.repo_id,
+        path: parsed.data.path
+      });
+      if (!result.ok) return reply.code(400).send({ error: result.error ?? "file_read_failed" });
+      reply.header("Cache-Control", "public, max-age=60");
+      return {
+        ok: true,
+        project: {
+          name: share.repo_name,
+          domain: share.repo_domain
+        },
+        path: result.path ?? parsed.data.path,
+        content: result.content ?? "",
+        binary: Boolean(result.binary),
+        mimeType: result.mimeType,
+        dataBase64: result.dataBase64,
+        size: result.size,
+        mtimeMs: result.mtimeMs
+      };
+    } catch (error) {
+      return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
+    }
   });
 
   app.get("/api/public/profiles/:slug", async (request, reply) => {
@@ -4224,6 +4362,24 @@ async function createApp(): Promise<FastifyInstance> {
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }
+  });
+
+  app.post("/api/projects/:agentId/:repoId/files/share", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const params = request.params as { agentId: string; repoId: string };
+    if (!canAccessRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const parsed = ProjectFileShareSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_file", details: parsed.error.flatten() });
+    const repo = db.prepare(`
+      SELECT r.*
+      FROM repos r
+      JOIN users u ON u.id = r.user_id
+      WHERE r.agent_id = ? AND r.id = ? AND u.blocked_at IS NULL
+    `).get(params.agentId, params.repoId) as RepoRow | undefined;
+    if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    if (repo.visibility !== "public") return reply.code(409).send({ error: "project_not_public" });
+    return reply.code(201).send(upsertProjectFileShare(auth.user, repo, parsed.data.path, request));
   });
 
   app.get("/api/projects/:agentId/:repoId/files/list", async (request, reply) => {

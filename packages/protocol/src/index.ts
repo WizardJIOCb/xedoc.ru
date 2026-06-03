@@ -598,6 +598,11 @@ export const ProjectFileReadQuerySchema = z.object({
 });
 export type ProjectFileReadQuery = z.infer<typeof ProjectFileReadQuerySchema>;
 
+export const ProjectFileShareSchema = z.object({
+  path: ProjectFilePathSchema
+});
+export type ProjectFileShare = z.infer<typeof ProjectFileShareSchema>;
+
 export const ProjectFileListQuerySchema = z.object({
   path: z.string().max(500).optional().default("").refine((value) => {
     const normalized = value.replace(/\\/g, "/");

@@ -407,8 +407,8 @@ type PublicProject = {
 
 type PublicProjectFile = {
   project: {
-    id: string;
-    agentId: string;
+    id?: string;
+    agentId?: string;
     name: string;
     domain?: string | null;
   };
@@ -420,6 +420,22 @@ type PublicProjectFile = {
   size?: number;
   mtimeMs?: number;
 };
+
+type PublicFileShare = {
+  token: string;
+  url: string;
+  path: string;
+  project: {
+    name: string;
+    domain?: string | null;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PublicFileTarget =
+  | { kind: "legacy"; agentId: string; repoId: string; path: string }
+  | { kind: "share"; token: string };
 
 type PublicChatPayload = {
   chat: Chat;
@@ -996,13 +1012,23 @@ function imageMimeTypeFromPath(path: string) {
   return "";
 }
 
-function fileShareUrl(repo: Pick<Repo, "agentId" | "id">, path: string) {
-  const url = new URL(window.location.origin);
-  url.searchParams.set("agent", repo.agentId);
-  url.searchParams.set("repo", repo.id);
-  url.searchParams.set("file", path);
-  url.searchParams.set("readonly", "1");
-  return url.toString();
+async function createProjectFileShareUrl(repo: Pick<Repo, "agentId" | "id">, path: string, csrf: string) {
+  if (!csrf) throw new Error("Сессия устарела. Обнови страницу и попробуй ещё раз.");
+  const response = await api(`/api/projects/${encodeURIComponent(repo.agentId)}/${encodeURIComponent(repo.id)}/files/share`, {
+    method: "POST",
+    headers: { "x-csrf-token": csrf },
+    body: JSON.stringify({ path })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data.error === "project_not_public"
+      ? "Сначала включи Public/read-only доступ у проекта."
+      : data.error || "Не получилось создать короткую ссылку.";
+    throw new Error(message);
+  }
+  const url = typeof data.share?.url === "string" ? data.share.url : "";
+  if (!url) throw new Error("Сервер не вернул ссылку.");
+  return url;
 }
 
 function projectWriteUsersFromText(value: string) {
@@ -2926,32 +2952,74 @@ function publicProfileSlugFromLocation() {
   return match ? decodeURIComponent(match[1] ?? "") : "";
 }
 
-function publicFileFromLocation() {
+function publicFileShareTokenFromLocation() {
+  const match = window.location.pathname.match(/^\/f\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1] ?? "") : "";
+}
+
+function publicFileFromLocation(): PublicFileTarget | null {
+  const token = publicFileShareTokenFromLocation();
+  if (token) return { kind: "share", token };
   if (window.location.pathname !== "/" && window.location.pathname !== "") return null;
   const params = new URLSearchParams(window.location.search);
   const agentId = params.get("agent")?.trim() ?? "";
   const repoId = params.get("repo")?.trim() ?? "";
   const path = params.get("file")?.trim() ?? "";
   if (!agentId || !repoId || !path) return null;
-  return { agentId, repoId, path };
+  return { kind: "legacy", agentId, repoId, path };
 }
 
 function registrationOpenFromLocation() {
   return new URLSearchParams(window.location.search).get("cango") === "sure";
 }
 
-function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: string; path: string } }) {
-  const [activePath, setActivePath] = useState(target.path);
+function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
+  const [activePath, setActivePath] = useState(target.kind === "legacy" ? target.path : "");
   const [entries, setEntries] = useState<ProjectFileEntry[]>([]);
-  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>(() => expandedFolderRecord(fileFolderAncestors(target.path)));
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>(() => (
+    target.kind === "legacy" ? expandedFolderRecord(fileFolderAncestors(target.path)) : {}
+  ));
   const [fileTreeQuery, setFileTreeQuery] = useState("");
   const [file, setFile] = useState<PublicProjectFile | null>(null);
+  const [share, setShare] = useState<PublicFileShare | null>(null);
   const [notice, setNotice] = useState("Загружаю публичный файл...");
   const [filesNotice, setFilesNotice] = useState("Загружаю файлы...");
+  const targetKey = target.kind === "share" ? `share:${target.token}` : `legacy:${target.agentId}:${target.repoId}`;
+
+  useEffect(() => {
+    if (target.kind !== "share") return;
+    let cancelled = false;
+    api(`/api/public/file-shares/${encodeURIComponent(target.token)}`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) {
+          setNotice(data.error === "not_found" ? "Ссылка не найдена или проект больше не публичный." : data.error || "Не удалось загрузить ссылку.");
+          setFilesNotice("");
+          return;
+        }
+        const nextShare = data.share as PublicFileShare;
+        setShare(nextShare);
+        setActivePath((current) => current || nextShare.path);
+        setExpandedFolders((current) => ({ ...expandedFolderRecord(fileFolderAncestors(nextShare.path)), ...current }));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNotice("Не удалось загрузить ссылку.");
+          setFilesNotice("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [target.kind === "share" ? target.token : ""]);
 
   useEffect(() => {
     let cancelled = false;
-    api(`/api/public/projects/${encodeURIComponent(target.agentId)}/${encodeURIComponent(target.repoId)}/files/list`)
+    const url = target.kind === "share"
+      ? `/api/public/file-shares/${encodeURIComponent(target.token)}/files/list`
+      : `/api/public/projects/${encodeURIComponent(target.agentId)}/${encodeURIComponent(target.repoId)}/files/list`;
+    api(url)
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
         if (cancelled) return;
@@ -2968,13 +3036,17 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
     return () => {
       cancelled = true;
     };
-  }, [target.agentId, target.repoId]);
+  }, [targetKey]);
 
   useEffect(() => {
+    if (target.kind === "share" && !activePath) return;
     let cancelled = false;
     setNotice("Загружаю публичный файл...");
     setFile(null);
-    api(`/api/public/projects/${encodeURIComponent(target.agentId)}/${encodeURIComponent(target.repoId)}/files/read?path=${encodeURIComponent(activePath)}`)
+    const url = target.kind === "share"
+      ? `/api/public/file-shares/${encodeURIComponent(target.token)}/files/read?path=${encodeURIComponent(activePath)}`
+      : `/api/public/projects/${encodeURIComponent(target.agentId)}/${encodeURIComponent(target.repoId)}/files/read?path=${encodeURIComponent(activePath)}`;
+    api(url)
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
         if (cancelled) return;
@@ -2991,16 +3063,17 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
     return () => {
       cancelled = true;
     };
-  }, [target.agentId, target.repoId, activePath]);
+  }, [targetKey, activePath]);
 
   useEffect(() => {
+    if (target.kind !== "legacy") return;
     const url = new URL(window.location.href);
     url.searchParams.set("agent", target.agentId);
     url.searchParams.set("repo", target.repoId);
     url.searchParams.set("file", activePath);
     url.searchParams.set("readonly", "1");
     window.history.replaceState(null, "", url);
-  }, [activePath, target.agentId, target.repoId]);
+  }, [activePath, target]);
 
   useEffect(() => {
     const ancestors = fileFolderAncestors(activePath);
@@ -3017,8 +3090,8 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
     });
   }, [activePath]);
 
-  const name = (file?.path || activePath).split("/").pop() || activePath;
-  const projectLink = projectUrl(file?.project.domain ?? "");
+  const name = (file?.path || activePath || share?.path || "file").split("/").pop() || activePath || share?.path || "file";
+  const projectLink = projectUrl(file?.project.domain ?? share?.project.domain ?? "");
   const imageMimeType = file ? (file.mimeType || imageMimeTypeFromPath(file.path)) : "";
   const imageSrc = file?.binary && file.dataBase64 && imageMimeType.startsWith("image/")
     ? `data:${imageMimeType || "application/octet-stream"};base64,${file.dataBase64}`
@@ -3146,7 +3219,7 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
                     const match = visibleFileEntries.find((entry) => normalizeProjectFilePath(entry.path).toLowerCase() === normalized);
                     if (match) setActivePath(match.path);
                   },
-                  projectReferenceNames: [file.project.name, target.repoId]
+                  projectReferenceNames: [file.project.name, target.kind === "legacy" ? target.repoId : undefined]
                 })}
               </article>
             ) : !notice && file ? (
@@ -3157,9 +3230,9 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
           </section>
         </div>
         <footer className="file-editor-status-bar ok">
-          <span className="file-editor-status-message">{file?.project.name ?? target.repoId} · public read-only</span>
+          <span className="file-editor-status-message">{file?.project.name ?? share?.project.name ?? (target.kind === "legacy" ? target.repoId : "Public file")} · public read-only</span>
           <span className="file-editor-status-meta">
-            <span>{file?.path ?? activePath}</span>
+            <span>{file?.path ?? activePath ?? share?.path}</span>
             {file?.size !== undefined && <span>{formatBytes(file.size)}</span>}
           </span>
         </footer>
@@ -7821,7 +7894,7 @@ function App() {
       const response = await api(`/api/projects/${encodeURIComponent(selectedRepo.agentId)}/${encodeURIComponent(selectedRepo.id)}/files/read?path=${encodeURIComponent(entry.path)}`);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "File read failed.");
-      const text = data.binary ? fileShareUrl(selectedRepo, entry.path) : String(data.content ?? "");
+      const text = data.binary ? await createProjectFileShareUrl(selectedRepo, entry.path, csrf ?? "") : String(data.content ?? "");
       await navigator.clipboard?.writeText(text);
       setIdeChatNotice(data.binary ? "Ссылка на файл скопирована." : "Содержимое файла скопировано.");
     } catch (error) {
@@ -7872,17 +7945,26 @@ function App() {
 
   async function shareProjectFile(entry: ProjectFileEntry) {
     if (!selectedRepo) return;
-    const url = fileShareUrl(selectedRepo, entry.path);
-    await navigator.clipboard?.writeText(url).catch(() => undefined);
-    setIdeChatNotice(`Ссылка на файл скопирована: ${url}`);
+    try {
+      const url = await createProjectFileShareUrl(selectedRepo, entry.path, csrf ?? "");
+      await navigator.clipboard?.writeText(url).catch(() => undefined);
+      setIdeChatNotice(`Ссылка на файл скопирована: ${url}`);
+    } catch (error) {
+      setIdeChatNotice(error instanceof Error ? error.message : "Не получилось создать ссылку.");
+    }
   }
 
   async function shareCurrentProjectFile() {
     if (!selectedRepo || !fileEditor || selectedProjectFolderPath) return;
-    const url = fileShareUrl(selectedRepo, fileEditor.path);
-    await navigator.clipboard?.writeText(url).catch(() => undefined);
-    setIdeChatMenuOpen(false);
-    setIdeChatNotice(`Ссылка на текущий файл скопирована: ${url}`);
+    try {
+      const url = await createProjectFileShareUrl(selectedRepo, fileEditor.path, csrf ?? "");
+      await navigator.clipboard?.writeText(url).catch(() => undefined);
+      setIdeChatMenuOpen(false);
+      setIdeChatNotice(`Ссылка на текущий файл скопирована: ${url}`);
+    } catch (error) {
+      setIdeChatMenuOpen(false);
+      setIdeChatNotice(error instanceof Error ? error.message : "Не получилось создать ссылку.");
+    }
   }
 
   function downloadProjectEntry(entry: ProjectFileEntry) {
@@ -7898,9 +7980,21 @@ function App() {
     setIdeChatNotice(entry.type === "directory" ? `Скачиваю ${entry.path}.tar...` : `Скачиваю ${entry.path}...`);
   }
 
-  function openProjectFileInNewWindow(entry: ProjectFileEntry) {
+  async function openProjectFileInNewWindow(entry: ProjectFileEntry) {
     if (!selectedRepo) return;
-    window.open(fileShareUrl(selectedRepo, entry.path), "_blank", "noopener,noreferrer");
+    const popup = window.open("about:blank", "_blank");
+    try {
+      const url = await createProjectFileShareUrl(selectedRepo, entry.path, csrf ?? "");
+      if (popup) {
+        popup.opener = null;
+        popup.location.replace(url);
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      popup?.close();
+      setIdeChatNotice(error instanceof Error ? error.message : "Не получилось открыть ссылку.");
+    }
   }
 
   function openProjectEntryContextMenu(event: React.MouseEvent, entry: ProjectFileEntry) {
