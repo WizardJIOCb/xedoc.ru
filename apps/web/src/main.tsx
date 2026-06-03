@@ -745,22 +745,44 @@ function commonPrefixLength(left: string, right: string) {
 }
 
 const STREAM_FRAME_MS = 1000 / 60;
-const STREAM_MAX_FRAME_CATCHUP = 2;
+const STREAM_MAX_FRAME_CATCHUP = 2.5;
 
 function streamingRevealStep(backlog: number, elapsedMs: number) {
-  const frameFactor = Math.min(STREAM_MAX_FRAME_CATCHUP, Math.max(0.65, elapsedMs / STREAM_FRAME_MS));
-  let baseStep = 1;
-  if (backlog > 2800) baseStep = 10;
-  else if (backlog > 1400) baseStep = 8;
-  else if (backlog > 700) baseStep = 6;
-  else if (backlog > 320) baseStep = 4;
-  else if (backlog > 120) baseStep = 3;
-  else if (backlog > 40) baseStep = 2;
+  const frameFactor = Math.min(STREAM_MAX_FRAME_CATCHUP, Math.max(0.8, elapsedMs / STREAM_FRAME_MS));
+  let baseStep = 2;
+  if (backlog > 2800) baseStep = 22;
+  else if (backlog > 1400) baseStep = 17;
+  else if (backlog > 700) baseStep = 13;
+  else if (backlog > 320) baseStep = 9;
+  else if (backlog > 120) baseStep = 5;
+  else if (backlog > 40) baseStep = 3;
   return Math.min(backlog, Math.max(1, Math.round(baseStep * frameFactor)));
 }
 
-const STREAM_LETTER_ANIMATION_MS = 180;
-const STREAM_CARET_HIDE_DELAY_MS = STREAM_LETTER_ANIMATION_MS + 80;
+const STREAM_CARET_HIDE_DELAY_MS = 220;
+
+function monotonicStreamingTarget(displayed: string, previousTarget: string, incoming: string) {
+  const current = displayed || previousTarget;
+  if (!incoming) return current;
+  if (!current) return incoming;
+  if (incoming === current) return current;
+  if (incoming.startsWith(current)) return incoming;
+  if (current.startsWith(incoming)) return current;
+
+  const nestedAt = incoming.indexOf(current);
+  if (nestedAt >= 0) return `${current}${incoming.slice(nestedAt + current.length)}`;
+  if (current.includes(incoming)) return current;
+
+  const overlap = textOverlapLength(current, incoming);
+  if (overlap > 0) return `${current}${incoming.slice(overlap)}`;
+
+  const prefix = commonPrefixLength(current, incoming);
+  if (incoming.length > current.length && prefix >= Math.max(0, current.length - 32)) {
+    return `${current}${incoming.slice(prefix)}`;
+  }
+
+  return current;
+}
 
 function AnimatedStreamingRichText({
   text,
@@ -775,6 +797,7 @@ function AnimatedStreamingRichText({
 }) {
   const normalized = useMemo(() => normalizeDisplayText(text).trim(), [text]);
   const [displayText, setDisplayText] = useState("");
+  const [streamTarget, setStreamTarget] = useState(normalized);
   const [showCaret, setShowCaret] = useState(Boolean(normalized));
   const displayTextRef = useRef("");
   const targetTextRef = useRef(normalized);
@@ -793,7 +816,9 @@ function AnimatedStreamingRichText({
   }, [displayText]);
 
   useEffect(() => {
-    targetTextRef.current = normalized;
+    const nextTarget = monotonicStreamingTarget(displayTextRef.current, targetTextRef.current, normalized);
+    targetTextRef.current = nextTarget;
+    setStreamTarget((current) => current === nextTarget ? current : nextTarget);
     const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     if (prefersReducedMotion) {
       if (frameRef.current !== null) {
@@ -801,8 +826,8 @@ function AnimatedStreamingRichText({
         frameRef.current = null;
       }
       lastFrameAtRef.current = null;
-      displayTextRef.current = normalized;
-      setDisplayText(normalized);
+      displayTextRef.current = nextTarget;
+      setDisplayText(nextTarget);
       return undefined;
     }
 
@@ -812,25 +837,24 @@ function AnimatedStreamingRichText({
       const elapsedMs = lastFrameAtRef.current === null ? STREAM_FRAME_MS : now - lastFrameAtRef.current;
       lastFrameAtRef.current = now;
       const current = displayTextRef.current;
-      const target = targetTextRef.current;
+      let target = targetTextRef.current;
       if (current === target) {
         lastFrameAtRef.current = null;
         return;
       }
 
-      let next = target;
-      if (target.startsWith(current)) {
-        const backlog = target.length - current.length;
-        next = target.slice(0, current.length + streamingRevealStep(backlog, elapsedMs));
-      } else {
-        const prefix = commonPrefixLength(current, target);
-        const isSmallRewrite = prefix >= Math.max(0, current.length - 24);
-        if (isSmallRewrite && prefix < target.length) {
-          const backlog = target.length - prefix;
-          next = target.slice(0, prefix + streamingRevealStep(backlog, elapsedMs));
-        }
+      if (!target.startsWith(current)) {
+        target = monotonicStreamingTarget(current, target, target);
+        targetTextRef.current = target;
       }
 
+      if (current === target || !target.startsWith(current)) {
+        lastFrameAtRef.current = null;
+        return;
+      }
+
+      const backlog = target.length - current.length;
+      const next = target.slice(0, current.length + streamingRevealStep(backlog, elapsedMs));
       displayTextRef.current = next;
       setDisplayText(next);
       if (next !== targetTextRef.current) {
@@ -860,12 +884,12 @@ function AnimatedStreamingRichText({
       caretHideTimerRef.current = null;
     }
 
-    if (!displayText && !normalized) {
+    if (!displayText && !streamTarget) {
       setShowCaret(false);
       return undefined;
     }
 
-    if (displayText !== normalized) {
+    if (displayText !== streamTarget) {
       setShowCaret(true);
       return undefined;
     }
@@ -887,18 +911,15 @@ function AnimatedStreamingRichText({
         caretHideTimerRef.current = null;
       }
     };
-  }, [displayText, normalized]);
+  }, [displayText, streamTarget]);
 
-  const isAnimating = displayText !== normalized;
+  const isAnimating = displayText !== streamTarget;
   const shouldShowCaret = showCaret || isAnimating;
   const caret = shouldShowCaret ? <span className="stream-caret" key="stream-caret" aria-hidden="true" /> : undefined;
-  const richTextOptions = useMemo<RichTextOptions>(() => (
-    options ? { ...options, animateInlineText: true } : { animateInlineText: true }
-  ), [options]);
 
   return (
     <div className={className}>
-      {displayText || caret ? renderRichText(displayText, "rich-text compact live-activity-rich-body", richTextOptions, caret) : null}
+      {displayText || caret ? renderRichText(displayText, "rich-text compact live-activity-rich-body", options, caret) : null}
     </div>
   );
 }
@@ -2074,7 +2095,6 @@ function safeMarkdownHref(value: string) {
 }
 
 type RichTextOptions = {
-  animateInlineText?: boolean;
   onFileReference?: (path: string) => void;
   projectRoot?: string | null;
   projectRoots?: Array<string | null | undefined>;
@@ -2493,21 +2513,8 @@ function resolveProjectFileReference(rawValue: string, currentPath: string, entr
   return leafMatches.length === 1 ? leafMatches[0] : "";
 }
 
-function renderPlainTextFragment(text: string, keyPrefix: string, options?: RichTextOptions): React.ReactNode[] {
-  if (!options?.animateInlineText) return [text];
-  return Array.from(text).map((char, index) => {
-    if (char === "\n") return <React.Fragment key={`${keyPrefix}:nl:${index}`}>{"\n"}</React.Fragment>;
-    const isSpace = /\s/.test(char);
-    return (
-      <span className={`stream-letter${isSpace ? " stream-space" : ""}`} key={`${keyPrefix}:char:${index}`}>
-        {isSpace ? "\u00a0" : char}
-      </span>
-    );
-  });
-}
-
 function renderPlainWithFileReferences(text: string, keyPrefix: string, options?: RichTextOptions): React.ReactNode[] {
-  if (!options?.onFileReference) return renderPlainTextFragment(text, keyPrefix, options);
+  if (!options?.onFileReference) return [text];
   const nodes: React.ReactNode[] = [];
   const pattern = /(?:[A-Za-z]:[\\/][^\s<>()]+?\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16}(?::\d+(?::\d+)?)?|\/[^\s<>()]+?\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16}(?::\d+(?::\d+)?)?|https?:\/\/[^\s<>()]+|(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9_.-]{0,16})/g;
   let lastIndex = 0;
@@ -2516,12 +2523,12 @@ function renderPlainWithFileReferences(text: string, keyPrefix: string, options?
     const raw = match[0];
     const path = projectFilePathFromReference(raw, options);
     if (!path) continue;
-    if (match.index > lastIndex) nodes.push(...renderPlainTextFragment(text.slice(lastIndex, match.index), `${keyPrefix}:plain:${lastIndex}`, options));
+    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
     nodes.push(fileReferenceButton(path, path, `${keyPrefix}:file:${nodes.length}`, options));
     lastIndex = match.index + raw.length;
   }
-  if (lastIndex < text.length) nodes.push(...renderPlainTextFragment(text.slice(lastIndex), `${keyPrefix}:plain:${lastIndex}`, options));
-  return nodes.length ? nodes : renderPlainTextFragment(text, keyPrefix, options);
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes.length ? nodes : [text];
 }
 
 function renderInlineMarkdown(text: string, keyPrefix = "inline", options?: RichTextOptions): React.ReactNode[] {
