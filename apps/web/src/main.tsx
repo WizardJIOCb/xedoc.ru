@@ -72,6 +72,7 @@ import {
   X
 } from "lucide-react";
 import "./styles.css";
+import { analyticsEndpoint, installMetrikaEventTracking, trackMetrikaGoal } from "./analytics";
 
 const MonacoCodeEditor = React.lazy(() => import("./MonacoEditors").then((module) => ({ default: module.MonacoCodeEditor })));
 const MonacoReadOnlyCodeViewer = React.lazy(() => import("./MonacoEditors").then((module) => ({ default: module.MonacoReadOnlyCodeViewer })));
@@ -898,6 +899,10 @@ function api(path: string, options: RequestInit = {}) {
     headers
   }).catch((error) => {
     if (isAbortError(error)) throw error;
+    trackMetrikaGoal("api_network_error", {
+      endpoint: analyticsEndpoint(path),
+      method: typeof options.method === "string" ? options.method : "GET"
+    });
     return new Response(JSON.stringify({ error: "network_error" }), {
       status: 503,
       headers: { "Content-Type": "application/json" }
@@ -2996,17 +3001,20 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
         if (!response.ok) {
           setNotice(data.error === "not_found" ? "Ссылка не найдена или проект больше не публичный." : data.error || "Не удалось загрузить ссылку.");
           setFilesNotice("");
+          trackMetrikaGoal("public_file_share_load", { status: "failed", error: data.error });
           return;
         }
         const nextShare = data.share as PublicFileShare;
         setShare(nextShare);
         setActivePath((current) => current || nextShare.path);
         setExpandedFolders((current) => ({ ...expandedFolderRecord(fileFolderAncestors(nextShare.path)), ...current }));
+        trackMetrikaGoal("public_file_share_load", { status: "success" });
       })
       .catch(() => {
         if (!cancelled) {
           setNotice("Не удалось загрузить ссылку.");
           setFilesNotice("");
+          trackMetrikaGoal("public_file_share_load", { status: "failed", error: "client_error" });
         }
       });
     return () => {
@@ -3025,13 +3033,18 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
         if (cancelled) return;
         if (!response.ok) {
           setFilesNotice(data.error === "not_found" ? "Проект не публичный или не найден." : data.error || "Не удалось загрузить файлы.");
+          trackMetrikaGoal("public_file_list_load", { status: "failed", error: data.error, target_kind: target.kind });
           return;
         }
         setEntries(Array.isArray(data.entries) ? data.entries : []);
         setFilesNotice("");
+        trackMetrikaGoal("public_file_list_load", { status: "success", target_kind: target.kind, entries_count: Array.isArray(data.entries) ? data.entries.length : 0 });
       })
       .catch(() => {
-        if (!cancelled) setFilesNotice("Не удалось загрузить файлы.");
+        if (!cancelled) {
+          setFilesNotice("Не удалось загрузить файлы.");
+          trackMetrikaGoal("public_file_list_load", { status: "failed", error: "client_error", target_kind: target.kind });
+        }
       });
     return () => {
       cancelled = true;
@@ -3052,13 +3065,24 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
         if (cancelled) return;
         if (!response.ok) {
           setNotice(data.error === "not_found" ? "Файл не найден или проект не публичный." : data.error || "Не удалось загрузить файл.");
+          trackMetrikaGoal("public_file_load", { status: "failed", error: data.error, target_kind: target.kind, ext: fileExtensionForAnalytics(activePath) });
           return;
         }
         setFile(data as PublicProjectFile);
         setNotice("");
+        trackMetrikaGoal("public_file_load", {
+          status: "success",
+          target_kind: target.kind,
+          ext: fileExtensionForAnalytics(data.path || activePath),
+          binary: Boolean(data.binary),
+          size_bucket: byteBucketForAnalytics(typeof data.size === "number" ? data.size : 0)
+        });
       })
       .catch(() => {
-        if (!cancelled) setNotice("Не удалось загрузить файл.");
+        if (!cancelled) {
+          setNotice("Не удалось загрузить файл.");
+          trackMetrikaGoal("public_file_load", { status: "failed", error: "client_error", target_kind: target.kind, ext: fileExtensionForAnalytics(activePath) });
+        }
       });
     return () => {
       cancelled = true;
@@ -3254,13 +3278,18 @@ function SharedChatPage({ token }: { token: string }) {
         if (cancelled) return;
         if (!response.ok) {
           setNotice(data.error === "not_found" ? "Ссылка на чат не найдена." : data.error || "Не удалось загрузить публичный чат.");
+          trackMetrikaGoal("shared_chat_load", { status: "failed", error: data.error });
           return;
         }
         setShare(data.share);
         setNotice("");
+        trackMetrikaGoal("shared_chat_load", { status: "success" });
       })
       .catch(() => {
-        if (!cancelled) setNotice("Не удалось загрузить публичный чат.");
+        if (!cancelled) {
+          setNotice("Не удалось загрузить публичный чат.");
+          trackMetrikaGoal("shared_chat_load", { status: "failed", error: "client_error" });
+        }
       });
     return () => {
       cancelled = true;
@@ -3358,14 +3387,19 @@ function PublicProfilePage({ slug }: { slug: string }) {
         if (cancelled) return;
         if (!response.ok) {
           setNotice(data.error === "not_found" ? "Профиль не найден." : data.error || "Не удалось загрузить профиль.");
+          trackMetrikaGoal("public_profile_load", { status: "failed", error: data.error });
           return;
         }
         setProfile(data.profile);
         setProjects(data.projects ?? []);
         setNotice("");
+        trackMetrikaGoal("public_profile_load", { status: "success", projects_count: Array.isArray(data.projects) ? data.projects.length : 0 });
       })
       .catch(() => {
-        if (!cancelled) setNotice("Не удалось загрузить профиль.");
+        if (!cancelled) {
+          setNotice("Не удалось загрузить профиль.");
+          trackMetrikaGoal("public_profile_load", { status: "failed", error: "client_error" });
+        }
       });
     return () => {
       cancelled = true;
@@ -3378,9 +3412,11 @@ function PublicProfilePage({ slug }: { slug: string }) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       setNotice(data.error || "Не удалось открыть чат.");
+      trackMetrikaGoal("public_chat_open", { status: "failed", source: "profile", error: data.error });
       return;
     }
     setOpenedChat({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
+    trackMetrikaGoal("public_chat_open", { status: "success", source: "profile" });
   }
 
   const stats = profile?.stats ?? { chats: 0, jobs: 0, completedJobs: 0, failedJobs: 0, projects: 0, generationSeconds: 0 };
@@ -4031,6 +4067,22 @@ function projectOperationPendingContent(label: string, repoName: string, details
   ].join("\n");
 }
 
+function fileExtensionForAnalytics(path: string) {
+  const leaf = path.split(/[\\/]/).pop() || "";
+  const dotIndex = leaf.lastIndexOf(".");
+  if (dotIndex <= 0 || dotIndex === leaf.length - 1) return "none";
+  return leaf.slice(dotIndex + 1).toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 16) || "none";
+}
+
+function byteBucketForAnalytics(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0";
+  if (bytes < 1024) return "lt_1kb";
+  if (bytes < 1024 * 1024) return "lt_1mb";
+  if (bytes < 5 * 1024 * 1024) return "lt_5mb";
+  if (bytes < 20 * 1024 * 1024) return "lt_20mb";
+  return "gte_20mb";
+}
+
 function App() {
   const registrationOpen = useMemo(registrationOpenFromLocation, []);
   const isAdminRoute = useMemo(() => window.location.pathname.replace(/\/+$/g, "") === "/admin", []);
@@ -4573,6 +4625,7 @@ function App() {
   const activeChatIdRef = useRef(activeChatId);
   const activeJobIdRef = useRef(activeJob?.id ?? "");
   const activeRunBusyRef = useRef(activeRunBusy);
+  const lastTrackedJobStatusRef = useRef("");
   const selectedRepoRef = useRef<Repo | undefined>(selectedRepo);
   const loadChatsTimerRef = useRef<number | undefined>(undefined);
   const loadChatTimerRef = useRef<number | undefined>(undefined);
@@ -5130,6 +5183,7 @@ function App() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       setSearchNotice(data.error || "Search failed.");
+      trackMetrikaGoal("public_search", { status: "failed", type, error: data.error });
       return;
     }
     if (type === "profiles") {
@@ -5139,6 +5193,11 @@ function App() {
       setSearchProjects(data.projects ?? []);
       setSearchProfiles([]);
     }
+    trackMetrikaGoal("public_search", {
+      status: "success",
+      type,
+      results_count: type === "profiles" ? data.profiles?.length ?? 0 : data.projects?.length ?? 0
+    });
   }
 
   async function openPublicChat(chat: Chat) {
@@ -5147,9 +5206,11 @@ function App() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       setSearchNotice(data.error || "Не удалось открыть публичный чат.");
+      trackMetrikaGoal("public_chat_open", { status: "failed", source: "search", error: data.error });
       return;
     }
     setSearchOpenedChat({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
+    trackMetrikaGoal("public_chat_open", { status: "success", source: "search" });
   }
 
   async function loadChats(repo: Repo, selectFirst = false, options: { showLoading?: boolean } = {}): Promise<Chat[] | undefined> {
@@ -5243,6 +5304,7 @@ function App() {
         setChatNoticeOk(false);
         setChatNotice(data.error === "agent_offline" ? "Агент offline: локальные чаты пока нельзя синхронизировать." : "Не получилось синхронизировать локальные чаты.");
         setSyncNotice(data.error === "agent_offline" ? "Агент offline: синхронизация недоступна." : data.error || "Не получилось синхронизировать локальные чаты.");
+        trackMetrikaGoal("local_chat_sync", { status: "failed", error: data.error });
         return;
       }
       setSyncNotice(data.accepted
@@ -5252,6 +5314,7 @@ function App() {
       localChatSyncRefreshRef.current = refreshId;
       refreshStarted = true;
       void refreshChatsAfterLocalSync(repo, refreshId).catch(() => undefined);
+      trackMetrikaGoal("local_chat_sync", { status: "success", accepted: Boolean(data.accepted), sent_count: data.sent ?? 0 });
     } finally {
       setLocalChatSyncing(false);
       if (!refreshStarted) {
@@ -5308,6 +5371,7 @@ function App() {
             : data.error === "project_has_running_job"
               ? "У проекта есть активная задача. Дождись завершения перед переносом."
               : data.error || "Не получилось перенести проект.");
+        trackMetrikaGoal("project_move_agent", { status: "failed", error: data.error, target_agent_online: agent.status === "online" });
         return;
       }
       const movedKey = `${data.agentId ?? agent.id}:${data.repoId ?? selectedRepo.id}`;
@@ -5320,6 +5384,7 @@ function App() {
         await loadChats(movedRepo, false, { showLoading: true });
       }
       setSyncNotice(`${selectedRepo.name} перенесён на ${agent.name}.`);
+      trackMetrikaGoal("project_move_agent", { status: "success", target_agent_online: agent.status === "online" });
     } finally {
       setBusy(false);
     }
@@ -5918,6 +5983,48 @@ function App() {
     setRenamingChatId("");
     setRenameTitle("");
   }
+
+  useEffect(() => {
+    trackMetrikaGoal("app_view", {
+      view,
+      panel: projectPanel || "none",
+      admin: isAdminRoute,
+      authenticated: Boolean(currentUser)
+    });
+  }, [currentUser?.id, currentUser?.role, isAdminRoute, projectPanel, view]);
+
+  useEffect(() => {
+    if (!selectedRepo) return;
+    trackMetrikaGoal("project_select", {
+      dirty: selectedRepo.dirty,
+      visibility: selectedRepo.visibility || "private",
+      write_access: selectedRepo.writeAccess || "owner",
+      has_deploy: hasDeployConfig(selectedRepo),
+      has_domain: Boolean(selectedRepo.domain),
+      agent_status: selectedRepoAgent?.status || "unknown"
+    });
+  }, [selectedRepo?.agentId, selectedRepo?.id, selectedRepoAgent?.status]);
+
+  useEffect(() => {
+    if (!activeChatId) return;
+    trackMetrikaGoal("chat_open", {
+      source: activeChat?.source || "web",
+      has_messages: messages.some((message) => message.chatId === activeChatId)
+    });
+  }, [activeChat?.source, activeChatId]);
+
+  useEffect(() => {
+    if (!activeJob?.id || !activeJob.status) return;
+    const key = `${activeJob.id}:${activeJob.status}`;
+    if (lastTrackedJobStatusRef.current === key) return;
+    lastTrackedJobStatusRef.current = key;
+    trackMetrikaGoal("job_status", {
+      status: activeJob.status,
+      job_kind: activeJob.kind || "unknown",
+      terminal: isTerminalJobStatus(activeJob.status),
+      exit_code: activeJob.exitCode ?? undefined
+    });
+  }, [activeJob?.exitCode, activeJob?.id, activeJob?.kind, activeJob?.status]);
 
   useEffect(() => {
     api("/api/me").then(async (response) => {
@@ -6794,9 +6901,11 @@ function App() {
     const data = await response.json().catch(() => ({}));
     setBusy(false);
     if (!response.ok) {
+      trackMetrikaGoal("auth_login", { status: "failed", error: data.error });
       setAuthNotice(data.error === "user_blocked" ? "Аккаунт заблокирован." : "Не получилось войти: проверь email и пароль.");
       return;
     }
+    trackMetrikaGoal("auth_login", { status: "success", role: data.user?.role });
     resetSessionViewState();
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
@@ -6820,9 +6929,11 @@ function App() {
     const data = await response.json().catch(() => ({}));
     setBusy(false);
     if (!response.ok) {
+      trackMetrikaGoal("auth_register", { status: "failed", error: data.error });
       setAuthNotice(data.error === "registration_closed" ? "Регистрация временно закрыта." : data.error === "user_exists" ? "Пользователь с таким email уже есть." : data.error === "nickname_taken" ? "Этот nickname уже занят." : "Регистрация не получилась.");
       return;
     }
+    trackMetrikaGoal("auth_register", { status: "success", role: data.user?.role });
     resetSessionViewState();
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
@@ -6863,6 +6974,7 @@ function App() {
     });
     const chatData = await chatResponse.json().catch(() => ({}));
     if (!chatResponse.ok) {
+      trackMetrikaGoal("project_start_prompt", { status: "failed", step: "chat_create", error: chatData.error, job_kind: jobKind });
       setChatNoticeOk(false);
       setChatNotice(chatData.error || "Start prompt chat create failed.");
       return false;
@@ -6888,6 +7000,7 @@ function App() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
+      trackMetrikaGoal("project_start_prompt", { status: "failed", step: "job_create", error: data.error, job_kind: jobKind });
       setChatNoticeOk(false);
       setChatNotice(data.error || "Start prompt job failed.");
       return false;
@@ -6897,6 +7010,7 @@ function App() {
     setProjectStartPrompt("");
     setChatNoticeOk(true);
     setChatNotice("Стартовый prompt запущен. Когда Codex закончит, можно нажать Launch для GitHub и деплоя.");
+    trackMetrikaGoal("project_start_prompt", { status: "success", job_kind: jobKind, sandbox });
     await loadChat(chatId, data.jobId);
     return true;
   }
@@ -6965,6 +7079,13 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
+      trackMetrikaGoal("project_save", {
+        status: "failed",
+        mode: isNew ? "create" : "update",
+        error: data.error,
+        has_deploy: Boolean(deployConfig),
+        has_data: Boolean(dataConfig)
+      });
       const errorMessage = data.error === "agent_local_busy"
         ? "Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web."
         : data.error === "agent_offline"
@@ -6985,6 +7106,16 @@ function App() {
       return;
     }
     const data = await response.json();
+    trackMetrikaGoal("project_save", {
+      status: "success",
+      mode: isNew ? "create" : "update",
+      git_mode: projectGitMode,
+      has_deploy: Boolean(deployConfig),
+      has_data: Boolean(dataConfig),
+      visibility: effectiveProjectVisibility,
+      write_access: projectWriteAccess,
+      run_prompt: shouldRunPrompt
+    });
     const savedRepoId = isNew ? data.repoId as string | undefined : (data.repoId as string | undefined) ?? selectedRepo?.id;
     const savedAgentId = isNew ? targetAgent.id : (data.agentId as string | undefined) ?? selectedRepo?.agentId ?? targetAgent.id;
     const savedRepoKey = savedRepoId && savedAgentId ? `${savedAgentId}:${savedRepoId}` : "";
@@ -7028,9 +7159,11 @@ function App() {
     const data = await response.json().catch(() => ({}));
     setBusy(false);
     if (!response.ok) {
+      trackMetrikaGoal("project_delete", { status: "failed", error: data.error });
       setProjectNotice(data.error === "project_has_running_job" ? "Stop the running job before removing this project from the service." : data.error || "Project remove failed.");
       return;
     }
+    trackMetrikaGoal("project_delete", { status: "success" });
     clearProjectSelection();
     await refresh();
   }
@@ -7064,6 +7197,7 @@ function App() {
         })
       });
       if (!chatResponse.ok) {
+        trackMetrikaGoal("job_create", { status: "failed", step: "chat_create", job_kind: jobKind });
         setBusy(false);
         return;
       }
@@ -7092,6 +7226,13 @@ function App() {
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
+        trackMetrikaGoal("job_create", {
+          status: "failed",
+          step: "job_create",
+          error: data.error,
+          job_kind: requested.kind,
+          attachments_count: jobAttachments.length
+        });
         setBusy(false);
         setChatNoticeOk(false);
         setChatNotice(data.error || "Не удалось поставить задачу в очередь.");
@@ -7106,6 +7247,13 @@ function App() {
     setAttachments([]);
     setAttachmentNotice("");
     setVscodeNotice("");
+    trackMetrikaGoal("job_create", {
+      status: "success",
+      jobs_count: jobIds.length,
+      job_kind: jobKind,
+      attachments_count: jobAttachments.length,
+      sandbox
+    });
     await loadChat(targetChatId, jobIds[0]);
   }
 
@@ -7123,6 +7271,7 @@ function App() {
     const data = await response.json().catch(() => ({}));
     setShareBusy(false);
     if (!response.ok) {
+      trackMetrikaGoal("chat_share", { status: "failed", error: data.error });
       setChatNotice(data.error || "Не получилось создать публичную ссылку на чат.");
       setChatNoticeOk(false);
       return;
@@ -7132,10 +7281,12 @@ function App() {
       await navigator.clipboard?.writeText(url).catch(() => undefined);
       setChatNotice(`Ссылка на чат скопирована: ${url}`);
       setChatNoticeOk(true);
+      trackMetrikaGoal("chat_share", { status: "success", copied: true });
       return;
     }
     setChatNotice("Публичная ссылка создана, но сервер не вернул URL.");
     setChatNoticeOk(false);
+    trackMetrikaGoal("chat_share", { status: "failed", error: "missing_url" });
   }
 
   async function hideChat(chat: Chat) {
@@ -7246,17 +7397,21 @@ function App() {
     const nextSize = list.reduce((sum, file) => sum + file.size, currentSize);
     if (attachments.length + list.length > 8) {
       setAttachmentNotice("Можно прикрепить до 8 файлов к одному сообщению.");
+      trackMetrikaGoal("attachment_add", { status: "failed", reason: "count_limit", files_count: list.length });
       return;
     }
     if (list.some((file) => file.size > 5 * 1024 * 1024) || nextSize > 12 * 1024 * 1024) {
       setAttachmentNotice("Файл до 5 MB, суммарно до 12 MB на сообщение.");
+      trackMetrikaGoal("attachment_add", { status: "failed", reason: "size_limit", files_count: list.length, size_bucket: byteBucketForAnalytics(nextSize) });
       return;
     }
     try {
       const parsed = await Promise.all(list.map(readFileAttachment));
       setAttachments((current) => [...current, ...parsed]);
+      trackMetrikaGoal("attachment_add", { status: "success", files_count: parsed.length, size_bucket: byteBucketForAnalytics(nextSize) });
     } catch {
       setAttachmentNotice("Не получилось прочитать один из файлов.");
+      trackMetrikaGoal("attachment_add", { status: "failed", reason: "read_error", files_count: list.length });
     }
   }
 
@@ -7286,6 +7441,7 @@ function App() {
       headers: { "x-csrf-token": csrf },
       body: "{}"
     });
+    trackMetrikaGoal("job_cancel", { status: "requested", job_status: activeJob.status, job_kind: activeJob.kind || "unknown" });
   }
 
   function addLocalProjectOperationMessage(operation: ProjectOperationKind, label: string, details: string[] = [], chatId = activeChatId) {
@@ -7342,6 +7498,7 @@ function App() {
       removeLocalProjectOperationMessage(pendingMessageId);
       if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
+        trackMetrikaGoal("project_git_sync", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
         if (!targetChatId) setGitNotice(data.output || data.error || "Git sync failed.");
         return;
       }
@@ -7349,10 +7506,12 @@ function App() {
       setGitStatusContext("");
       setGitMessageRefreshNotice("");
       if (!targetChatId) setGitNotice(data.output || data.status || "Git sync completed.");
+      trackMetrikaGoal("project_git_sync", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
       removeLocalProjectOperationMessage(pendingMessageId);
       if (!targetChatId) setGitNotice(error instanceof Error ? error.message : "Git sync failed.");
+      trackMetrikaGoal("project_git_sync", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       projectActionBusyRef.current.gitSync = false;
       setGitBusy(false);
@@ -7443,9 +7602,11 @@ function App() {
           ? "Агент отключился во время VS Code команды. Проверь, что Codex Agent или start-agent.bat всё ещё запущен."
           : data.output || data.error || "VS Code bridge command failed.";
       setVscodeNotice(errorText);
+      trackMetrikaGoal("vscode_command", { status: "failed", command, auto: Boolean(options.auto), error: data.error });
       return;
     }
     setVscodeNotice(data.output || (options.auto ? "VS Code chat refreshed." : "VS Code bridge command completed."));
+    trackMetrikaGoal("vscode_command", { status: "success", command, auto: Boolean(options.auto) });
   }
 
   async function loadProjectFileList(repo = selectedRepo): Promise<ProjectFileEntry[]> {
@@ -7460,6 +7621,7 @@ function App() {
         setProjectFilesError(data.error || "Не получилось загрузить файлы проекта.");
         setProjectFiles([]);
         setProjectFilesRepoKey(fileRepoKey);
+        trackMetrikaGoal("file_list_load", { status: "failed", error: data.error });
         return [];
       }
       const entries: ProjectFileEntry[] = Array.isArray(data.entries)
@@ -7473,11 +7635,13 @@ function App() {
         : [];
       setProjectFiles(entries);
       setProjectFilesRepoKey(fileRepoKey);
+      trackMetrikaGoal("file_list_load", { status: "success", files_count: entries.filter((entry) => entry.type === "file").length, dirs_count: entries.filter((entry) => entry.type === "directory").length });
       return entries;
     } catch (error) {
       setProjectFilesError(error instanceof Error ? error.message : "Не получилось загрузить файлы проекта.");
       setProjectFiles([]);
       setProjectFilesRepoKey(fileRepoKey);
+      trackMetrikaGoal("file_list_load", { status: "failed", error: "client_error" });
       return [];
     } finally {
       setProjectFilesLoading(false);
@@ -7547,6 +7711,7 @@ function App() {
 
   async function openProjectIde(chat?: Chat) {
     if (!selectedRepo) return;
+    trackMetrikaGoal("ide_open", { status: "requested", from_chat: Boolean(chat) });
     setMobileMenuOpen(false);
     setView("projects");
     setProjectPanel(null);
@@ -7580,6 +7745,7 @@ function App() {
     if (!file) {
       setChatNoticeOk(false);
       setChatNotice("В проекте пока нет файлов, которые можно открыть в IDE.");
+      trackMetrikaGoal("ide_open", { status: "failed", reason: "no_files", from_chat: Boolean(chat) });
       return;
     }
     if (restoredPaths.length > 1) {
@@ -7588,9 +7754,11 @@ function App() {
       for (const path of pathsToOpen) {
         await openProjectFile(path, selectedRepo);
       }
+      trackMetrikaGoal("ide_open", { status: "success", from_chat: Boolean(chat), restored_tabs: pathsToOpen.length });
       return;
     }
     await openProjectFile(file.path, selectedRepo);
+    trackMetrikaGoal("ide_open", { status: "success", from_chat: Boolean(chat), restored_tabs: 1 });
   }
 
   async function submitIdeChat(event: React.FormEvent) {
@@ -7617,6 +7785,7 @@ function App() {
         });
         const chatData = await chatResponse.json().catch(() => ({}));
         if (!chatResponse.ok) {
+          trackMetrikaGoal("ide_job_create", { status: "failed", step: "chat_create", error: chatData.error, job_kind: jobKind });
           setIdeChatNotice(chatData.error || "Не получилось создать чат для IDE.");
           return;
         }
@@ -7642,11 +7811,13 @@ function App() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        trackMetrikaGoal("ide_job_create", { status: "failed", step: "job_create", error: data.error, job_kind: jobKind });
         setIdeChatNotice(data.error || "Не получилось отправить задачу из IDE.");
         return;
       }
       setIdeChatPrompt("");
       setIdeChatNotice("Задача отправлена.");
+      trackMetrikaGoal("ide_job_create", { status: "success", job_kind: jobKind, sandbox });
       await loadChat(targetChatId, data.jobId);
     } finally {
       setIdeChatSending(false);
@@ -7712,6 +7883,7 @@ function App() {
         const failedTab = { ...loadingTab, loading: false, error: data.error || "Не получилось открыть файл." };
         setFileEditor((current) => current && current.path === filePath ? failedTab : current);
         setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(loadingTab) ? failedTab : tab));
+        trackMetrikaGoal("file_open", { status: "failed", error: data.error, ext: fileExtensionForAnalytics(filePath) });
         return;
       }
       const loadedPath = data.path || filePath;
@@ -7732,10 +7904,17 @@ function App() {
       };
       setFileEditor((current) => current && editorFileKey(current) === editorFileKey(loadingTab) ? loadedTab : current);
       setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(loadingTab) ? loadedTab : tab));
+      trackMetrikaGoal("file_open", {
+        status: "success",
+        ext: fileExtensionForAnalytics(loadedPath),
+        binary: Boolean(data.binary),
+        size_bucket: byteBucketForAnalytics(loadedSize)
+      });
     } catch (error) {
       const failedTab = { ...loadingTab, loading: false, error: error instanceof Error ? error.message : "Не получилось открыть файл." };
       setFileEditor((current) => current && current.path === filePath ? failedTab : current);
       setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(loadingTab) ? failedTab : tab));
+      trackMetrikaGoal("file_open", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(filePath) });
     }
   }
 
@@ -7768,6 +7947,7 @@ function App() {
       if (!response.ok) {
         setFileEditor((current) => current ? { ...current, saving: false, error: data.error || "Не получилось сохранить файл." } : current);
         setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: false, error: data.error || "Не получилось сохранить файл." } : tab));
+        trackMetrikaGoal("file_save", { status: "failed", error: data.error, ext: fileExtensionForAnalytics(path) });
         return;
       }
       const patchSaved = (current: ProjectFileEditor) => ({
@@ -7785,12 +7965,18 @@ function App() {
           }
         : current);
       setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...patchSaved(tab), content } : tab));
+      trackMetrikaGoal("file_save", {
+        status: "success",
+        ext: fileExtensionForAnalytics(data.path || path),
+        size_bucket: byteBucketForAnalytics(typeof data.size === "number" ? data.size : content.length)
+      });
       await refresh();
     } catch (error) {
       setFileEditor((current) => current
         ? { ...current, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." }
         : current);
       setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." } : tab));
+      trackMetrikaGoal("file_save", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(path) });
     }
   }
 
@@ -7897,8 +8083,10 @@ function App() {
       const text = data.binary ? await createProjectFileShareUrl(selectedRepo, entry.path, csrf ?? "") : String(data.content ?? "");
       await navigator.clipboard?.writeText(text);
       setIdeChatNotice(data.binary ? "Ссылка на файл скопирована." : "Содержимое файла скопировано.");
+      trackMetrikaGoal("file_copy", { status: "success", ext: fileExtensionForAnalytics(entry.path), binary: Boolean(data.binary) });
     } catch (error) {
       setIdeChatNotice(error instanceof Error ? error.message : "Не получилось скопировать файл.");
+      trackMetrikaGoal("file_copy", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(entry.path) });
     }
   }
 
@@ -7907,6 +8095,7 @@ function App() {
     const text = await navigator.clipboard?.readText().catch(() => "");
     if (!text) {
       setIdeChatNotice("В буфере обмена нет текста для вставки.");
+      trackMetrikaGoal("file_paste", { status: "failed", reason: "empty_clipboard", ext: fileExtensionForAnalytics(entry.path) });
       return;
     }
     if (!window.confirm(`Заменить содержимое ${entry.path} текстом из буфера обмена?`)) return;
@@ -7937,9 +8126,11 @@ function App() {
       setFileEditor((current) => current ? patch(current) : current);
       setFileEditorTabs((current) => current.map(patch));
       setIdeChatNotice("Файл обновлён из буфера обмена.");
+      trackMetrikaGoal("file_paste", { status: "success", ext: fileExtensionForAnalytics(entry.path), size_bucket: byteBucketForAnalytics(text.length) });
       await loadProjectFileList(selectedRepo);
     } catch (error) {
       setIdeChatNotice(error instanceof Error ? error.message : "Не получилось вставить в файл.");
+      trackMetrikaGoal("file_paste", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(entry.path) });
     }
   }
 
@@ -7949,8 +8140,10 @@ function App() {
       const url = await createProjectFileShareUrl(selectedRepo, entry.path, csrf ?? "");
       await navigator.clipboard?.writeText(url).catch(() => undefined);
       setIdeChatNotice(`Ссылка на файл скопирована: ${url}`);
+      trackMetrikaGoal("file_share", { status: "success", ext: fileExtensionForAnalytics(entry.path), entry_type: entry.type });
     } catch (error) {
       setIdeChatNotice(error instanceof Error ? error.message : "Не получилось создать ссылку.");
+      trackMetrikaGoal("file_share", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(entry.path), entry_type: entry.type });
     }
   }
 
@@ -7961,9 +8154,11 @@ function App() {
       await navigator.clipboard?.writeText(url).catch(() => undefined);
       setIdeChatMenuOpen(false);
       setIdeChatNotice(`Ссылка на текущий файл скопирована: ${url}`);
+      trackMetrikaGoal("file_share", { status: "success", ext: fileExtensionForAnalytics(fileEditor.path), entry_type: "file", source: "current" });
     } catch (error) {
       setIdeChatMenuOpen(false);
       setIdeChatNotice(error instanceof Error ? error.message : "Не получилось создать ссылку.");
+      trackMetrikaGoal("file_share", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(fileEditor.path), entry_type: "file", source: "current" });
     }
   }
 
@@ -7978,6 +8173,7 @@ function App() {
     anchor.click();
     anchor.remove();
     setIdeChatNotice(entry.type === "directory" ? `Скачиваю ${entry.path}.tar...` : `Скачиваю ${entry.path}...`);
+    trackMetrikaGoal("file_download", { source: "project_entry", ext: fileExtensionForAnalytics(entry.path), entry_type: entry.type });
   }
 
   async function openProjectFileInNewWindow(entry: ProjectFileEntry) {
@@ -7991,9 +8187,11 @@ function App() {
       } else {
         window.open(url, "_blank", "noopener,noreferrer");
       }
+      trackMetrikaGoal("file_open_new_window", { status: "success", ext: fileExtensionForAnalytics(entry.path), entry_type: entry.type });
     } catch (error) {
       popup?.close();
       setIdeChatNotice(error instanceof Error ? error.message : "Не получилось открыть ссылку.");
+      trackMetrikaGoal("file_open_new_window", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(entry.path), entry_type: entry.type });
     }
   }
 
@@ -8089,12 +8287,15 @@ function App() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         setBuildNotice(data.output || data.error || "Build failed.");
+        trackMetrikaGoal("project_build", { status: "failed", error: data.error });
         return;
       }
       setBuildNotice(data.output || "Build completed.");
+      trackMetrikaGoal("project_build", { status: "success" });
       await refresh();
     } catch (error) {
       setBuildNotice(error instanceof Error ? error.message : "Build failed.");
+      trackMetrikaGoal("project_build", { status: "failed", error: "client_error" });
     } finally {
       setBuildBusy(false);
     }
@@ -8118,14 +8319,17 @@ function App() {
       removeLocalProjectOperationMessage(pendingMessageId);
       if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
+        trackMetrikaGoal("project_deploy", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
         if (!targetChatId) setDeployNotice(data.output || data.error || "Deploy failed.");
         return;
       }
       if (!targetChatId) setDeployNotice(data.output || "Deploy completed.");
+      trackMetrikaGoal("project_deploy", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
       removeLocalProjectOperationMessage(pendingMessageId);
       if (!targetChatId) setDeployNotice(error instanceof Error ? error.message : "Deploy failed.");
+      trackMetrikaGoal("project_deploy", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       projectActionBusyRef.current.deploy = false;
       setDeployBusy(false);
@@ -8150,14 +8354,17 @@ function App() {
       removeLocalProjectOperationMessage(pendingMessageId);
       if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
+        trackMetrikaGoal("project_nginx", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
         if (!targetChatId) setNginxNotice(data.output || data.error || "Nginx setup failed.");
         return;
       }
       if (!targetChatId) setNginxNotice(data.output || "Nginx configured.");
+      trackMetrikaGoal("project_nginx", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
       removeLocalProjectOperationMessage(pendingMessageId);
       if (!targetChatId) setNginxNotice(error instanceof Error ? error.message : "Nginx setup failed.");
+      trackMetrikaGoal("project_nginx", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       setNginxBusy(false);
     }
@@ -8181,14 +8388,17 @@ function App() {
       removeLocalProjectOperationMessage(pendingMessageId);
       if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
+        trackMetrikaGoal("project_ssl", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
         if (!targetChatId) setSslNotice(data.output || data.error || "SSL setup failed.");
         return;
       }
       if (!targetChatId) setSslNotice(data.output || "SSL configured.");
+      trackMetrikaGoal("project_ssl", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
       removeLocalProjectOperationMessage(pendingMessageId);
       if (!targetChatId) setSslNotice(error instanceof Error ? error.message : "SSL setup failed.");
+      trackMetrikaGoal("project_ssl", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       setSslBusy(false);
     }
@@ -8268,8 +8478,22 @@ function App() {
 
       const url = projectUrl(selectedRepo.domain);
       if (url) append("Open", url);
+      trackMetrikaGoal("project_launch", {
+        status: "success",
+        has_chat: Boolean(targetChatId),
+        has_deploy: hasDeployConfig(selectedRepo),
+        has_domain: Boolean(selectedRepo.domain),
+        has_remote: Boolean(remoteUrl)
+      });
     } catch (error) {
       append("Launch failed", error instanceof Error ? error.message : String(error));
+      trackMetrikaGoal("project_launch", {
+        status: "failed",
+        error: "client_error",
+        has_chat: Boolean(targetChatId),
+        has_deploy: hasDeployConfig(selectedRepo),
+        has_domain: Boolean(selectedRepo.domain)
+      });
     } finally {
       setLaunchBusy(false);
       await refresh();
@@ -8290,12 +8514,14 @@ function App() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       setSettingsNotice(data.error || "User create failed.");
+      trackMetrikaGoal("admin_user_create", { status: "failed", error: data.error, role: newUserRole });
       return;
     }
     setNewUserEmail("");
     setNewUserPassword("");
     setNewUserRole("user");
     setSettingsNotice("User created.");
+    trackMetrikaGoal("admin_user_create", { status: "success", role: newUserRole });
     await loadUsers();
   }
 
@@ -8320,10 +8546,12 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       setAdminNotice(data.error || "Пароль не изменился.");
+      trackMetrikaGoal("admin_password_change", { status: "failed", error: data.error });
       return;
     }
     setAdminPassword("");
     setAdminNotice("Пароль изменён.");
+    trackMetrikaGoal("admin_password_change", { status: "success" });
   }
 
   async function adminToggleBlock(user: AdminUser) {
@@ -8339,9 +8567,11 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       setAdminNotice(data.error === "cannot_block_self" ? "Себя заблокировать нельзя." : data.error || "Статус пользователя не изменился.");
+      trackMetrikaGoal("admin_user_block_toggle", { status: "failed", error: data.error, blocked: !user.blockedAt });
       return;
     }
     setAdminNotice(data.user?.blockedAt ? "Пользователь заблокирован." : "Пользователь разблокирован.");
+    trackMetrikaGoal("admin_user_block_toggle", { status: "success", blocked: Boolean(data.user?.blockedAt) });
     await loadAdminUsers(user.id);
   }
 
@@ -8358,8 +8588,10 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       setAdminNotice(data.error === "user_blocked" ? "Пользователь заблокирован." : data.error || "Не получилось авторизоваться за пользователя.");
+      trackMetrikaGoal("admin_impersonate", { status: "failed", error: data.error });
       return;
     }
+    trackMetrikaGoal("admin_impersonate", { status: "success" });
     resetSessionViewState();
     setCurrentUser(data.user);
     setCsrf(data.csrfToken);
@@ -8371,9 +8603,11 @@ function App() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       setAdminNotice(data.error || "Чат не открылся.");
+      trackMetrikaGoal("admin_chat_open", { status: "failed", error: data.error });
       return;
     }
     setAdminOpenedChat({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
+    trackMetrikaGoal("admin_chat_open", { status: "success" });
   }
 
   function toggleAdminMetric(metric: AdminStatsMetric) {
@@ -8404,11 +8638,13 @@ function App() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       setSettingsNotice(data.error || "Agent create failed.");
+      trackMetrikaGoal("agent_setup_create", { status: "failed", error: data.error, platform: setupPlatform });
       return;
     }
     setAgentSetup(data.setup);
     setNewAgentId("");
     setSettingsNotice("Agent created. Save the setup script now; the token is shown only once.");
+    trackMetrikaGoal("agent_setup_create", { status: "success", platform: setupPlatform });
     await refresh();
   }
 
@@ -8452,11 +8688,13 @@ function App() {
       setSyncNotice(data.error === "agent_online"
         ? "Агент уже online: новый setup-файл не нужен."
         : data.error || "Не получилось подготовить setup-файл.");
+      trackMetrikaGoal("agent_setup_download", { status: "failed", error: data.error, platform: setupPlatform });
       return;
     }
     const setup = data.setup as AgentSetup | undefined;
     if (!setup?.setupBatch && !setup?.setupPowerShell && !setup?.setupShell) {
       setSyncNotice("Сервер не вернул setup-файл.");
+      trackMetrikaGoal("agent_setup_download", { status: "failed", error: "missing_setup", platform: setupPlatform });
       return;
     }
     setAgentSetup(setup);
@@ -8467,6 +8705,7 @@ function App() {
       : "Скачал setup-agent.bat. Он скачает компактный agent-package.zip и запустит агента без клонирования репозитория.";
     setSyncNotice(notice);
     setSettingsNotice(notice);
+    trackMetrikaGoal("agent_setup_download", { status: "success", platform: setupPlatform });
     await refresh();
   }
 
@@ -8500,10 +8739,12 @@ function App() {
           ? "У агента есть проекты, чаты или задачи. Сначала удали/перенеси данные."
           : data.error || "Не получилось удалить агента.";
       setSyncNotice(message);
+      trackMetrikaGoal("agent_delete", { status: "failed", error: data.error });
       return;
     }
     setAgents((current) => current.filter((item) => item.id !== agent.id));
     setSyncNotice(`Агент ${agent.name} удалён.`);
+    trackMetrikaGoal("agent_delete", { status: "success" });
     await refresh();
   }
 
@@ -8549,6 +8790,7 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       setProfileNotice(data.error === "nickname_taken" ? "Этот nickname уже занят." : data.error || "Profile update failed.");
+      trackMetrikaGoal("profile_save", { status: "failed", error: data.error, has_avatar: Boolean(profileAvatarDataUrl) });
       return;
     }
     setCurrentUser(data.user);
@@ -8556,6 +8798,7 @@ function App() {
     setOauthProviders(data.oauth);
     setGithubConnection(data.github ?? githubConnection);
     setProfileNotice("Profile saved.");
+    trackMetrikaGoal("profile_save", { status: "success", has_avatar: Boolean(profileAvatarDataUrl) });
   }
 
   async function saveGithubToken(event: React.FormEvent) {
@@ -8572,11 +8815,13 @@ function App() {
     setGithubBusy(false);
     if (!response.ok) {
       setProfileNotice(data.error === "Bad credentials" ? "GitHub token не принят: проверь token и права." : data.error || "GitHub token failed.");
+      trackMetrikaGoal("github_token_save", { status: "failed", error: data.error });
       return;
     }
     setGithubConnection(data.github ?? { connected: false });
     setGithubTokenInput("");
     setProfileNotice(`GitHub connected${data.github?.login ? ` as ${data.github.login}` : ""}.`);
+    trackMetrikaGoal("github_token_save", { status: "success" });
   }
 
   async function disconnectGithubToken() {
@@ -8592,11 +8837,13 @@ function App() {
     setGithubBusy(false);
     if (!response.ok) {
       setProfileNotice(data.error || "GitHub disconnect failed.");
+      trackMetrikaGoal("github_token_disconnect", { status: "failed", error: data.error });
       return;
     }
     setGithubConnection(data.github ?? { connected: false });
     setGithubTokenInput("");
     setProfileNotice("GitHub disconnected.");
+    trackMetrikaGoal("github_token_disconnect", { status: "success" });
   }
 
   async function changePassword(event: React.FormEvent) {
@@ -8613,11 +8860,13 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       setProfileNotice(data.error === "invalid_current_password" ? "Текущий пароль неверный." : data.error || "Password change failed.");
+      trackMetrikaGoal("password_change", { status: "failed", error: data.error });
       return;
     }
     setCurrentPassword("");
     setNewPassword("");
     setProfileNotice("Password changed.");
+    trackMetrikaGoal("password_change", { status: "success" });
   }
 
   async function connectOAuth(provider: OAuthProvider["provider"]) {
@@ -8633,8 +8882,10 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       setProfileNotice(data.error === "oauth_provider_not_configured" ? "OAuth для этого провайдера пока не настроен на сервере." : data.error || "OAuth start failed.");
+      trackMetrikaGoal("oauth_connect", { status: "failed", provider, error: data.error });
       return;
     }
+    trackMetrikaGoal("oauth_connect", { status: "success", provider });
     if (data.url) location.href = data.url;
   }
 
@@ -8649,8 +8900,10 @@ function App() {
     setBusy(false);
     if (!response.ok) {
       setAuthNotice(data.error === "oauth_provider_not_configured" ? `${oauthLabel(provider)} OAuth ещё не настроен на сервере.` : data.error || "OAuth start failed.");
+      trackMetrikaGoal("auth_oauth_start", { status: "failed", provider, error: data.error });
       return;
     }
+    trackMetrikaGoal("auth_oauth_start", { status: "success", provider });
     if (data.url) location.href = data.url;
   }
 
@@ -10116,6 +10369,7 @@ function App() {
 
   async function logout() {
     if (csrf) await api("/api/logout", { method: "POST", headers: { "x-csrf-token": csrf }, body: "{}" });
+    trackMetrikaGoal("auth_logout", { status: "success", role: currentUser?.role || "anonymous" });
     resetSessionViewState();
     setCsrf(undefined);
     setCurrentUser(null);
@@ -13094,6 +13348,7 @@ function App() {
 const sharedToken = shareTokenFromLocation();
 const publicProfileSlug = publicProfileSlugFromLocation();
 const publicFileTarget = publicFileFromLocation();
+installMetrikaEventTracking();
 createRoot(document.getElementById("root")!).render(
   sharedToken
     ? <SharedChatPage token={sharedToken} />
