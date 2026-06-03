@@ -561,6 +561,17 @@ type ProjectFileEditor = {
   error: string;
 };
 
+type ProgressFilePreview = {
+  path: string;
+  content: string;
+  binary: boolean;
+  mimeType?: string;
+  dataBase64?: string;
+  size?: number;
+  loading: boolean;
+  error: string;
+};
+
 type EditorCursorState = {
   lineNumber: number;
   column: number;
@@ -4341,6 +4352,7 @@ function App() {
   const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState | null>(null);
   const [fileProperties, setFileProperties] = useState<ProjectFileEntry | null>(null);
   const [expandedActions, setExpandedActions] = useState<Record<string, boolean>>({});
+  const [progressFilePreviews, setProgressFilePreviews] = useState<Record<string, ProgressFilePreview>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [localBusyHold, setLocalBusyHold] = useState<{ until: number; since?: string; key?: string }>({ until: 0 });
   const [highlightedMessageIds, setHighlightedMessageIds] = useState<Set<string>>(() => new Set());
@@ -10627,6 +10639,153 @@ function App() {
     );
   }
 
+  function activeProgressFileKey(jobId: string, path: string) {
+    return `active-progress-file:${jobId}:${normalizeProjectFilePath(path)}`;
+  }
+
+  function activeProgressRepo(job: Pick<Job, "agentId" | "repoId">) {
+    return repos.find((repo) => repo.agentId === job.agentId && repo.id === job.repoId)
+      ?? (selectedRepo?.agentId === job.agentId && selectedRepo.id === job.repoId ? selectedRepo : undefined);
+  }
+
+  async function loadActiveProgressFilePreview(job: Job, rawPath: string) {
+    const repo = activeProgressRepo(job);
+    if (!repo) return;
+    const path = normalizeProjectFilePath(rawPath);
+    const previewKey = activeProgressFileKey(job.id, path);
+    setProgressFilePreviews((current) => ({
+      ...current,
+      [previewKey]: {
+        path,
+        content: current[previewKey]?.content ?? "",
+        binary: current[previewKey]?.binary ?? false,
+        mimeType: current[previewKey]?.mimeType,
+        dataBase64: current[previewKey]?.dataBase64,
+        size: current[previewKey]?.size,
+        loading: true,
+        error: ""
+      }
+    }));
+    try {
+      const response = await api(`/api/projects/${encodeURIComponent(repo.agentId)}/${encodeURIComponent(repo.id)}/files/read?path=${encodeURIComponent(path)}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setProgressFilePreviews((current) => ({
+          ...current,
+          [previewKey]: {
+            ...(current[previewKey] ?? { path, content: "", binary: false }),
+            loading: false,
+            error: data.error || "Не получилось открыть файл."
+          }
+        }));
+        return;
+      }
+      setProgressFilePreviews((current) => ({
+        ...current,
+        [previewKey]: {
+          path: data.path || path,
+          content: data.content ?? "",
+          binary: Boolean(data.binary),
+          mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
+          dataBase64: typeof data.dataBase64 === "string" ? data.dataBase64 : undefined,
+          size: typeof data.size === "number" ? data.size : undefined,
+          loading: false,
+          error: ""
+        }
+      }));
+    } catch (error) {
+      setProgressFilePreviews((current) => ({
+        ...current,
+        [previewKey]: {
+          ...(current[previewKey] ?? { path, content: "", binary: false }),
+          loading: false,
+          error: error instanceof Error ? error.message : "Не получилось открыть файл."
+        }
+      }));
+    }
+  }
+
+  function toggleActiveProgressFile(job: Job, path: string) {
+    const key = activeProgressFileKey(job.id, path);
+    const willOpen = !expandedActions[key];
+    setExpandedActions((current) => ({ ...current, [key]: !current[key] }));
+    if (willOpen) void loadActiveProgressFilePreview(job, path);
+  }
+
+  function progressPreviewText(content: string) {
+    const maxLines = 220;
+    const maxChars = 20000;
+    const lines = content.split(/\r\n|\r|\n/);
+    let text = lines.slice(0, maxLines).join("\n");
+    let truncated = lines.length > maxLines;
+    if (text.length > maxChars) {
+      text = text.slice(0, maxChars);
+      truncated = true;
+    }
+    return { text, truncated };
+  }
+
+  function renderActiveProgressFilePreview(job: Job, path: string) {
+    const repo = activeProgressRepo(job);
+    const key = activeProgressFileKey(job.id, path);
+    const preview = progressFilePreviews[key];
+    if (!repo) return <div className="progress-file-preview error">Проект не найден.</div>;
+    if (!preview || preview.loading) {
+      return (
+        <div className="progress-file-preview loading">
+          <span>Загружаю текущую версию файла...</span>
+        </div>
+      );
+    }
+    if (preview.error) {
+      return (
+        <div className="progress-file-preview error">
+          <span>{preview.error}</span>
+          <button type="button" onClick={() => void loadActiveProgressFilePreview(job, path)}>Retry</button>
+        </div>
+      );
+    }
+    const imageSrc = preview.binary && preview.mimeType?.startsWith("image/") ? imageDataUrl(preview) : "";
+    const sizeLabel = preview.size !== undefined ? formatBytes(preview.size) : preview.binary ? "binary" : `${preview.content.length} chars`;
+    return (
+      <div className="progress-file-preview">
+        <div className="progress-file-preview-head">
+          <span>{preview.mimeType || editorLanguageLabel(preview.path)} · {sizeLabel}</span>
+          <div>
+            <button type="button" onClick={() => void openProjectFile(preview.path, repo)}>Open in IDE</button>
+            <button type="button" onClick={() => void loadActiveProgressFilePreview(job, preview.path)}>Refresh</button>
+          </div>
+        </div>
+        {imageSrc ? (
+          <button
+            className="progress-file-image-preview"
+            type="button"
+            onClick={() => setImagePreview({
+              src: imageSrc,
+              name: projectFileLeaf(preview.path),
+              mimeType: preview.mimeType || "image",
+              size: preview.size ?? 0
+            })}
+          >
+            <img alt={preview.path} src={imageSrc} />
+          </button>
+        ) : preview.binary ? (
+          <div className="progress-file-binary-preview">Binary preview недоступен.</div>
+        ) : (
+          (() => {
+            const { text, truncated } = progressPreviewText(preview.content);
+            return (
+              <>
+                <pre><code>{text || "Файл пустой."}</code></pre>
+                {truncated && <small>Показан фрагмент файла. Открой в IDE, чтобы посмотреть полностью.</small>}
+              </>
+            );
+          })()
+        )}
+      </div>
+    );
+  }
+
   function renderActiveRun() {
     if (!activeJob || !activeRunBusy) return null;
     const promptAlreadyVisible = messages.some((message) => isJobPromptMessage(message, activeJob.id));
@@ -10660,15 +10819,29 @@ function App() {
             </div>
             <div className="progress-files">
               {activeFiles.length ? (
-                activeFiles.slice(0, 8).map((file) => (
-                  <div key={file.path}>
-                    <span>{file.path}</span>
-                    <small className="diff-meta">
-                      <AnimatedDiffNumber type="added" value={file.added} />
-                      <AnimatedDiffNumber type="deleted" value={file.deleted} />
-                    </small>
-                  </div>
-                ))
+                activeFiles.slice(0, 8).map((file) => {
+                  const filePath = normalizeProjectFilePath(file.path);
+                  const fileKey = activeProgressFileKey(activeJob.id, filePath);
+                  const fileOpen = Boolean(expandedActions[fileKey]);
+                  return (
+                    <div className={`progress-file-item${fileOpen ? " open" : ""}`} key={filePath}>
+                      <button
+                        className="progress-file-row"
+                        title={filePath}
+                        type="button"
+                        onClick={() => toggleActiveProgressFile(activeJob, filePath)}
+                      >
+                        <span>{filePath}</span>
+                        <small className="diff-meta">
+                          <AnimatedDiffNumber type="added" value={file.added} />
+                          <AnimatedDiffNumber type="deleted" value={file.deleted} />
+                          <ChevronDown className={fileOpen ? "open" : ""} size={15} />
+                        </small>
+                      </button>
+                      {fileOpen && renderActiveProgressFilePreview(activeJob, filePath)}
+                    </div>
+                  );
+                })
               ) : (
                 <div className="progress-files-empty">
                   <span>Изменений файлов пока нет</span>
