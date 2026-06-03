@@ -5483,6 +5483,7 @@ button.message-attachment.image:hover {
   border-radius: 7px;
   background: var(--panel-2);
   overflow: hidden;
+  position: relative;
 }
 
 .ide-chat-panel.chat-size-small {
@@ -5547,6 +5548,10 @@ button.message-attachment.image:hover {
 
 .ide-chat-panel.wide .ide-chat-feed {
   padding-right: 4px;
+}
+
+.ide-chat-scroll-button {
+  display: none;
 }
 
 .ide-chat-message {
@@ -8591,6 +8596,23 @@ button:disabled {
 
   .ide-chat-panel header strong {
     font-size: 12px;
+  }
+
+  .ide-chat-scroll-button {
+    position: absolute;
+    right: 12px;
+    bottom: 102px;
+    z-index: 3;
+    width: 31px;
+    height: 31px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(32, 33, 35, 0.18);
+    border-radius: 999px;
+    color: #ffffff;
+    background: #202123;
+    box-shadow: 0 10px 24px rgba(32, 33, 35, 0.22);
   }
 
   .ide-chat-panel small,

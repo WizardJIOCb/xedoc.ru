@@ -3973,6 +3973,7 @@ function App() {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [showChatScrollTop, setShowChatScrollTop] = useState(false);
   const [showChatScrollBottom, setShowChatScrollBottom] = useState(false);
+  const [ideChatScrollDirection, setIdeChatScrollDirection] = useState<"" | "up" | "down">("");
   const [restoredChatScrollId, setRestoredChatScrollId] = useState("");
   const [loadedChatAutoScroll, setLoadedChatAutoScroll] = useState<{ chatId: string; behavior: ScrollBehavior; tick: number } | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -4289,6 +4290,7 @@ function App() {
   const fileEditorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileEditorGutterRef = useRef<HTMLDivElement | null>(null);
   const editorFindInputRef = useRef<HTMLInputElement | null>(null);
+  const ideChatFeedRef = useRef<HTMLDivElement | null>(null);
   const ideMenuRef = useRef<HTMLElement | null>(null);
   const ideCommandInputRef = useRef<HTMLInputElement | null>(null);
   const currentScrollChatRef = useRef("");
@@ -4575,6 +4577,27 @@ function App() {
     setChatScrollTopVisible(false);
     setChatScrollBottomVisible(true);
     window.setTimeout(updateChatBottomState, behavior === "smooth" ? 260 : 0);
+  }
+
+  function updateIdeChatScrollDirection() {
+    const feed = ideChatFeedRef.current;
+    if (!feed) {
+      setIdeChatScrollDirection("");
+      return;
+    }
+    const maxScrollTop = feed.scrollHeight - feed.clientHeight;
+    if (maxScrollTop <= 24) {
+      setIdeChatScrollDirection("");
+      return;
+    }
+    setIdeChatScrollDirection(feed.scrollTop > maxScrollTop / 2 ? "up" : "down");
+  }
+
+  function scrollIdeChatFeed(direction = ideChatScrollDirection) {
+    const feed = ideChatFeedRef.current;
+    if (!feed || !direction) return;
+    feed.scrollTo({ top: direction === "up" ? 0 : feed.scrollHeight, behavior: "smooth" });
+    window.setTimeout(updateIdeChatScrollDirection, 280);
   }
 
   function updateComposerPlacement() {
@@ -5969,6 +5992,15 @@ function App() {
       // IDE chat display is local preference only.
     }
   }, [ideChatTextStyle]);
+
+  useEffect(() => {
+    if (!fileEditor || !ideChatPanelOpen || ideMobilePane !== "chat") {
+      setIdeChatScrollDirection("");
+      return;
+    }
+    const frame = window.requestAnimationFrame(updateIdeChatScrollDirection);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeChatId, fileEditor, ideChatMessages.length, ideChatPanelOpen, ideMobilePane]);
 
   useEffect(() => {
     try {
@@ -12474,7 +12506,7 @@ function App() {
                       <X size={15} />
                     </button>
                   </header>
-                  <div className="ide-chat-feed">
+                  <div className="ide-chat-feed" ref={ideChatFeedRef} onScroll={updateIdeChatScrollDirection}>
                     {activeChat ? (
                       ideChatMessages.length ? ideChatMessages.map((message) => {
                         const richTextOptions: RichTextOptions | undefined = selectedRepo ? {
@@ -12507,6 +12539,17 @@ function App() {
                       <div className="ide-chat-empty">Выбери чат или отправь первую задачу прямо из IDE.</div>
                     )}
                   </div>
+                  {ideChatScrollDirection && (
+                    <button
+                      aria-label={ideChatScrollDirection === "up" ? "К началу чата" : "К последним сообщениям"}
+                      className="ide-chat-scroll-button"
+                      title={ideChatScrollDirection === "up" ? "К началу чата" : "К последним сообщениям"}
+                      type="button"
+                      onClick={() => scrollIdeChatFeed()}
+                    >
+                      {ideChatScrollDirection === "up" ? <ArrowUp size={15} /> : <ArrowDown size={15} />}
+                    </button>
+                  )}
                   {ideChatNotice && <div className="ide-chat-notice">{ideChatNotice}</div>}
                   <form className="ide-chat-composer" onSubmit={submitIdeChat}>
                     <textarea
