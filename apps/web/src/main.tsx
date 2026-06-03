@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 import {
   Activity,
   ArrowLeft,
@@ -1578,6 +1578,22 @@ function parseUnifiedDiff(diff: string | null | undefined): FileDiff[] {
   return files.filter((file) => file.lines.some((line) => line.type !== "context"));
 }
 
+const PARSED_DIFF_CACHE_LIMIT = 40;
+const parsedDiffCache = new Map<string, FileDiff[]>();
+
+function parseUnifiedDiffCached(diff: string | null | undefined): FileDiff[] {
+  if (!diff) return [];
+  const cached = parsedDiffCache.get(diff);
+  if (cached) return cached;
+  const parsed = parseUnifiedDiff(diff);
+  parsedDiffCache.set(diff, parsed);
+  if (parsedDiffCache.size > PARSED_DIFF_CACHE_LIMIT) {
+    const oldestKey = parsedDiffCache.keys().next().value;
+    if (oldestKey !== undefined) parsedDiffCache.delete(oldestKey);
+  }
+  return parsed;
+}
+
 function findFileDiffInList(fileDiffs: FileDiff[], file: string) {
   const normalized = file.replace(/\\/g, "/");
   return fileDiffs.find((item) => item.file.replace(/\\/g, "/") === normalized);
@@ -2786,6 +2802,59 @@ function renderRichText(value: string, className = "rich-text", options?: RichTe
 
   return <div className={className}>{blocks.length ? blocks : <p>{inlineTail ? [value, inlineTail] : value}</p>}</div>;
 }
+
+type MemoRichTextProps = {
+  value: string;
+  className?: string;
+  inlineTail?: React.ReactNode;
+  onFileReference?: (path: string) => void;
+  projectRoot?: string | null;
+  projectRoots?: Array<string | null | undefined>;
+  projectReferenceNames?: Array<string | null | undefined>;
+};
+
+function richTextOptionListKey(values: Array<string | null | undefined> | undefined) {
+  return (values ?? []).map((value) => value ?? "").join("\u001f");
+}
+
+function richTextOptionListsEqual(
+  left: Array<string | null | undefined> | undefined,
+  right: Array<string | null | undefined> | undefined
+) {
+  return richTextOptionListKey(left) === richTextOptionListKey(right);
+}
+
+const MemoRichText = React.memo(function MemoRichText({
+  value,
+  className = "rich-text",
+  inlineTail,
+  onFileReference,
+  projectRoot,
+  projectRoots,
+  projectReferenceNames
+}: MemoRichTextProps) {
+  const projectRootsKey = richTextOptionListKey(projectRoots);
+  const projectReferenceNamesKey = richTextOptionListKey(projectReferenceNames);
+  const options = useMemo<RichTextOptions | undefined>(() => {
+    if (!onFileReference && !projectRoot && !projectRoots?.length && !projectReferenceNames?.length) return undefined;
+    return {
+      onFileReference,
+      projectRoot,
+      projectRoots,
+      projectReferenceNames
+    };
+  }, [onFileReference, projectReferenceNames, projectReferenceNamesKey, projectRoot, projectRoots, projectRootsKey]);
+
+  return renderRichText(value, className, options, inlineTail);
+}, (previous, next) =>
+  previous.value === next.value
+  && previous.className === next.className
+  && previous.inlineTail === next.inlineTail
+  && previous.onFileReference === next.onFileReference
+  && previous.projectRoot === next.projectRoot
+  && richTextOptionListsEqual(previous.projectRoots, next.projectRoots)
+  && richTextOptionListsEqual(previous.projectReferenceNames, next.projectReferenceNames)
+);
 
 function attachmentDataUrl(attachment: MessageAttachment) {
   return attachment.dataBase64 && isPreviewableImage(attachment.mimeType) ? `data:${attachment.mimeType};base64,${attachment.dataBase64}` : undefined;
@@ -4734,6 +4803,11 @@ function App() {
     files: [],
     at: new Date().toISOString()
   } : null;
+  const openProjectFileRef = useRef(openProjectFile);
+  openProjectFileRef.current = openProjectFile;
+  const openProjectFileFromRichText = useCallback((path: string) => {
+    void openProjectFileRef.current(path);
+  }, []);
   const timelineItems = useMemo(() => buildChatTimeline(messages, jobs, activeChatLocalBusy || activeRunBusy), [messages, jobs, activeChatLocalBusy, activeRunBusy]);
   const showChatThinkingIndicator = Boolean(activeChat && !chatIsLoading && (activeChatLocalBusy || activeRunBusy));
   const activeLiveScrollSignature = activeJob ? [
@@ -6800,7 +6874,7 @@ function App() {
       const diff = messageJob?.gitDiff || (typeof message.metadata?.gitDiff === "string" ? message.metadata.gitDiff : "");
       if (!stat && !progress?.files?.length) continue;
 
-      const fileDiffs = parseUnifiedDiff(diff);
+      const fileDiffs = parseUnifiedDiffCached(diff);
       const rows = fileDiffs.length ? diffRowsFromFileDiffs(fileDiffs) : diffRows(stat || null, progress?.files);
       const summary = fileDiffs.length ? diffSummaryFromRows(rows) : diffSummary(stat || null, progress);
       if (rows.length || summary.files <= 0) continue;
@@ -10448,7 +10522,7 @@ function App() {
     const stat = job?.gitDiffStat || (typeof message.metadata?.gitDiffStat === "string" ? message.metadata.gitDiffStat : "");
     const diff = job?.gitDiff || (typeof message.metadata?.gitDiff === "string" ? message.metadata.gitDiff : "");
     if (message.role !== "assistant" || (!stat && !hasProgressChanges(progress))) return null;
-    const fileDiffs = parseUnifiedDiff(diff);
+    const fileDiffs = parseUnifiedDiffCached(diff);
     const exactRows = diffRowsFromFileDiffs(fileDiffs);
     const rows = exactRows.length ? exactRows : diffRows(stat || null, progress?.files);
     const summary = exactRows.length ? diffSummaryFromRows(exactRows) : diffSummary(stat || null, progress);
@@ -10651,7 +10725,7 @@ function App() {
                     <span>Шаг {index + 1}</span>
                     <small>{formatDateTime(message.createdAt)}</small>
                   </div>
-                  {renderRichText(message.content, "rich-text message-body")}
+                  <MemoRichText className="rich-text message-body" value={message.content} />
                   {renderMessageAttachments(message.attachments, setImagePreview)}
                   {renderCodexActions(message, messageJob)}
                 </article>
@@ -13035,19 +13109,6 @@ function App() {
                             const assistantDetails = message.role === "assistant" || message.role === "tool" || message.role === "system"
                               ? messageRunDetails(message, messageJob, collapsedRun)
                               : undefined;
-                            const richTextOptions: RichTextOptions = {
-                              onFileReference: openProjectFile,
-                              projectRoot: selectedRepo.pathMasked,
-                              projectRoots: [
-                                selectedRepo.pathMasked,
-                                selectedRepo.serverPath
-                              ],
-                              projectReferenceNames: [
-                                selectedRepo.id,
-                                selectedRepo.name,
-                                selectedRepo.domain
-                              ]
-                            };
                             return (
                               <article
                                 className={`message ${message.role}${isProjectOperation ? " service-message" : ""}${isNew ? " new-message" : ""}`}
@@ -13089,13 +13150,31 @@ function App() {
                                 {collapsedRun && renderCollapsedRunTrace(message, collapsedRun)}
                                 {message.role === "system" ? (
                                   isProjectOperation
-                                    ? renderRichText(message.content, "rich-text message-body service-log-body", richTextOptions)
+                                    ? (
+                                      <MemoRichText
+                                        className="rich-text message-body service-log-body"
+                                        onFileReference={openProjectFileFromRichText}
+                                        projectReferenceNames={[selectedRepo.id, selectedRepo.name, selectedRepo.domain]}
+                                        projectRoot={selectedRepo.pathMasked}
+                                        projectRoots={[selectedRepo.pathMasked, selectedRepo.serverPath]}
+                                        value={message.content}
+                                      />
+                                    )
                                     : (
                                       <div className="system-message-body" title={normalizeDisplayText(message.content).trim()}>
                                         {normalizeDisplayText(message.content).trim()}
                                       </div>
                                     )
-                                ) : renderRichText(message.content, "rich-text message-body", richTextOptions)}
+                                ) : (
+                                  <MemoRichText
+                                    className="rich-text message-body"
+                                    onFileReference={openProjectFileFromRichText}
+                                    projectReferenceNames={[selectedRepo.id, selectedRepo.name, selectedRepo.domain]}
+                                    projectRoot={selectedRepo.pathMasked}
+                                    projectRoots={[selectedRepo.pathMasked, selectedRepo.serverPath]}
+                                    value={message.content}
+                                  />
+                                )}
                                 {renderMessageAttachments(message.attachments, setImagePreview)}
                                 {renderCodexActions(message, messageJob)}
                                 {renderCodexChangeCard(message, messageJob, messageProgress)}
