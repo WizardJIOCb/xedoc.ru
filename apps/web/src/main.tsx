@@ -1180,18 +1180,17 @@ function defaultDeployModeForAgent(agent?: Agent | null): "ssh" | "local" {
   return isLinuxAgent(agent) ? "local" : "ssh";
 }
 
-function isUnifiedProjectFolderMode(agent?: Agent | null, deployMode?: "ssh" | "local") {
-  return isLinuxAgent(agent) && deployMode === "local";
+function isUnifiedProjectFolderMode(_agent?: Agent | null, _deployMode?: "ssh" | "local") {
+  return false;
 }
 
 function defaultProjectServerPath(agent: Agent | null | undefined, deployMode: "ssh" | "local", projectPath: string, domain: string) {
-  return isUnifiedProjectFolderMode(agent, deployMode) ? projectPath : defaultServerPathForDomain(domain);
+  return defaultServerPathForDomain(domain);
 }
 
-function normalizeProjectServerPathForSave(agent: Agent | null | undefined, deployMode: "ssh" | "local", projectPath: string, serverPath: string) {
+function normalizeProjectServerPathForSave(_agent: Agent | null | undefined, _deployMode: "ssh" | "local", projectPath: string, serverPath: string) {
   const path = projectPath.trim();
   const server = serverPath.trim();
-  if (isUnifiedProjectFolderMode(agent, deployMode)) return path;
   if (server === ".") return path;
   return server;
 }
@@ -1200,12 +1199,12 @@ function defaultBuildCommandForAgent(agent?: Agent | null) {
   return isLinuxAgent(agent) ? "npm run build" : "npm.cmd run build";
 }
 
-function defaultDeploySourceDirForAgent(agent: Agent | null | undefined, deployMode: "ssh" | "local") {
-  return isUnifiedProjectFolderMode(agent, deployMode) ? "." : "dist";
+function defaultDeploySourceDirForAgent(_agent: Agent | null | undefined, _deployMode: "ssh" | "local") {
+  return "dist";
 }
 
 function defaultDeployBuildCommandForAgent(agent: Agent | null | undefined, deployMode: "ssh" | "local") {
-  return isUnifiedProjectFolderMode(agent, deployMode) ? "" : defaultBuildCommandForAgent(agent);
+  return defaultBuildCommandForAgent(agent);
 }
 
 function hasDeployConfig(repo?: Repo | null) {
@@ -8635,14 +8634,8 @@ function App() {
             if (!projectDeploySourceDir.trim() || projectDeploySourceDir.trim() === "dist" || projectDeploySourceDir.trim() === ".") {
               setProjectDeploySourceDir(nextSourceDir);
             }
-            if (isUnifiedProjectFolderMode(projectFormAgent, value)) {
-              setProjectServerPath(projectPath);
-              setProjectDeployRemoteSubdir("");
-              setProjectDeployCleanRemote(false);
-              if (projectDataLocation === "server") setProjectDataPath(defaultProjectDataPath("server", projectPath, projectPath));
-              if (!projectDeployBuildCommand.trim() || projectDeployBuildCommand.trim() === defaultBuildCommandForAgent(projectFormAgent)) {
-                setProjectDeployBuildCommand(defaultDeployBuildCommandForAgent(projectFormAgent, value));
-              }
+            if (!projectDeployBuildCommand.trim() || projectDeployBuildCommand.trim() === defaultBuildCommandForAgent(projectFormAgent)) {
+              setProjectDeployBuildCommand(defaultDeployBuildCommandForAgent(projectFormAgent, value));
             }
           }}
         >
@@ -8659,12 +8652,12 @@ function App() {
       <>
         {projectUsesUnifiedFolder ? (
           <div className="project-preview">
-            <span>Project folder / web root</span>
+            <span>Deploy target / web root</span>
             <strong>{effectiveProjectServerPath || "not set"}</strong>
           </div>
         ) : (
           <label>
-            Server project folder
+            Deploy target / web root
             <input placeholder="/var/www/project.domain" value={projectServerPath} onChange={(event) => handleProjectServerPathChange(event.target.value)} />
           </label>
         )}
