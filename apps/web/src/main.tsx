@@ -3562,6 +3562,13 @@ function jobProgressMessage(progress: JobProgress | null | undefined, runnerLabe
   return "Задача ещё активна";
 }
 
+function compactJobProgressMessage(progress: JobProgress | null | undefined, runnerLabel = "Codex") {
+  const phase = (progress?.phase ?? "").toLowerCase();
+  if (phase === "message") return `Получаю ответ от ${runnerLabel}`;
+  const message = jobProgressMessage(progress, runnerLabel).replace(/\s+/g, " ").trim();
+  return truncateCommitPart(message, 88);
+}
+
 function isJobPromptMessage(message: ChatMessage, jobId: string) {
   return message.externalId === `job:${jobId}:prompt` || (message.role === "user" && messageJobId(message) === jobId);
 }
@@ -10626,6 +10633,7 @@ function App() {
     const showActiveDiff = hasProgressChanges(activeProgress);
     const runnerLabel = jobRunnerLabel(activeJob);
     const activeFiles = activeProgress?.files ?? [];
+    const activeProgressMessage = jobProgressMessage(activeProgress, runnerLabel);
     return (
       <>
         {!promptAlreadyVisible && (
@@ -10640,7 +10648,9 @@ function App() {
             <div className="progress-panel">
               <div>
                 <span className="progress-label">{jobProgressLabel(activeProgress, "Выполняется", runnerLabel)}</span>
-                <strong>{jobProgressMessage(activeProgress, runnerLabel)}</strong>
+                <strong className="progress-message" title={activeProgressMessage}>
+                  {compactJobProgressMessage(activeProgress, runnerLabel)}
+                </strong>
               </div>
               <div className="progress-stats">
                 <AnimatedFileCount value={activeProgress.filesChanged ?? 0} />
