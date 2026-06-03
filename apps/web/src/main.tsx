@@ -2341,6 +2341,11 @@ function editorLanguageLabel(path: string) {
   return labels[language] ?? language;
 }
 
+function isMarkdownPath(path: string) {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return ext === "md" || ext === "markdown";
+}
+
 const PROJECT_REFERENCE_EXTENSION_CANDIDATES = [
   "ts",
   "tsx",
@@ -2543,6 +2548,39 @@ function appendInlineTail(children: React.ReactNode[], inlineTail?: React.ReactN
   return inlineTail ? [...children, inlineTail] : children;
 }
 
+function splitMarkdownTableRow(line: string) {
+  let row = line.trim();
+  if (!row.includes("|")) return [];
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|")) row = row.slice(0, -1);
+  return row.split("|").map((cell) => cell.trim());
+}
+
+function markdownTableAlignment(cell: string): "left" | "center" | "right" | undefined {
+  const value = cell.trim();
+  if (!/^:?-{3,}:?$/.test(value)) return undefined;
+  if (value.startsWith(":") && value.endsWith(":")) return "center";
+  if (value.endsWith(":")) return "right";
+  return "left";
+}
+
+function parseMarkdownTable(lines: string[], start: number) {
+  const headers = splitMarkdownTableRow(lines[start] ?? "");
+  const separatorCells = splitMarkdownTableRow(lines[start + 1] ?? "");
+  if (!headers.length || separatorCells.length < headers.length) return null;
+  const alignments = separatorCells.map(markdownTableAlignment);
+  if (alignments.some((alignment) => !alignment)) return null;
+  const rows: string[][] = [];
+  let index = start + 2;
+  while (index < lines.length && (lines[index] ?? "").trim().includes("|")) {
+    const cells = splitMarkdownTableRow(lines[index] ?? "");
+    if (!cells.length) break;
+    rows.push(cells);
+    index += 1;
+  }
+  return { alignments, headers, rows, nextIndex: index };
+}
+
 function renderRichText(value: string, className = "rich-text", options?: RichTextOptions, inlineTail?: React.ReactNode) {
   const lines = normalizeDisplayText(value).trim().split("\n");
   const blocks: React.ReactNode[] = [];
@@ -2572,12 +2610,52 @@ function renderRichText(value: string, className = "rich-text", options?: RichTe
       continue;
     }
 
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading?.[2]) {
       const blockIndex = blocks.length;
+      const level = Math.min(6, heading[1]?.length ?? 3);
       index += 1;
       const children = renderInlineMarkdown(heading[2], `block:${blockIndex}:heading`, options);
-      blocks.push(<h3 key={blockIndex}>{index >= lines.length ? appendInlineTail(children, inlineTail) : children}</h3>);
+      blocks.push(React.createElement(`h${level}`, { key: blockIndex }, index >= lines.length ? appendInlineTail(children, inlineTail) : children));
+      continue;
+    }
+
+    if (/^\s*[-*_]{3,}\s*$/.test(line)) {
+      blocks.push(<hr key={blocks.length} />);
+      index += 1;
+      continue;
+    }
+
+    const table = parseMarkdownTable(lines, index);
+    if (table) {
+      const blockIndex = blocks.length;
+      index = table.nextIndex;
+      blocks.push(
+        <div className="rich-table-wrap" key={blockIndex}>
+          <table>
+            <thead>
+              <tr>
+                {table.headers.map((cell, cellIndex) => (
+                  <th key={cellIndex} style={{ textAlign: table.alignments[cellIndex] ?? "left" }}>
+                    {renderInlineMarkdown(cell, `block:${blockIndex}:th:${cellIndex}`, options)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {table.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {table.headers.map((_, cellIndex) => (
+                    <td key={cellIndex} style={{ textAlign: table.alignments[cellIndex] ?? "left" }}>
+                      {renderInlineMarkdown(row[cellIndex] ?? "", `block:${blockIndex}:td:${rowIndex}:${cellIndex}`, options)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
       continue;
     }
 
@@ -2627,7 +2705,8 @@ function renderRichText(value: string, className = "rich-text", options?: RichTe
       index < lines.length &&
       (lines[index] ?? "").trim() &&
       !/^```\s*[\w-]*\s*$/.test(lines[index] ?? "") &&
-      !/^(#{1,3})\s+/.test(lines[index] ?? "") &&
+      !/^(#{1,6})\s+/.test(lines[index] ?? "") &&
+      !/^\s*[-*_]{3,}\s*$/.test(lines[index] ?? "") &&
       !/^\s*[-*]\s+/.test(lines[index] ?? "") &&
       !/^\s*\d+[.)]\s+/.test(lines[index] ?? "")
     ) {
@@ -2986,6 +3065,17 @@ function PublicProjectFilePage({ target }: { target: { agentId: string; repoId: 
                 <strong>Binary preview unavailable</strong>
                 <small>{file.mimeType || file.path}</small>
               </div>
+            ) : !notice && file && isMarkdownPath(file.path) ? (
+              <article className="markdown-preview-pane public-markdown-preview">
+                {renderRichText(file.content, "markdown-preview rich-text", {
+                  onFileReference: (path) => {
+                    const normalized = normalizeProjectFilePath(path).toLowerCase();
+                    const match = visibleEntries.find((entry) => normalizeProjectFilePath(entry.path).toLowerCase() === normalized);
+                    if (match) setActivePath(match.path);
+                  },
+                  projectReferenceNames: [file.project.name, target.repoId]
+                })}
+              </article>
             ) : !notice && file ? (
               <React.Suspense fallback={<pre className="public-file-code">{file.content}</pre>}>
                 <MonacoReadOnlyCodeViewer path={file.path} value={file.content} />
@@ -3951,6 +4041,7 @@ function App() {
   const [fileEditor, setFileEditor] = useState<ProjectFileEditor | null>(null);
   const [fileEditorTabs, setFileEditorTabs] = useState<ProjectFileEditor[]>([]);
   const [editorCursor, setEditorCursor] = useState<EditorCursorState>({ lineNumber: 1, column: 1, selectionLength: 0 });
+  const [markdownPreviewMode, setMarkdownPreviewMode] = useState(true);
   const fileEditorTabDragKeyRef = useRef("");
   const [draggingFileEditorTabKey, setDraggingFileEditorTabKey] = useState("");
   const [projectFiles, setProjectFiles] = useState<ProjectFileEntry[]>([]);
@@ -11624,6 +11715,18 @@ function App() {
     );
   }
 
+  function renderMarkdownPreview(editor: ProjectFileEditor) {
+    return (
+      <article className="markdown-preview-pane">
+        {renderRichText(editor.content, "markdown-preview rich-text", {
+          onFileReference: openProjectFile,
+          projectReferenceNames: [selectedRepo?.name, editor.repoName],
+          projectRoot: selectedRepo?.pathMasked
+        })}
+      </article>
+    );
+  }
+
   function renderFileEditorStatusBar(editor: ProjectFileEditor) {
     const dirty = !editor.binary && editor.content !== editor.originalContent;
     const status = editor.error
@@ -12580,7 +12683,7 @@ function App() {
                 </div>
               </aside>}
               {ideEditorPaneOpen && <section className="file-editor-main">
-                {ideFindOpen && !selectedProjectFolderPath && !fileEditor.binary && <div className="file-editor-search">
+                {ideFindOpen && !selectedProjectFolderPath && !fileEditor.binary && !(isMarkdownPath(fileEditor.path) && markdownPreviewMode) && <div className="file-editor-search">
                   <label>
                     <Search size={15} />
                     <input
@@ -12605,10 +12708,30 @@ function App() {
                     <ArrowDown size={15} />
                   </button>
                 </div>}
+                {!selectedProjectFolderPath && !fileEditor.loading && !fileEditor.binary && isMarkdownPath(fileEditor.path) && (
+                  <div className="markdown-editor-toolbar" role="group" aria-label="Markdown view mode">
+                    <button
+                      className={markdownPreviewMode ? "active" : ""}
+                      type="button"
+                      onClick={() => setMarkdownPreviewMode(true)}
+                    >
+                      <FileText size={14} /> Preview
+                    </button>
+                    <button
+                      className={!markdownPreviewMode ? "active" : ""}
+                      type="button"
+                      onClick={() => setMarkdownPreviewMode(false)}
+                    >
+                      <CodeXml size={14} /> Source
+                    </button>
+                  </div>
+                )}
                 {selectedProjectFolderPath ? (
                   renderProjectFolderView()
                 ) : fileEditor.loading ? (
                   <div className="empty">Загружаю файл...</div>
+                ) : !fileEditor.binary && isMarkdownPath(fileEditor.path) && markdownPreviewMode ? (
+                  renderMarkdownPreview(fileEditor)
                 ) : fileEditor.binary && fileEditor.mimeType?.startsWith("image/") ? (
                   renderImagePreview(fileEditor)
                 ) : fileEditor.binary ? (
