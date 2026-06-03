@@ -569,8 +569,10 @@ function canWriteRepo(user: AuthUser, agentId: string, repoId: string): boolean 
     FROM repos r
     WHERE r.agent_id = ? AND r.id = ?
   `).get(agentId, repoId) as Pick<RepoRow, "user_id" | "write_access" | "write_users_json"> | undefined;
-  if (!row || row.write_access === "readonly") return false;
-  if (isAdmin(user) || row.user_id === user.id || row.write_access === "everyone") return true;
+  if (!row) return false;
+  if (isAdmin(user) || row.user_id === user.id) return true;
+  if (row.write_access === "readonly") return false;
+  if (row.write_access === "everyone") return true;
   if (row.write_access !== "users") return false;
   const resolvedUser = user.email
     ? user

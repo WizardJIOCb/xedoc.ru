@@ -9825,7 +9825,7 @@ function App() {
                 if (nextAccess === "readonly") setProjectVisibility("public");
                 if (nextAccess !== "users") setProjectWriteUsersText("");
               }}>
-                <option value="readonly">Public read-only: видно всем без входа, менять нельзя никому</option>
+                <option value="readonly">Public read-only: видно всем без входа, меняют только владелец и админы</option>
                 <option value="owner">Owner only: менять проект может только владелец</option>
                 <option value="everyone">All signed-in users: менять могут все авторизованные</option>
                 <option value="users">Specific users: менять могут только пользователи из списка</option>
