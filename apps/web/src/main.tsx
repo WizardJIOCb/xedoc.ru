@@ -12626,7 +12626,7 @@ function App() {
                       {ideChatMenuOpen && (
                         <div className="ide-chat-menu" role="menu">
                           <button disabled={!fileEditor || Boolean(selectedProjectFolderPath)} role="menuitem" type="button" onClick={() => void shareCurrentProjectFile()}>
-                            <Link2 size={14} /> Поделиться этим файлом
+                            <Link2 size={14} /> Поделиться файлом
                           </button>
                           <button role="menuitem" type="button" onClick={() => {
                             setIdeChatMenuOpen(false);
