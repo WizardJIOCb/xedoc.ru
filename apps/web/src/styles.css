@@ -8350,11 +8350,12 @@ button:disabled {
     overflow: auto;
     transform: translateX(calc(-100% - 8px));
     transition: transform 180ms ease;
-    box-shadow: 18px 0 48px rgba(0, 0, 0, 0.26);
+    box-shadow: none;
   }
 
   .file-editor-menubar.mobile-open {
     transform: translateX(0);
+    box-shadow: 18px 0 48px rgba(0, 0, 0, 0.26);
   }
 
   .ide-mobile-menu-backdrop {
