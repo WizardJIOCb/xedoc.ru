@@ -5770,6 +5770,12 @@ function App() {
   }, [fileEditor?.agentId, fileEditor?.repoId, fileEditor?.path]);
 
   useEffect(() => {
+    if (!ideChatNotice) return;
+    const timer = window.setTimeout(() => setIdeChatNotice(""), 6000);
+    return () => window.clearTimeout(timer);
+  }, [ideChatNotice]);
+
+  useEffect(() => {
     if (!csrf || !isAdminRoute || currentUser?.role !== "admin") return;
     void loadAdminUsers();
     void loadAdminStats();
@@ -12446,6 +12452,14 @@ function App() {
             )}
             {renderIdeMenubar(fileEditor)}
             {renderIdeCommandPalette(fileEditor)}
+            {ideChatNotice && (
+              <div className="ide-toast" role="status">
+                <span>{ideChatNotice}</span>
+                <button aria-label="Закрыть уведомление" type="button" onClick={() => setIdeChatNotice("")}>
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             {ideEditorPaneOpen && renderFileEditorTabs()}
             {(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice) && (
               <details
@@ -12682,14 +12696,12 @@ function App() {
                       {ideChatScrollDirection === "up" ? <ArrowUp size={15} /> : <ArrowDown size={15} />}
                     </button>
                   )}
-                  {ideChatNotice && <div className="ide-chat-notice">{ideChatNotice}</div>}
                   <form className="ide-chat-composer" onSubmit={submitIdeChat}>
                     <textarea
                       placeholder={activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту"}
                       value={ideChatPrompt}
                       onChange={(event) => {
                         setIdeChatPrompt(event.target.value);
-                        setIdeChatNotice("");
                       }}
                       onKeyDown={(event) => {
                         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {

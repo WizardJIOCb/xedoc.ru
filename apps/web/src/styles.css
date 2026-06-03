@@ -5756,8 +5756,60 @@ button.message-attachment.image:hover {
   margin-top: 2px;
 }
 
-.ide-chat-empty,
-.ide-chat-notice {
+.ide-toast {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  z-index: 35;
+  width: min(620px, calc(100% - 28px));
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 8px;
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 88%, var(--panel));
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  transform: translateX(-50%);
+  animation: toast-in 140ms ease-out;
+}
+
+.ide-toast button {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-radius: 6px;
+  color: inherit;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  cursor: pointer;
+}
+
+.ide-toast button:hover {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.ide-chat-empty {
   padding: 9px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -5766,11 +5818,6 @@ button.message-attachment.image:hover {
   font-size: 12px;
   font-weight: 750;
   line-height: 1.35;
-}
-
-.ide-chat-notice {
-  color: var(--accent-text);
-  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
 }
 
 .ide-chat-composer {
