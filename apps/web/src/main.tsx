@@ -10253,7 +10253,7 @@ function App() {
       : "Создать агента и скачать установщик";
     const linuxSetupButtonLabel = linuxAgent
       ? linuxAgent.status === "online" ? "Linux-агент online" : "Скачать setup Linux-агента"
-      : "Добавить server agent-linux";
+      : "Добавить server agent";
     const statusRows = [
       {
         label: "Web service",
@@ -10313,7 +10313,7 @@ function App() {
             <div>
               <h2><Server size={18} /> Linux server agent</h2>
               <p>
-                Добавляет постоянное подключение <code>agent-linux</code> на Ubuntu-сервере. Агент работает как systemd service, хранит проекты на сервере и может деплоить локально в <code>/var/www</code> без домашнего Windows ПК.
+                Добавляет постоянное подключение на Ubuntu-сервере. Для каждого пользователя или сервера создаётся отдельный agentId и отдельный systemd service, чтобы подключения не перезаписывали друг друга.
               </p>
             </div>
             <button className="sync-setup-button" disabled={busy || Boolean(linuxAgent && linuxAgent.status === "online")} type="button" onClick={() => void downloadLinuxAgentSetup()}>

@@ -2781,6 +2781,10 @@ function agentSetupPayload(request: { protocol: string; hostname: string }, agen
     ]
   }, null, 2);
   const encodedConfig = Buffer.from(configJson, "utf8").toString("base64");
+  const linuxSafeAgentId = agentId.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/_/g, "-").replace(/^-+|-+$/g, "") || "agent";
+  const linuxServiceSuffix = linuxSafeAgentId.startsWith("agent-") ? linuxSafeAgentId.slice("agent-".length) : linuxSafeAgentId;
+  const linuxDefaultRoot = agentId === "agent-linux" ? "$HOME/codex-agent" : `$HOME/codex-agent-${linuxServiceSuffix}`;
+  const linuxServiceName = agentId === "agent-linux" ? "codex-agent-linux" : `codex-agent-${linuxServiceSuffix}`;
   const setupPowerShell = [
     "$ErrorActionPreference = \"Stop\"",
     "$Root = Join-Path $env:USERPROFILE \"codex-agent\"",
@@ -2833,11 +2837,11 @@ function agentSetupPayload(request: { protocol: string; hostname: string }, agen
   const setupShell = [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    "ROOT=\"${CODEX_AGENT_ROOT:-$HOME/codex-agent}\"",
+    `ROOT="\${CODEX_AGENT_ROOT:-${linuxDefaultRoot}}"`,
     `PACKAGE_URL=${shellSingleQuote(packageUrl)}`,
     `CMC_TOKEN=${shellSingleQuote(token)}`,
     `CONFIG_B64=${shellSingleQuote(encodedConfig)}`,
-    "SERVICE_NAME=\"codex-agent-linux\"",
+    `SERVICE_NAME=${shellSingleQuote(linuxServiceName)}`,
     "mkdir -p \"$ROOT/data\"",
     "if ! command -v node >/dev/null 2>&1; then echo \"Install Node.js 22 LTS first.\" >&2; exit 1; fi",
     "if ! command -v corepack >/dev/null 2>&1; then echo \"Install Corepack/Node.js 22 LTS first.\" >&2; exit 1; fi",
@@ -2872,7 +2876,8 @@ function agentSetupPayload(request: { protocol: string; hostname: string }, agen
     "cat > stop-agent-linux.sh <<'SH'",
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    "systemctl stop codex-agent-linux.service 2>/dev/null || systemctl --user stop codex-agent-linux.service 2>/dev/null || pkill -f 'apps/agent-windows/dist/index.js --config apps/agent-windows/agent.config.json' || true",
+    "ROOT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"",
+    `systemctl stop ${linuxServiceName}.service 2>/dev/null || systemctl --user stop ${linuxServiceName}.service 2>/dev/null || pkill -f "$ROOT_DIR/apps/agent-windows/dist/index.js --config $ROOT_DIR/apps/agent-windows/agent.config.json" || true`,
     "SH",
     "chmod +x stop-agent-linux.sh",
     "NODE_BIN=\"$(command -v node)\"",
