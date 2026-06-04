@@ -5709,6 +5709,55 @@ button.message-attachment.image:hover {
   background: var(--panel);
 }
 
+.ide-chat-active-run {
+  min-width: 0;
+  display: grid;
+  gap: var(--ide-chat-feed-gap);
+}
+
+.ide-chat-feed .thinking-message,
+.ide-chat-active-run .job-head,
+.ide-chat-active-run .live-activity-card,
+.ide-chat-active-run .progress-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ide-chat-feed .thinking-message {
+  padding: 0;
+}
+
+.ide-chat-feed .thinking-chip {
+  width: 100%;
+}
+
+.ide-chat-active-run .live-activity-toggle {
+  gap: 8px;
+}
+
+.ide-chat-active-run .live-activity-toggle em {
+  max-width: 96px;
+}
+
+.ide-chat-active-run .progress-panel {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.ide-chat-active-run .progress-stats {
+  justify-content: flex-start;
+}
+
+.ide-chat-panel.wide .ide-chat-active-run .progress-panel {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.ide-chat-panel.wide .ide-chat-active-run .progress-stats {
+  justify-content: flex-end;
+}
+
 .ide-chat-panel.wide .ide-chat-message {
   width: 100%;
   max-width: none;

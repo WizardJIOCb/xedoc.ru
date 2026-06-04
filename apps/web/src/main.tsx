@@ -4839,6 +4839,14 @@ function App() {
     actualActiveProgress?.deleted ?? 0,
     actualActiveProgress?.files?.length ?? 0
   ].join("|") : "";
+  const activeRunBelongsToActiveChat = Boolean(activeChat && activeJob && (
+    activeJob.chatId === activeChat.id ||
+    messages.some((message) => message.chatId === activeChat.id && messageJobId(message) === activeJob.id)
+  ));
+  const showIdeChatThinkingIndicator = Boolean(activeChat && !chatIsLoading && (
+    activeChatLocalBusy || (activeRunBusy && activeRunBelongsToActiveChat)
+  ));
+  const showIdeChatActiveRun = Boolean(activeRunBusy && activeRunBelongsToActiveChat);
 
   function isScrollableElement(element: HTMLElement | null | undefined): element is HTMLElement {
     if (!element || element.scrollHeight <= element.clientHeight + 1) return false;
@@ -6891,6 +6899,28 @@ function App() {
       timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, [activeChat, activeChatId, activeRunBusy, chatIsLoading, activeLiveScrollSignature]);
+
+  useEffect(() => {
+    if (!ideChatPanelOpen || !activeChat || chatIsLoading || !showIdeChatActiveRun || !ideChatStickToBottomRef.current) return;
+    const chatId = activeChatId;
+    const timers: number[] = [];
+    const scrollDown = () => {
+      if (activeChatIdRef.current !== chatId || !ideChatStickToBottomRef.current) return;
+      scrollLiveActivityToLatest();
+      scrollIdeChatToBottom("auto");
+    };
+    const raf = window.requestAnimationFrame(() => {
+      scrollDown();
+      timers.push(window.setTimeout(scrollDown, 50));
+      timers.push(window.setTimeout(scrollDown, 180));
+      timers.push(window.setTimeout(scrollDown, 360));
+      timers.push(window.setTimeout(scrollDown, 620));
+    });
+    return () => {
+      window.cancelAnimationFrame(raf);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [ideChatPanelOpen, activeChat, activeChatId, chatIsLoading, showIdeChatActiveRun, activeLiveScrollSignature]);
 
   useEffect(() => {
     if (!loadedChatAutoScroll || loadedChatAutoScroll.chatId !== activeChatId || chatIsLoading || !activeChat) return;
@@ -13796,38 +13826,46 @@ function App() {
                   </header>
                   <div className="ide-chat-feed" ref={ideChatFeedRef} onScroll={() => scheduleIdeChatScrollStateUpdate("scroll")}>
                     {activeChat ? (
-                      ideChatMessages.length ? ideChatMessages.map((message) => {
-                        const richTextOptions: RichTextOptions | undefined = selectedRepo ? {
-                          onFileReference: openProjectFile,
-                          projectRoot: selectedRepo.pathMasked,
-                          projectRoots: [
-                            selectedRepo.pathMasked,
-                            selectedRepo.serverPath
-                          ],
-                          projectReferenceNames: [
-                            selectedRepo.id,
-                            selectedRepo.name,
-                            selectedRepo.domain
-                          ]
-                        } : undefined;
-                        return (
-                          <article className={`ide-chat-message ${message.role}`} key={message.id}>
-                            <div className="ide-chat-message-meta">
-                              <span className="ide-chat-message-author">{message.role === "user" ? (currentUser?.nickname || "You") : message.role === "assistant" ? "Codex" : message.role}</span>
-                              <small>{formatDateTime(message.createdAt)}</small>
-                            </div>
-                            <MemoRichText
-                              className={`rich-text compact ide-chat-body${message.role === "system" ? " ide-chat-system-body" : ""}`}
-                              onFileReference={selectedRepo ? openProjectFile : undefined}
-                              projectReferenceNames={richTextOptions?.projectReferenceNames}
-                              projectRoot={richTextOptions?.projectRoot}
-                              projectRoots={richTextOptions?.projectRoots}
-                              value={message.content}
-                            />
-                            {renderMessageAttachments(message.attachments, setImagePreview)}
-                          </article>
-                        );
-                      }) : <div className="ide-chat-empty">В этом чате пока нет сообщений.</div>
+                      <>
+                        {ideChatMessages.length ? ideChatMessages.map((message) => {
+                          const richTextOptions: RichTextOptions | undefined = selectedRepo ? {
+                            onFileReference: openProjectFile,
+                            projectRoot: selectedRepo.pathMasked,
+                            projectRoots: [
+                              selectedRepo.pathMasked,
+                              selectedRepo.serverPath
+                            ],
+                            projectReferenceNames: [
+                              selectedRepo.id,
+                              selectedRepo.name,
+                              selectedRepo.domain
+                            ]
+                          } : undefined;
+                          return (
+                            <article className={`ide-chat-message ${message.role}`} key={message.id}>
+                              <div className="ide-chat-message-meta">
+                                <span className="ide-chat-message-author">{message.role === "user" ? (currentUser?.nickname || "You") : message.role === "assistant" ? "Codex" : message.role}</span>
+                                <small>{formatDateTime(message.createdAt)}</small>
+                              </div>
+                              <MemoRichText
+                                className={`rich-text compact ide-chat-body${message.role === "system" ? " ide-chat-system-body" : ""}`}
+                                onFileReference={selectedRepo ? openProjectFile : undefined}
+                                projectReferenceNames={richTextOptions?.projectReferenceNames}
+                                projectRoot={richTextOptions?.projectRoot}
+                                projectRoots={richTextOptions?.projectRoots}
+                                value={message.content}
+                              />
+                              {renderMessageAttachments(message.attachments, setImagePreview)}
+                            </article>
+                          );
+                        }) : (!showIdeChatThinkingIndicator && !showIdeChatActiveRun) ? <div className="ide-chat-empty">В этом чате пока нет сообщений.</div> : null}
+                        {showIdeChatThinkingIndicator && renderChatThinkingIndicator()}
+                        {showIdeChatActiveRun && (
+                          <div className="ide-chat-active-run">
+                            {renderActiveRun()}
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <div className="ide-chat-empty">Выбери чат или отправь первую задачу прямо из IDE.</div>
                     )}
