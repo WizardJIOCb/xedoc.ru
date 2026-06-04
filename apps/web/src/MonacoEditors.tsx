@@ -5,6 +5,48 @@ import HtmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import "monaco-editor/esm/vs/language/css/monaco.contribution";
+import "monaco-editor/esm/vs/language/html/monaco.contribution";
+import "monaco-editor/esm/vs/language/json/monaco.contribution";
+import "monaco-editor/esm/vs/language/typescript/monaco.contribution";
+import "monaco-editor/esm/vs/basic-languages/bat/bat.contribution";
+import "monaco-editor/esm/vs/basic-languages/bicep/bicep.contribution";
+import "monaco-editor/esm/vs/basic-languages/clojure/clojure.contribution";
+import "monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution";
+import "monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution";
+import "monaco-editor/esm/vs/basic-languages/dart/dart.contribution";
+import "monaco-editor/esm/vs/basic-languages/dockerfile/dockerfile.contribution";
+import "monaco-editor/esm/vs/basic-languages/elixir/elixir.contribution";
+import "monaco-editor/esm/vs/basic-languages/fsharp/fsharp.contribution";
+import "monaco-editor/esm/vs/basic-languages/go/go.contribution";
+import "monaco-editor/esm/vs/basic-languages/graphql/graphql.contribution";
+import "monaco-editor/esm/vs/basic-languages/hcl/hcl.contribution";
+import "monaco-editor/esm/vs/basic-languages/ini/ini.contribution";
+import "monaco-editor/esm/vs/basic-languages/java/java.contribution";
+import "monaco-editor/esm/vs/basic-languages/kotlin/kotlin.contribution";
+import "monaco-editor/esm/vs/basic-languages/lua/lua.contribution";
+import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution";
+import "monaco-editor/esm/vs/basic-languages/mdx/mdx.contribution";
+import "monaco-editor/esm/vs/basic-languages/mysql/mysql.contribution";
+import "monaco-editor/esm/vs/basic-languages/perl/perl.contribution";
+import "monaco-editor/esm/vs/basic-languages/pgsql/pgsql.contribution";
+import "monaco-editor/esm/vs/basic-languages/php/php.contribution";
+import "monaco-editor/esm/vs/basic-languages/powershell/powershell.contribution";
+import "monaco-editor/esm/vs/basic-languages/protobuf/protobuf.contribution";
+import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
+import "monaco-editor/esm/vs/basic-languages/r/r.contribution";
+import "monaco-editor/esm/vs/basic-languages/redis/redis.contribution";
+import "monaco-editor/esm/vs/basic-languages/ruby/ruby.contribution";
+import "monaco-editor/esm/vs/basic-languages/rust/rust.contribution";
+import "monaco-editor/esm/vs/basic-languages/scala/scala.contribution";
+import "monaco-editor/esm/vs/basic-languages/shell/shell.contribution";
+import "monaco-editor/esm/vs/basic-languages/solidity/solidity.contribution";
+import "monaco-editor/esm/vs/basic-languages/sql/sql.contribution";
+import "monaco-editor/esm/vs/basic-languages/swift/swift.contribution";
+import "monaco-editor/esm/vs/basic-languages/twig/twig.contribution";
+import "monaco-editor/esm/vs/basic-languages/vb/vb.contribution";
+import "monaco-editor/esm/vs/basic-languages/xml/xml.contribution";
+import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution";
 
 (self as unknown as {
   MonacoEnvironment?: {
@@ -186,7 +228,7 @@ function editorLanguageFromPath(path: string): string {
   if (["scss", "sass"].includes(ext)) return "scss";
   if (ext === "less") return "less";
   if (["html", "htm"].includes(ext)) return "html";
-  if (["vue", "svelte", "astro"].includes(ext)) return "html";
+  if (["vue", "svelte", "astro", "ejs"].includes(ext)) return "html";
   if (ext === "xml") return "xml";
   if (["svg", "xhtml"].includes(ext)) return "xml";
   if (["md", "markdown"].includes(ext)) return "markdown";
@@ -195,14 +237,22 @@ function editorLanguageFromPath(path: string): string {
   if (["sh", "bash", "zsh"].includes(ext)) return "shell";
   if (["bat", "cmd"].includes(ext)) return "bat";
   if (["ps1", "psm1"].includes(ext)) return "powershell";
-  if (ext === "sql") return "sql";
+  if (ext === "sql") return filename.includes("mysql") ? "mysql" : filename.includes("pgsql") || filename.includes("postgres") ? "pgsql" : "sql";
+  if (ext === "mysql") return "mysql";
+  if (["pgsql", "psql"].includes(ext)) return "pgsql";
   if (ext === "py") return "python";
   if (ext === "go") return "go";
   if (ext === "rs") return "rust";
   if (ext === "java") return "java";
   if (["kt", "kts"].includes(ext)) return "kotlin";
-  if (["php", "phtml"].includes(ext)) return "php";
-  if (["toml", "ini", "conf", "cfg"].includes(ext)) return "ini";
+  if (["php", "php4", "php5", "phtml", "ctp", "inc"].includes(ext) || filename.endsWith(".blade.php")) return "php";
+  if (["toml", "ini", "conf", "cfg", "editorconfig"].includes(ext)) return "ini";
+  if (["hcl", "tf", "tfvars"].includes(ext)) return "hcl";
+  if (ext === "bicep") return "bicep";
+  if (ext === "sol") return "solidity";
+  if (ext === "proto") return "protobuf";
+  if (ext === "redis") return "redis";
+  if (ext === "twig") return "twig";
   if (["rb", "rake"].includes(ext) || filename === "gemfile") return "ruby";
   if (["c", "h", "cc", "cpp", "cxx", "hpp", "hxx"].includes(ext)) return "cpp";
   if (["cs", "csx"].includes(ext)) return "csharp";
@@ -222,7 +272,12 @@ function editorLanguageFromPath(path: string): string {
 
 const PROJECT_REFERENCE_EXTENSION_CANDIDATES = [
   "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "css", "scss", "sass", "less",
-  "html", "md", "yml", "yaml", "sql", "svg", "png", "jpg", "jpeg", "webp"
+  "html", "htm", "vue", "svelte", "astro", "php", "phtml", "sql", "mysql", "pgsql",
+  "py", "go", "rs", "java", "kt", "kts", "rb", "c", "h", "cpp", "hpp", "cs",
+  "swift", "dart", "lua", "pl", "pm", "r", "scala", "clj", "ex", "exs",
+  "graphql", "gql", "md", "mdx", "yml", "yaml", "toml", "ini", "conf", "cfg",
+  "hcl", "tf", "tfvars", "bicep", "sol", "proto", "twig", "svg", "png", "jpg",
+  "jpeg", "webp"
 ];
 
 function normalizeRelativeProjectPath(path: string) {

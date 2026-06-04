@@ -2363,7 +2363,7 @@ function editorLanguageFromPath(path: string): string {
   if (["scss", "sass"].includes(ext)) return "scss";
   if (ext === "less") return "less";
   if (["html", "htm"].includes(ext)) return "html";
-  if (["vue", "svelte", "astro"].includes(ext)) return "html";
+  if (["vue", "svelte", "astro", "ejs"].includes(ext)) return "html";
   if (ext === "xml") return "xml";
   if (["svg", "xhtml"].includes(ext)) return "xml";
   if (["md", "markdown"].includes(ext)) return "markdown";
@@ -2372,14 +2372,22 @@ function editorLanguageFromPath(path: string): string {
   if (["sh", "bash", "zsh"].includes(ext)) return "shell";
   if (["bat", "cmd"].includes(ext)) return "bat";
   if (["ps1", "psm1"].includes(ext)) return "powershell";
-  if (ext === "sql") return "sql";
+  if (ext === "sql") return filename.includes("mysql") ? "mysql" : filename.includes("pgsql") || filename.includes("postgres") ? "pgsql" : "sql";
+  if (ext === "mysql") return "mysql";
+  if (["pgsql", "psql"].includes(ext)) return "pgsql";
   if (ext === "py") return "python";
   if (ext === "go") return "go";
   if (ext === "rs") return "rust";
   if (ext === "java") return "java";
   if (["kt", "kts"].includes(ext)) return "kotlin";
-  if (["php", "phtml"].includes(ext)) return "php";
-  if (["toml", "ini", "conf", "cfg"].includes(ext)) return "ini";
+  if (["php", "php4", "php5", "phtml", "ctp", "inc"].includes(ext) || filename.endsWith(".blade.php")) return "php";
+  if (["toml", "ini", "conf", "cfg", "editorconfig"].includes(ext)) return "ini";
+  if (["hcl", "tf", "tfvars"].includes(ext)) return "hcl";
+  if (ext === "bicep") return "bicep";
+  if (ext === "sol") return "solidity";
+  if (ext === "proto") return "protobuf";
+  if (ext === "redis") return "redis";
+  if (ext === "twig") return "twig";
   if (["rb", "rake"].includes(ext) || filename === "gemfile") return "ruby";
   if (["c", "h", "cc", "cpp", "cxx", "hpp", "hxx"].includes(ext)) return "cpp";
   if (["cs", "csx"].includes(ext)) return "csharp";
@@ -2401,6 +2409,7 @@ function editorLanguageLabel(path: string) {
   const language = editorLanguageFromPath(path);
   const labels: Record<string, string> = {
     bat: "Batch",
+    bicep: "Bicep",
     csharp: "C#",
     clojure: "Clojure",
     cpp: "C++",
@@ -2411,6 +2420,7 @@ function editorLanguageLabel(path: string) {
     fsharp: "F#",
     go: "Go",
     graphql: "GraphQL",
+    hcl: "HCL",
     html: "HTML",
     ini: "INI",
     java: "Java",
@@ -2421,19 +2431,25 @@ function editorLanguageLabel(path: string) {
     lua: "Lua",
     markdown: "Markdown",
     mdx: "MDX",
+    mysql: "MySQL",
     perl: "Perl",
+    pgsql: "PostgreSQL",
     php: "PHP",
     plaintext: "Plain Text",
     powershell: "PowerShell",
+    protobuf: "Protocol Buffers",
     python: "Python",
     r: "R",
+    redis: "Redis",
     ruby: "Ruby",
     rust: "Rust",
     scala: "Scala",
     scss: "SCSS",
     shell: "Shell",
+    solidity: "Solidity",
     sql: "SQL",
     swift: "Swift",
+    twig: "Twig",
     typescript: "TypeScript",
     vb: "Visual Basic",
     xml: "XML",
@@ -2448,27 +2464,13 @@ function isMarkdownPath(path: string) {
 }
 
 const PROJECT_REFERENCE_EXTENSION_CANDIDATES = [
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mjs",
-  "cjs",
-  "json",
-  "css",
-  "scss",
-  "sass",
-  "less",
-  "html",
-  "md",
-  "yml",
-  "yaml",
-  "sql",
-  "svg",
-  "png",
-  "jpg",
-  "jpeg",
-  "webp"
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "css", "scss", "sass", "less",
+  "html", "htm", "vue", "svelte", "astro", "php", "phtml", "sql", "mysql", "pgsql",
+  "py", "go", "rs", "java", "kt", "kts", "rb", "c", "h", "cpp", "hpp", "cs",
+  "swift", "dart", "lua", "pl", "pm", "r", "scala", "clj", "ex", "exs",
+  "graphql", "gql", "md", "mdx", "yml", "yaml", "toml", "ini", "conf", "cfg",
+  "hcl", "tf", "tfvars", "bicep", "sol", "proto", "twig", "svg", "png", "jpg",
+  "jpeg", "webp"
 ];
 
 function normalizeRelativeProjectPath(path: string) {
