@@ -4686,7 +4686,7 @@ button.message-attachment.image:hover {
 }
 
 .file-editor-workspace.with-chat {
-  grid-template-columns: minmax(210px, 270px) minmax(0, 1fr) minmax(260px, 340px);
+  grid-template-columns: minmax(210px, 270px) minmax(0, 1fr) minmax(420px, 500px);
 }
 
 .file-editor-workspace.with-chat.chat-width-small {
@@ -4702,7 +4702,7 @@ button.message-attachment.image:hover {
 }
 
 .file-editor-workspace.without-explorer.with-chat {
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 500px);
 }
 
 .file-editor-workspace.without-explorer.with-chat.chat-width-small {
