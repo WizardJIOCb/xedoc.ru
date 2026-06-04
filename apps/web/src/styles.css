@@ -4597,30 +4597,6 @@ button.message-attachment.image:hover {
   padding: 14px;
 }
 
-.file-editor-output {
-  max-height: 150px;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--panel-2);
-}
-
-.file-editor-output summary {
-  cursor: pointer;
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.file-editor-output pre {
-  margin: 0;
-  padding: 8px;
-  border-top: 1px solid var(--line);
-  overflow: auto;
-  font-size: 12px;
-}
-
 .file-editor-tabs {
   min-height: 34px;
   display: flex;
@@ -5562,13 +5538,13 @@ button.message-attachment.image:hover {
 }
 
 .ide-chat-panel {
-  --ide-chat-font-size: 12px;
-  --ide-chat-heading-size: 13px;
-  --ide-chat-code-size: 11px;
-  --ide-chat-line-height: 1.45;
-  --ide-chat-feed-gap: 7px;
-  --ide-chat-message-gap: 4px;
-  --ide-chat-message-padding: 8px;
+  --ide-chat-font-size: 15px;
+  --ide-chat-heading-size: 16px;
+  --ide-chat-code-size: 13px;
+  --ide-chat-line-height: 1.55;
+  --ide-chat-feed-gap: 10px;
+  --ide-chat-message-gap: 7px;
+  --ide-chat-message-padding: 11px;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -5578,22 +5554,23 @@ button.message-attachment.image:hover {
 }
 
 .ide-chat-panel.chat-size-small {
-  --ide-chat-font-size: 11px;
-  --ide-chat-heading-size: 12px;
-  --ide-chat-code-size: 10px;
-  --ide-chat-line-height: 1.38;
-  --ide-chat-feed-gap: 6px;
-  --ide-chat-message-padding: 7px;
+  --ide-chat-font-size: 13px;
+  --ide-chat-heading-size: 14px;
+  --ide-chat-code-size: 12px;
+  --ide-chat-line-height: 1.48;
+  --ide-chat-feed-gap: 8px;
+  --ide-chat-message-gap: 5px;
+  --ide-chat-message-padding: 9px;
 }
 
 .ide-chat-panel.chat-size-large {
-  --ide-chat-font-size: 14px;
-  --ide-chat-heading-size: 15px;
-  --ide-chat-code-size: 12px;
-  --ide-chat-line-height: 1.52;
-  --ide-chat-feed-gap: 9px;
-  --ide-chat-message-gap: 6px;
-  --ide-chat-message-padding: 10px;
+  --ide-chat-font-size: 17px;
+  --ide-chat-heading-size: 18px;
+  --ide-chat-code-size: 15px;
+  --ide-chat-line-height: 1.62;
+  --ide-chat-feed-gap: 12px;
+  --ide-chat-message-gap: 8px;
+  --ide-chat-message-padding: 13px;
 }
 
 .ide-chat-panel.wide {

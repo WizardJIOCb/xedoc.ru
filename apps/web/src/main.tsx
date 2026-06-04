@@ -4154,7 +4154,7 @@ function messageUpdateSignature(message: ChatMessage) {
   ].join(":");
 }
 
-type ProjectOperationKind = "git-sync" | "deploy" | "nginx" | "ssl";
+type ProjectOperationKind = "git-sync" | "build" | "deploy" | "nginx" | "ssl";
 
 function isProjectOperationMessage(message: ChatMessage) {
   return message.role === "system" && message.metadata?.kind === "project-operation";
@@ -4397,13 +4397,6 @@ function App() {
       return localStorage.getItem("cmc.ideFindOpen") !== "0";
     } catch {
       return true;
-    }
-  });
-  const [ideOutputOpen, setIdeOutputOpen] = useState(() => {
-    try {
-      return localStorage.getItem("cmc.ideOutputOpen") === "1";
-    } catch {
-      return false;
     }
   });
   const [ideMenuOpen, setIdeMenuOpen] = useState("");
@@ -6562,14 +6555,6 @@ function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem("cmc.ideOutputOpen", ideOutputOpen ? "1" : "0");
-    } catch {
-      // IDE layout is local preference only.
-    }
-  }, [ideOutputOpen]);
-
-  useEffect(() => {
-    try {
       localStorage.setItem("cmc.ideChatTextSize", ideChatTextSize);
     } catch {
       // IDE chat display is local preference only.
@@ -7667,44 +7652,98 @@ function App() {
     setMessages((current) => current.filter((message) => message.id !== messageId));
   }
 
+  async function ensureProjectOperationChat(title: string) {
+    if (!selectedRepo || !csrf) throw new Error("Project chat is unavailable.");
+    setIdeChatPanelOpen(true);
+    setIdeMobilePane("chat");
+    const currentChatId = activeChatIdRef.current || activeChat?.id || "";
+    if (currentChatId) return currentChatId;
+
+    const sameRepoChat = chats.find((chat) => chat.agentId === selectedRepo.agentId && chat.repoId === selectedRepo.id && !chat.hiddenAt);
+    if (sameRepoChat) {
+      await loadChat(sameRepoChat.id, undefined, true).catch(() => {
+        setActiveChatId(sameRepoChat.id);
+      });
+      return sameRepoChat.id;
+    }
+
+    const loadedChats = await loadChats(selectedRepo).catch(() => undefined);
+    const loadedChat = loadedChats?.find((chat) => chat.agentId === selectedRepo.agentId && chat.repoId === selectedRepo.id && !chat.hiddenAt);
+    if (loadedChat) {
+      await loadChat(loadedChat.id, undefined, true).catch(() => {
+        setActiveChatId(loadedChat.id);
+      });
+      return loadedChat.id;
+    }
+
+    const response = await api("/api/chats", {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: JSON.stringify({
+        agentId: selectedRepo.agentId,
+        repoId: selectedRepo.id,
+        title: title.slice(0, 120) || "Project actions"
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || typeof data.chatId !== "string") {
+      throw new Error(typeof data.error === "string" ? data.error : "Не получилось создать чат для вывода операции.");
+    }
+    const chatId = data.chatId as string;
+    const stamp = new Date().toISOString();
+    const chat: Chat = {
+      id: chatId,
+      agentId: selectedRepo.agentId,
+      repoId: selectedRepo.id,
+      title: title.slice(0, 120) || "Project actions",
+      source: "web",
+      createdAt: stamp,
+      updatedAt: stamp
+    };
+    setChats((current) => current.some((item) => item.id === chatId) ? current : [chat, ...current]);
+    setActiveChatId(chatId);
+    saveProjectState(selectedRepo, chatId);
+    return chatId;
+  }
+
   async function runGitSync() {
     const commitMessage = effectiveGitMessage.trim();
     if (!selectedRepo || !csrf || !commitMessage || launchBusy || projectActionBusyRef.current.gitSync) return;
     projectActionBusyRef.current.gitSync = true;
-    const targetChatId = activeChatId || activeChat?.id || "";
+    let targetChatId = "";
     const operationDetails = [`Сообщение коммита: \`${safeMarkdownInlineCode(commitMessage)}\`.`];
-    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("git-sync", "Commit & push", operationDetails, targetChatId) : "";
+    let pendingMessageId = "";
     setGitBusy(true);
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
-    setGitNotice(targetChatId ? "" : "Git sync started...");
+    setGitNotice("");
     try {
+      targetChatId = await ensureProjectOperationChat("Commit & push");
+      pendingMessageId = addLocalProjectOperationMessage("git-sync", "Commit & push", operationDetails, targetChatId);
       const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
         body: JSON.stringify({
           message: commitMessage,
           remoteUrl: gitRemoteUrl.trim() || selectedRepo.githubUrl || undefined,
-          chatId: targetChatId || undefined
+          chatId: targetChatId
         })
       });
       const data = await response.json().catch(() => ({}));
       removeLocalProjectOperationMessage(pendingMessageId);
-      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
         trackMetrikaGoal("project_git_sync", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
-        if (!targetChatId) setGitNotice(data.output || data.error || "Git sync failed.");
         return;
       }
       setGitRemoteUrl("");
       setGitStatusContext("");
       setGitMessageRefreshNotice("");
-      if (!targetChatId) setGitNotice(data.output || data.status || "Git sync completed.");
       trackMetrikaGoal("project_git_sync", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
       removeLocalProjectOperationMessage(pendingMessageId);
-      if (!targetChatId) setGitNotice(error instanceof Error ? error.message : "Git sync failed.");
+      setIdeChatNotice(error instanceof Error ? error.message : "Git sync failed.");
       trackMetrikaGoal("project_git_sync", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       projectActionBusyRef.current.gitSync = false;
@@ -8502,28 +8541,33 @@ function App() {
 
   async function buildProject() {
     if (!selectedRepo || !csrf || buildBusy) return;
+    let targetChatId = "";
+    let pendingMessageId = "";
     setBuildBusy(true);
-    setBuildNotice("Build started...");
+    setBuildNotice("");
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
     try {
+      targetChatId = await ensureProjectOperationChat("Build");
+      pendingMessageId = addLocalProjectOperationMessage("build", "Build", [], targetChatId);
       const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/build`, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
-        body: "{}"
+        body: JSON.stringify({ chatId: targetChatId })
       });
       const data = await response.json().catch(() => ({}));
+      removeLocalProjectOperationMessage(pendingMessageId);
+      await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
-        setBuildNotice(data.output || data.error || "Build failed.");
-        trackMetrikaGoal("project_build", { status: "failed", error: data.error });
+        trackMetrikaGoal("project_build", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
         return;
       }
-      setBuildNotice(data.output || "Build completed.");
-      trackMetrikaGoal("project_build", { status: "success" });
+      trackMetrikaGoal("project_build", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
-      setBuildNotice(error instanceof Error ? error.message : "Build failed.");
-      trackMetrikaGoal("project_build", { status: "failed", error: "client_error" });
+      removeLocalProjectOperationMessage(pendingMessageId);
+      setIdeChatNotice(error instanceof Error ? error.message : "Build failed.");
+      trackMetrikaGoal("project_build", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       setBuildBusy(false);
     }
@@ -8532,31 +8576,31 @@ function App() {
   async function deployProject() {
     if (!selectedRepo || !csrf || projectActionBusyRef.current.deploy) return;
     projectActionBusyRef.current.deploy = true;
-    const targetChatId = activeChatId || activeChat?.id || "";
-    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("deploy", "Deploy", [], targetChatId) : "";
+    let targetChatId = "";
+    let pendingMessageId = "";
     setDeployBusy(true);
     setActionMenuOpen(false);
-    setDeployNotice(targetChatId ? "" : "Deploy started...");
+    setDeployNotice("");
     try {
+      targetChatId = await ensureProjectOperationChat("Deploy");
+      pendingMessageId = addLocalProjectOperationMessage("deploy", "Deploy", [], targetChatId);
       const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
-        body: JSON.stringify({ chatId: targetChatId || undefined })
+        body: JSON.stringify({ chatId: targetChatId })
       });
       const data = await response.json().catch(() => ({}));
       removeLocalProjectOperationMessage(pendingMessageId);
-      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
         trackMetrikaGoal("project_deploy", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
-        if (!targetChatId) setDeployNotice(data.output || data.error || "Deploy failed.");
         return;
       }
-      if (!targetChatId) setDeployNotice(data.output || "Deploy completed.");
       trackMetrikaGoal("project_deploy", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
       removeLocalProjectOperationMessage(pendingMessageId);
-      if (!targetChatId) setDeployNotice(error instanceof Error ? error.message : "Deploy failed.");
+      setIdeChatNotice(error instanceof Error ? error.message : "Deploy failed.");
       trackMetrikaGoal("project_deploy", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       projectActionBusyRef.current.deploy = false;
@@ -8577,26 +8621,24 @@ function App() {
       || projectActionBusyRef.current.commitDeploy
     ) return;
     projectActionBusyRef.current.commitDeploy = true;
-    const targetChatId = activeChatId || activeChat?.id || "";
+    let targetChatId = "";
     const output: string[] = [];
     const append = (label: string, text: string) => {
       output.push(`== ${label} ==\n${text}`);
-      if (!targetChatId) setLaunchNotice(output.join("\n\n"));
     };
     const callProjectAction = async (label: string, path: string, body: Record<string, unknown> = {}) => {
-      if (!targetChatId) setLaunchNotice([...output, `== ${label} ==\nRunning...`].join("\n\n"));
       const response = await api(path, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
-        body: JSON.stringify({ ...body, chatId: targetChatId || undefined })
+        body: JSON.stringify({ ...body, chatId: targetChatId })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+        await loadChat(targetChatId).catch(() => undefined);
         throw new Error(data.output || data.error || `${label} failed.`);
       }
       append(label, data.output || "Done.");
-      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      await loadChat(targetChatId).catch(() => undefined);
       return data;
     };
 
@@ -8605,13 +8647,13 @@ function App() {
     setDeployBusy(true);
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
-    setLaunchNotice(targetChatId ? "" : "Commit & Deploy started...");
+    setLaunchNotice("");
     try {
-      const savedTabs = await saveDirtyProjectEditorTabs(selectedRepo);
-      if (!targetChatId && savedTabs > 0) setLaunchNotice(`Saved ${savedTabs} file${savedTabs === 1 ? "" : "s"}.`);
+      targetChatId = await ensureProjectOperationChat("Commit & Deploy");
+      await saveDirtyProjectEditorTabs(selectedRepo);
 
       const remoteUrl = gitRemoteUrl.trim() || selectedRepo.githubUrl || "";
-      const gitData = await callProjectAction(
+      await callProjectAction(
         "Commit & Push",
         `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`,
         {
@@ -8624,10 +8666,8 @@ function App() {
       setGitRemoteUrl("");
       setGitStatusContext("");
       setGitMessageRefreshNotice("");
-      if (!targetChatId) setGitNotice(gitData.output || gitData.status || "Git sync completed.");
 
-      const deployData = await callProjectAction("Deploy", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`);
-      if (!targetChatId) setDeployNotice(deployData.output || "Deploy completed.");
+      await callProjectAction("Deploy", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`);
 
       const url = projectUrl(selectedRepo.domain);
       if (url) append("Open", url);
@@ -8639,10 +8679,7 @@ function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       append("Commit & Deploy failed", message);
-      if (!targetChatId) {
-        setGitNotice(message);
-        setDeployNotice(message);
-      }
+      setIdeChatNotice(message);
       trackMetrikaGoal("project_commit_deploy", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       projectActionBusyRef.current.commitDeploy = false;
@@ -8655,32 +8692,32 @@ function App() {
 
   async function configureNginx() {
     if (!selectedRepo || !csrf) return;
-    const targetChatId = activeChatId || activeChat?.id || "";
-    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("nginx", "Nginx", [], targetChatId) : "";
+    let targetChatId = "";
+    let pendingMessageId = "";
     setNginxBusy(true);
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
-    setNginxNotice(targetChatId ? "" : "Nginx setup started...");
+    setNginxNotice("");
     try {
+      targetChatId = await ensureProjectOperationChat("Nginx");
+      pendingMessageId = addLocalProjectOperationMessage("nginx", "Nginx", [], targetChatId);
       const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
-        body: JSON.stringify({ chatId: targetChatId || undefined })
+        body: JSON.stringify({ chatId: targetChatId })
       });
       const data = await response.json().catch(() => ({}));
       removeLocalProjectOperationMessage(pendingMessageId);
-      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
         trackMetrikaGoal("project_nginx", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
-        if (!targetChatId) setNginxNotice(data.output || data.error || "Nginx setup failed.");
         return;
       }
-      if (!targetChatId) setNginxNotice(data.output || "Nginx configured.");
       trackMetrikaGoal("project_nginx", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
       removeLocalProjectOperationMessage(pendingMessageId);
-      if (!targetChatId) setNginxNotice(error instanceof Error ? error.message : "Nginx setup failed.");
+      setIdeChatNotice(error instanceof Error ? error.message : "Nginx setup failed.");
       trackMetrikaGoal("project_nginx", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       setNginxBusy(false);
@@ -8689,32 +8726,32 @@ function App() {
 
   async function configureSsl() {
     if (!selectedRepo || !csrf) return;
-    const targetChatId = activeChatId || activeChat?.id || "";
-    const pendingMessageId = targetChatId ? addLocalProjectOperationMessage("ssl", "SSL", [], targetChatId) : "";
+    let targetChatId = "";
+    let pendingMessageId = "";
     setSslBusy(true);
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
-    setSslNotice(targetChatId ? "" : "SSL setup started...");
+    setSslNotice("");
     try {
+      targetChatId = await ensureProjectOperationChat("SSL");
+      pendingMessageId = addLocalProjectOperationMessage("ssl", "SSL", [], targetChatId);
       const response = await api(`/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/ssl`, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
-        body: JSON.stringify({ chatId: targetChatId || undefined })
+        body: JSON.stringify({ chatId: targetChatId })
       });
       const data = await response.json().catch(() => ({}));
       removeLocalProjectOperationMessage(pendingMessageId);
-      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      await loadChat(targetChatId).catch(() => undefined);
       if (!response.ok) {
         trackMetrikaGoal("project_ssl", { status: "failed", error: data.error, has_chat: Boolean(targetChatId) });
-        if (!targetChatId) setSslNotice(data.output || data.error || "SSL setup failed.");
         return;
       }
-      if (!targetChatId) setSslNotice(data.output || "SSL configured.");
       trackMetrikaGoal("project_ssl", { status: "success", has_chat: Boolean(targetChatId) });
       await refresh();
     } catch (error) {
       removeLocalProjectOperationMessage(pendingMessageId);
-      if (!targetChatId) setSslNotice(error instanceof Error ? error.message : "SSL setup failed.");
+      setIdeChatNotice(error instanceof Error ? error.message : "SSL setup failed.");
       trackMetrikaGoal("project_ssl", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
     } finally {
       setSslBusy(false);
@@ -8723,38 +8760,37 @@ function App() {
 
   async function launchProject() {
     if (!selectedRepo || !csrf) return;
-    const targetChatId = activeChatId || activeChat?.id || "";
+    let targetChatId = "";
     const output: string[] = [];
     const append = (label: string, text: string) => {
       output.push(`== ${label} ==\n${text}`);
-      if (!targetChatId) setLaunchNotice(output.join("\n\n"));
     };
     const callProjectAction = async (label: string, path: string, body: Record<string, unknown> = {}) => {
-      if (!targetChatId) setLaunchNotice([...output, `== ${label} ==\nRunning...`].join("\n\n"));
       const response = await api(path, {
         method: "POST",
         headers: { "x-csrf-token": csrf },
-        body: JSON.stringify({ ...body, chatId: targetChatId || undefined })
+        body: JSON.stringify({ ...body, chatId: targetChatId })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+        await loadChat(targetChatId).catch(() => undefined);
         throw new Error(data.output || data.error || `${label} failed.`);
       }
       append(label, data.output || "Done.");
-      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      await loadChat(targetChatId).catch(() => undefined);
       return data;
     };
 
     setLaunchBusy(true);
     setActionMenuOpen(false);
     setProjectActionsOpen(false);
-    setLaunchNotice(targetChatId ? "" : "Launch started...");
+    setLaunchNotice("");
     try {
+      targetChatId = await ensureProjectOperationChat("Launch");
       const remoteUrl = gitRemoteUrl.trim() || selectedRepo.githubUrl || "";
       if (remoteUrl) {
         try {
-          const data = await callProjectAction(
+          await callProjectAction(
             "GitHub + push",
             `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`,
             {
@@ -8764,33 +8800,28 @@ function App() {
               remoteVisibility: "private"
             }
           );
-          if (!targetChatId) setGitNotice(data.output || "GitHub sync completed.");
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           append("GitHub + push", `Failed, continuing local launch.\n${message}`);
-          if (!targetChatId) setGitNotice(message);
         }
       } else {
         append("GitHub + push", "Skipped: GitHub repository is not configured.");
       }
 
       if (hasDeployConfig(selectedRepo)) {
-        const data = await callProjectAction("Deploy", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`);
-        if (!targetChatId) setDeployNotice(data.output || "Deploy completed.");
+        await callProjectAction("Deploy", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`);
       } else {
         append("Deploy", "Skipped: server folder or deploy mode is not configured.");
       }
 
       if (selectedRepo.domain) {
-        const data = await callProjectAction("Nginx", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`);
-        if (!targetChatId) setNginxNotice(data.output || "Nginx configured.");
+        await callProjectAction("Nginx", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/nginx`);
       } else {
         append("Nginx", "Skipped: domain is not configured.");
       }
 
       if (selectedRepo.domain) {
-        const data = await callProjectAction("SSL", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/ssl`);
-        if (!targetChatId) setSslNotice(data.output || "SSL configured.");
+        await callProjectAction("SSL", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/ssl`);
       }
 
       const url = projectUrl(selectedRepo.domain);
@@ -8803,7 +8834,9 @@ function App() {
         has_remote: Boolean(remoteUrl)
       });
     } catch (error) {
-      append("Launch failed", error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      append("Launch failed", message);
+      setIdeChatNotice(message);
       trackMetrikaGoal("project_launch", {
         status: "failed",
         error: "client_error",
@@ -12014,7 +12047,6 @@ function App() {
   }
 
   function renderIdeMenubar(editor: ProjectFileEditor) {
-    const outputAvailable = Boolean(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice);
     return (
       <nav
         className={`file-editor-menubar${ideMobileMenuOpen ? " mobile-open" : ""}`}
@@ -12151,13 +12183,6 @@ function App() {
               label: "Chat",
               checked: ideChatPanelOpen,
               onClick: toggleIdeChatPanel
-            })}
-            {renderIdeMenuItem({
-              icon: <Terminal size={14} />,
-              label: "Output",
-              checked: ideOutputOpen,
-              disabled: !outputAvailable,
-              onClick: () => setIdeOutputOpen((value) => !value)
             })}
             <div className="ide-menu-divider" />
             {renderIdeMenuItem({
@@ -12311,13 +12336,6 @@ function App() {
           <>
             {renderIdeMenuItem({
               icon: <Terminal size={14} />,
-              label: "Show Output",
-              checked: ideOutputOpen,
-              disabled: !outputAvailable,
-              onClick: () => setIdeOutputOpen(true)
-            })}
-            {renderIdeMenuItem({
-              icon: <Terminal size={14} />,
               label: "Run Build",
               disabled: buildBusy || !selectedRepo,
               onClick: buildProject
@@ -12395,17 +12413,20 @@ function App() {
       { group: "View", label: ideExplorerOpen ? "Hide Explorer" : "Show Explorer", run: () => setIdeExplorerOpen((value) => !value) },
       { group: "View", label: ideEditorPaneOpen ? "Hide Code Editor" : "Show Code Editor", run: toggleIdeEditorPane },
       { group: "View", label: ideChatPanelOpen ? "Hide Chat" : "Show Chat", run: toggleIdeChatPanel },
-      { group: "View", label: "Show Output", disabled: !(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice), run: () => setIdeOutputOpen(true) },
       { group: "View", label: fileEditorFullscreen ? "Exit Full Screen" : "Full Screen", shortcut: "F11", run: () => setFileEditorFullscreen((value) => !value) },
       { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo, run: buildProject },
       { group: "Run", label: "Launch project", disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: launchProject },
-      { group: "Run", label: selectedRepo?.domain ? `Open Project Link (${selectedRepo.domain})` : "Open Project Link", disabled: !selectedProjectUrl, run: () => selectedProjectUrl && window.open(selectedProjectUrl, "_blank", "noopener,noreferrer") },
+      { group: "Run", label: selectedRepo?.domain ? `Open Project Link (${selectedRepo.domain})` : "Open Project Link", disabled: !selectedProjectUrl, run: () => {
+        if (selectedProjectUrl) window.open(selectedProjectUrl, "_blank", "noopener,noreferrer");
+      } },
       { group: "Project", label: "Commit & Push", disabled: !selectedRepo || gitBusy || !effectiveGitMessage.trim(), run: runGitSync },
       { group: "Project", label: "Commit & Deploy", disabled: launchBusy || gitBusy || deployBusy || !selectedRepo || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo), run: commitAndDeployProject },
       { group: "Project", label: "Deploy", disabled: deployBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: deployProject },
       { group: "Project", label: "Configure Nginx", disabled: nginxBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureNginx },
       { group: "Project", label: "Issue SSL", disabled: sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureSsl },
-      { group: "Help", label: "Open xedoc.ru", run: () => window.open("https://xedoc.ru", "_blank", "noopener,noreferrer") }
+      { group: "Help", label: "Open xedoc.ru", run: () => {
+        window.open("https://xedoc.ru", "_blank", "noopener,noreferrer");
+      } }
     ];
     const query = ideCommandQuery.trim().toLowerCase();
     const visibleItems = query
@@ -13524,21 +13545,6 @@ function App() {
               </div>
             )}
             {ideEditorPaneOpen && renderFileEditorTabs()}
-            {(gitNotice || buildNotice || launchNotice || deployNotice || nginxNotice || sslNotice) && (
-              <details
-                className="file-editor-output"
-                open={ideOutputOpen || buildBusy || launchBusy || deployBusy || nginxBusy || sslBusy || gitBusy}
-                onToggle={(event) => setIdeOutputOpen(event.currentTarget.open)}
-              >
-                <summary>Output</summary>
-                {gitNotice && <pre>{gitNotice}</pre>}
-                {buildNotice && <pre>{buildNotice}</pre>}
-                {launchNotice && <pre>{launchNotice}</pre>}
-                {deployNotice && <pre>{deployNotice}</pre>}
-                {nginxNotice && <pre>{nginxNotice}</pre>}
-                {sslNotice && <pre>{sslNotice}</pre>}
-              </details>
-            )}
             <div className={ideWorkspaceClassName()}>
               {ideExplorerOpen && <aside className="file-explorer" aria-label="Project files">
                 <div className="file-explorer-head">

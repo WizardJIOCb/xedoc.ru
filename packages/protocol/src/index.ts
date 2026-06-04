@@ -601,6 +601,11 @@ export const DeploySchema = z.object({
 });
 export type Deploy = z.infer<typeof DeploySchema>;
 
+export const BuildSchema = z.object({
+  chatId: z.string().min(1).max(120).optional()
+});
+export type Build = z.infer<typeof BuildSchema>;
+
 export const NginxSchema = z.object({
   chatId: z.string().min(1).max(120).optional()
 });

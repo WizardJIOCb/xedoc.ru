@@ -9,6 +9,7 @@ import bcrypt from "bcryptjs";
 import {
   AgentToServerSchema,
   AgentChatSyncSchema,
+  BuildSchema,
   ChatMessageSchema,
   CreateAgentSchema,
   CreateChatSchema,
@@ -1226,7 +1227,7 @@ function appendChatMessage(message: Omit<ChatMessageRow, "id"> & { id?: string }
   broadcast({ type: "chats.updated", agentId: chatAgentId(message.chat_id), repoId: chatRepoId(message.chat_id), chatId: message.chat_id });
 }
 
-type ProjectOperationKind = "git-sync" | "deploy" | "nginx" | "ssl";
+type ProjectOperationKind = "git-sync" | "build" | "deploy" | "nginx" | "ssl";
 type ProjectOperationStatus = "running" | "completed" | "failed";
 
 function projectOperationChat(user: AuthUser, agentId: string, repoId: string, chatId: string): ChatRow | undefined {
@@ -4403,20 +4404,75 @@ async function createApp(): Promise<FastifyInstance> {
     if (!auth || !requireCsrf(db, request, reply)) return;
     const params = request.params as { agentId: string; repoId: string };
     if (!canWriteRepo(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const parsed = BuildSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_build", details: parsed.error.flatten() });
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(params.agentId, params.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    const operationChat = parsed.data.chatId ? projectOperationChat(auth.user, params.agentId, params.repoId, parsed.data.chatId) : undefined;
+    if (parsed.data.chatId && !operationChat) return reply.code(404).send({ error: "chat_not_found" });
+    const requestId = id("req");
+    const operationMessageId = operationChat ? id("msg") : "";
+    if (operationChat) {
+      appendProjectOperationMessage({
+        chat: operationChat,
+        messageId: operationMessageId,
+        requestId,
+        operation: "build",
+        label: "Build",
+        status: "running",
+        repoName: repo.name
+      });
+    }
     try {
       await syncAgentProjectConfig(params.agentId, repo);
       const result = await requestAgentProjectCommand(params.agentId, {
         type: "project.command",
-        requestId: id("req"),
+        requestId,
         repoId: params.repoId,
         command: "build"
       });
-      if (!result.ok) return reply.code(400).send({ error: result.error ?? "build_failed", output: result.output });
-      return { ok: true, output: result.output };
+      if (!result.ok) {
+        if (operationChat) {
+          appendProjectOperationMessage({
+            chat: operationChat,
+            messageId: operationMessageId,
+            requestId,
+            operation: "build",
+            label: "Build",
+            status: "failed",
+            repoName: repo.name,
+            output: result.output || result.error || "Build failed."
+          });
+        }
+        return reply.code(400).send({ error: result.error ?? "build_failed", output: result.output });
+      }
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "build",
+          label: "Build",
+          status: "completed",
+          repoName: repo.name,
+          output: result.output || "Build completed."
+        });
+      }
+      return { ok: true, output: result.output, chatMessageId: operationMessageId || undefined };
     } catch (error) {
+      if (operationChat) {
+        appendProjectOperationMessage({
+          chat: operationChat,
+          messageId: operationMessageId,
+          requestId,
+          operation: "build",
+          label: "Build",
+          status: "failed",
+          repoName: repo.name,
+          output: error instanceof Error ? error.message : "agent_error"
+        });
+      }
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }
   });
