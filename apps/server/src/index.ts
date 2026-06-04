@@ -674,6 +674,38 @@ function canAccessChat(user: AuthUser, chatId: string): boolean {
   return Boolean(row);
 }
 
+function canReadChat(user: AuthUser, chatId: string): boolean {
+  if (canAccessChat(user, chatId)) return true;
+  const row = db.prepare(`
+    SELECT
+      c.agent_id,
+      c.repo_id,
+      c.user_id AS chat_user_id,
+      c.hidden_at,
+      r.user_id AS repo_user_id,
+      r.visibility,
+      u.blocked_at AS owner_blocked_at
+    FROM chats c
+    JOIN repos r ON r.agent_id = c.agent_id AND r.id = c.repo_id
+    JOIN users u ON u.id = r.user_id
+    WHERE c.id = ?
+  `).get(chatId) as {
+    agent_id: string;
+    repo_id: string;
+    chat_user_id: string | null;
+    hidden_at: string | null;
+    repo_user_id: string | null;
+    visibility: ProjectVisibility;
+    owner_blocked_at: string | null;
+  } | undefined;
+  if (!row || !row.repo_user_id) return false;
+  return row.visibility === "public"
+    && row.hidden_at === null
+    && row.owner_blocked_at === null
+    && row.chat_user_id === row.repo_user_id
+    && canAccessRepo(user, row.agent_id, row.repo_id);
+}
+
 function canAccessPublicChat(chatId: string): boolean {
   const row = db.prepare(`
     SELECT 1
@@ -700,6 +732,13 @@ function canAccessJob(user: AuthUser, jobId: string): boolean {
   return !row.chat_id || row.chat_user_id === null || row.chat_user_id === user.id || isAdmin(user);
 }
 
+function canReadJob(user: AuthUser, jobId: string): boolean {
+  const row = db.prepare("SELECT agent_id, repo_id, chat_id FROM jobs WHERE id = ?")
+    .get(jobId) as Pick<JobRow, "agent_id" | "repo_id" | "chat_id"> | undefined;
+  if (!row || !canAccessRepo(user, row.agent_id, row.repo_id)) return false;
+  return row.chat_id ? canReadChat(user, row.chat_id) : canAccessJob(user, jobId);
+}
+
 function eventAgentId(event: UiEvent): string | undefined {
   if ("agentId" in event) return event.agentId;
   if ("jobId" in event) {
@@ -712,7 +751,7 @@ function eventAgentId(event: UiEvent): string | undefined {
 function canReceiveUiEvent(user: AuthUser, event: UiEvent): boolean {
   if (event.type === "repos.updated") return canAccessAgent(user, event.agentId) || repoInfosForAgent(event.agentId, user).length > 0;
   if (event.type === "chats.updated") return canAccessRepo(user, event.agentId, event.repoId);
-  if ("jobId" in event) return canAccessJob(user, event.jobId);
+  if ("jobId" in event) return canReadJob(user, event.jobId);
   const agentId = eventAgentId(event);
   return !agentId || canAccessAgent(user, agentId);
 }
@@ -4880,8 +4919,19 @@ async function createApp(): Promise<FastifyInstance> {
     const query = request.query as { agentId?: string; repoId?: string; includeHidden?: string; localOnly?: string };
     if (!query.agentId || !query.repoId) return reply.code(400).send({ error: "agent_and_repo_required" });
     if (!canAccessRepo(auth.user, query.agentId, query.repoId)) return reply.code(404).send({ error: "repo_not_found" });
-    const filters = ["agent_id = ?", "repo_id = ?", "(user_id IS NULL OR user_id = ?)"];
+    const repo = db.prepare(`
+      SELECT r.user_id, r.visibility, u.blocked_at AS owner_blocked_at
+      FROM repos r
+      LEFT JOIN users u ON u.id = r.user_id
+      WHERE r.agent_id = ? AND r.id = ?
+    `).get(query.agentId, query.repoId) as Pick<RepoRow, "user_id" | "visibility"> & { owner_blocked_at: string | null } | undefined;
+    const userFilters = ["user_id IS NULL", "user_id = ?"];
     const args = [query.agentId, query.repoId, auth.user.id];
+    if (repo?.visibility === "public" && repo.owner_blocked_at === null && repo.user_id && repo.user_id !== auth.user.id) {
+      userFilters.push("(user_id = ? AND hidden_at IS NULL)");
+      args.push(repo.user_id);
+    }
+    const filters = ["agent_id = ?", "repo_id = ?", `(${userFilters.join(" OR ")})`];
     if (query.includeHidden !== "1") filters.push("hidden_at IS NULL");
     if (query.localOnly === "1") filters.push("source IN ('codex','vscode')");
     const rows = db.prepare(`SELECT * FROM chats WHERE ${filters.join(" AND ")} ORDER BY updated_at DESC`)
@@ -4919,7 +4969,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth) return;
     const chatId = (request.params as { id: string }).id;
-    if (!canAccessChat(auth.user, chatId)) return reply.code(404).send({ error: "not_found" });
+    if (!canReadChat(auth.user, chatId)) return reply.code(404).send({ error: "not_found" });
     const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
     const rows = db.prepare("SELECT * FROM jobs WHERE chat_id = ? ORDER BY created_at DESC").all(chatId) as JobRow[];
@@ -4951,7 +5001,7 @@ async function createApp(): Promise<FastifyInstance> {
     if (!auth) return;
     const messageId = (request.params as { id: string }).id;
     const message = db.prepare("SELECT * FROM chat_messages WHERE id = ?").get(messageId) as ChatMessageRow | undefined;
-    if (!message || !canAccessChat(auth.user, message.chat_id)) return reply.code(404).send({ error: "not_found" });
+    if (!message || !canReadChat(auth.user, message.chat_id)) return reply.code(404).send({ error: "not_found" });
     return { message: serializeMessage(message, { includeData: true }) };
   });
 
@@ -4966,7 +5016,7 @@ async function createApp(): Promise<FastifyInstance> {
     `).get(attachmentId) as (AttachmentRow & { chat_id: string | null }) | undefined;
     if (!row) return reply.code(404).send({ error: "not_found" });
     const allowed = row.chat_id
-      ? (auth ? canAccessChat(auth.user, row.chat_id) : false) || canAccessPublicChat(row.chat_id)
+      ? (auth ? canReadChat(auth.user, row.chat_id) : false) || canAccessPublicChat(row.chat_id)
       : auth ? canAccessJob(auth.user, row.job_id) : false;
     if (!allowed) return reply.code(404).send({ error: "not_found" });
     return sendAttachment(reply, row);
@@ -4982,7 +5032,7 @@ async function createApp(): Promise<FastifyInstance> {
       WHERE a.id = ?
     `).get(attachmentId) as (ChatAttachmentRow & { chat_id: string }) | undefined;
     if (!row) return reply.code(404).send({ error: "not_found" });
-    const allowed = (auth ? canAccessChat(auth.user, row.chat_id) : false) || canAccessPublicChat(row.chat_id);
+    const allowed = (auth ? canReadChat(auth.user, row.chat_id) : false) || canAccessPublicChat(row.chat_id);
     if (!allowed) return reply.code(404).send({ error: "not_found" });
     return sendAttachment(reply, row);
   });
@@ -5080,26 +5130,24 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth) return;
     const query = request.query as { chatId?: string };
-    if (query.chatId && !canAccessChat(auth.user, query.chatId)) return reply.code(404).send({ error: "chat_not_found" });
+    if (query.chatId && !canReadChat(auth.user, query.chatId)) return reply.code(404).send({ error: "chat_not_found" });
     const rows = query.chatId
       ? db.prepare("SELECT * FROM jobs WHERE chat_id = ? ORDER BY created_at DESC LIMIT 50").all(query.chatId) as JobRow[]
       : db.prepare(`
           SELECT j.* FROM jobs j
           JOIN repos r ON r.agent_id = j.agent_id AND r.id = j.repo_id
           LEFT JOIN repo_links rl ON rl.agent_id = r.agent_id AND rl.repo_id = r.id AND rl.user_id = ?
-          LEFT JOIN chats c ON c.id = j.chat_id
           WHERE (r.user_id = ? OR r.write_access = 'everyone' OR r.write_access = 'users' OR rl.user_id IS NOT NULL)
-            AND (j.chat_id IS NULL OR c.user_id IS NULL OR c.user_id = ?)
           ORDER BY j.created_at DESC LIMIT 50
-        `).all(auth.user.id, auth.user.id, auth.user.id) as JobRow[];
-    return { jobs: rows.filter((row) => canAccessRepo(auth.user, row.agent_id, row.repo_id)).map((row) => serializeJob(row)) };
+        `).all(auth.user.id, auth.user.id) as JobRow[];
+    return { jobs: rows.filter((row) => canReadJob(auth.user, row.id)).map((row) => serializeJob(row)) };
   });
 
   app.get("/api/jobs/:id", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth) return;
     const jobId = (request.params as { id: string }).id;
-    if (!canAccessJob(auth.user, jobId)) return reply.code(404).send({ error: "not_found" });
+    if (!canReadJob(auth.user, jobId)) return reply.code(404).send({ error: "not_found" });
     const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as JobRow | undefined;
     if (!job) return reply.code(404).send({ error: "not_found" });
     const logs = db.prepare("SELECT * FROM job_logs WHERE job_id = ? ORDER BY at ASC").all(jobId) as LogRow[];
