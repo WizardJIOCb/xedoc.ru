@@ -1521,6 +1521,15 @@ function readFileAttachment(file: File): Promise<PendingAttachment> {
   });
 }
 
+function filesFromClipboard(data: DataTransfer) {
+  const files = Array.from(data.files).filter((file) => file.size > 0);
+  if (files.length) return files;
+  return Array.from(data.items)
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file && file.size > 0));
+}
+
 function downloadTextFile(filename: string, content: string, type = "text/plain;charset=utf-8") {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -7655,8 +7664,28 @@ function App() {
     setAttachments((current) => current.filter((attachment) => attachment.id !== id));
   }
 
+  function renderPendingAttachments(className = "attachment-list") {
+    if (!attachments.length) return null;
+    return (
+      <div className={className}>
+        {attachments.map((attachment) => (
+          <div className="attachment-chip" key={attachment.id}>
+            {attachment.previewUrl ? <img alt="" className="attachment-thumb" src={attachment.previewUrl} /> : <Paperclip size={16} />}
+            <span>
+              <strong>{attachment.name}</strong>
+              <small>{attachment.mimeType} · {formatBytes(attachment.size)}</small>
+            </span>
+            <button aria-label={`Remove ${attachment.name}`} className="attachment-remove" type="button" onClick={() => removeAttachment(attachment.id)}>
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const files = Array.from(event.clipboardData.files).filter((file) => file.size > 0);
+    const files = filesFromClipboard(event.clipboardData);
     if (!files.length) return;
     event.preventDefault();
     addFiles(files);
@@ -8053,13 +8082,19 @@ function App() {
 
   async function submitIdeChat(event: React.FormEvent) {
     event.preventDefault();
-    if (!selectedRepo || !csrf || !ideChatPrompt.trim() || ideChatSending) return;
+    if (!selectedRepo || !csrf || (!ideChatPrompt.trim() && !attachments.length) || ideChatSending) return;
     if (localCodexBusy || activeRunBusy) {
       setIdeChatNotice("Codex сейчас занят. Новую задачу можно отправить после завершения текущей.");
       return;
     }
     let targetChatId = activeChatId;
-    const promptText = ideChatPrompt.trim();
+    const promptText = ideChatPrompt.trim() || "Посмотри вложенные файлы.";
+    const jobAttachments = attachments.map((attachment) => ({
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      dataBase64: attachment.dataBase64
+    }));
     setIdeChatSending(true);
     setIdeChatNotice("");
     try {
@@ -8096,18 +8131,20 @@ function App() {
           model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
           reasoningEffort: reasoningValueForKind(jobKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
           speed: jobKind === "codex" ? codexSpeed : undefined,
-          attachments: []
+          attachments: jobAttachments
         })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        trackMetrikaGoal("ide_job_create", { status: "failed", step: "job_create", error: data.error, job_kind: jobKind });
+        trackMetrikaGoal("ide_job_create", { status: "failed", step: "job_create", error: data.error, job_kind: jobKind, attachments_count: jobAttachments.length });
         setIdeChatNotice(data.error || "Не получилось отправить задачу из IDE.");
         return;
       }
       setIdeChatPrompt("");
+      setAttachments([]);
+      setAttachmentNotice("");
       setIdeChatNotice("Задача отправлена.");
-      trackMetrikaGoal("ide_job_create", { status: "success", job_kind: jobKind, sandbox });
+      trackMetrikaGoal("ide_job_create", { status: "success", job_kind: jobKind, sandbox, attachments_count: jobAttachments.length });
       await loadChat(targetChatId, data.jobId);
     } finally {
       setIdeChatSending(false);
@@ -11670,22 +11707,7 @@ function App() {
     };
     return (
       <form className="composer" ref={composerRef} onSubmit={createJob}>
-        {attachments.length > 0 && (
-          <div className="attachment-list">
-            {attachments.map((attachment) => (
-              <div className="attachment-chip" key={attachment.id}>
-                {attachment.previewUrl ? <img alt="" className="attachment-thumb" src={attachment.previewUrl} /> : <Paperclip size={16} />}
-                <span>
-                  <strong>{attachment.name}</strong>
-                  <small>{attachment.mimeType} · {formatBytes(attachment.size)}</small>
-                </span>
-                <button aria-label={`Remove ${attachment.name}`} className="attachment-remove" type="button" onClick={() => removeAttachment(attachment.id)}>
-                  <X size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        {renderPendingAttachments()}
         {attachmentNotice && <div className="notice danger">{attachmentNotice}</div>}
         <textarea
           placeholder="Опишите задачу, что вы хотите сделать сегодня?"
@@ -13882,12 +13904,15 @@ function App() {
                     </button>
                   )}
                   <form className="ide-chat-composer" onSubmit={submitIdeChat}>
+                    {renderPendingAttachments("attachment-list ide-chat-attachment-list")}
+                    {attachmentNotice && <div className="notice danger ide-chat-attachment-notice">{attachmentNotice}</div>}
                     <textarea
                       placeholder={activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту"}
                       value={ideChatPrompt}
                       onChange={(event) => {
                         setIdeChatPrompt(event.target.value);
                       }}
+                      onPaste={handleComposerPaste}
                       onKeyDown={(event) => {
                         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
                           event.preventDefault();
@@ -13896,9 +13921,22 @@ function App() {
                       }}
                     />
                     <div className="ide-chat-send-control">
+                      <input
+                        className="file-input"
+                        id="ide-chat-attachment-input"
+                        multiple
+                        type="file"
+                        onChange={(event) => {
+                          if (event.currentTarget.files) addFiles(event.currentTarget.files);
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                      <label className="ide-chat-attachment-picker" htmlFor="ide-chat-attachment-input" title="Attach files">
+                        <Paperclip size={15} />
+                      </label>
                       <button
                         className="ide-chat-submit-button"
-                        disabled={!ideChatPrompt.trim() || ideChatSending || localCodexBusy || activeRunBusy}
+                        disabled={(!ideChatPrompt.trim() && !attachments.length) || ideChatSending || localCodexBusy || activeRunBusy}
                         title={ideChatRunnerSummary()}
                         type="submit"
                       >

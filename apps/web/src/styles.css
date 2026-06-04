@@ -5994,7 +5994,22 @@ button.message-attachment.image:hover {
   min-width: 0;
 }
 
+.ide-chat-attachment-list {
+  max-height: 128px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.ide-chat-attachment-list .attachment-chip {
+  max-width: 100%;
+}
+
+.ide-chat-attachment-notice {
+  margin: 0;
+}
+
 .ide-chat-submit-button {
+  position: relative;
   width: 100%;
   min-height: 34px;
   display: inline-flex;
@@ -6002,11 +6017,61 @@ button.message-attachment.image:hover {
   justify-content: center;
   gap: 6px;
   min-width: 0;
-  padding: 0 45px 0 12px;
+  padding: 0 45px 0 45px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent-text) 14%, var(--accent));
   border-radius: 7px;
   color: var(--accent-text);
-  background: var(--accent);
+  background:
+    radial-gradient(circle at 28px 50%, color-mix(in srgb, var(--accent-text) 18%, transparent), transparent 34px),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 92%, #ffffff), color-mix(in srgb, var(--accent) 86%, #0f172a));
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 28%, transparent);
   font-weight: 900;
+  transform: translateY(0);
+  transition:
+    border-color 160ms ease,
+    box-shadow 180ms ease,
+    filter 160ms ease,
+    transform 160ms ease;
+}
+
+.ide-chat-submit-button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-118%) skewX(-18deg);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-text) 24%, transparent), transparent);
+  transition: transform 520ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.ide-chat-submit-button:hover:not(:disabled),
+.ide-chat-submit-button:focus-visible:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-text) 28%, var(--accent));
+  box-shadow:
+    0 11px 28px color-mix(in srgb, var(--accent) 34%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  filter: saturate(1.08) brightness(1.03);
+  transform: translateY(-1px);
+}
+
+.ide-chat-submit-button:hover:not(:disabled)::before,
+.ide-chat-submit-button:focus-visible:not(:disabled)::before {
+  transform: translateX(118%) skewX(-18deg);
+}
+
+.ide-chat-submit-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.ide-chat-submit-button:disabled {
+  box-shadow: none;
+}
+
+.ide-chat-submit-button > svg,
+.ide-chat-submit-button > span,
+.ide-chat-submit-button > small {
+  position: relative;
+  z-index: 1;
 }
 
 .ide-chat-submit-button > span {
@@ -6027,6 +6092,34 @@ button.message-attachment.image:hover {
 
 .ide-chat-submit-button:disabled > small {
   color: color-mix(in srgb, var(--accent-text) 54%, transparent);
+}
+
+.ide-chat-attachment-picker {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  left: 4px;
+  width: 28px;
+  height: calc(100% - 8px);
+  min-height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--accent-text) 22%, transparent);
+  border-radius: 6px;
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-text) 10%, transparent);
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.ide-chat-attachment-picker:hover {
+  border-color: color-mix(in srgb, var(--accent-text) 34%, transparent);
+  background: color-mix(in srgb, var(--accent-text) 19%, transparent);
+  transform: translateY(-1px);
 }
 
 .ide-chat-settings-toggle {
@@ -9181,7 +9274,13 @@ button:disabled {
 
   .ide-chat-submit-button {
     min-height: 30px;
-    padding-left: 10px;
+    padding-left: 39px;
+    padding-right: 39px;
+  }
+
+  .ide-chat-attachment-picker {
+    width: 26px;
+    min-height: 22px;
   }
 
   .ide-chat-settings-toggle {
