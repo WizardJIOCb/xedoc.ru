@@ -13116,7 +13116,20 @@ function App() {
             <h1>{view === "settings" ? "Settings" : view === "profile" ? "Profile" : view === "sync" ? "Sync" : view === "search" ? "Search" : projectPanel === "new" ? "New project" : selectedRepo ? selectedRepo.name : "Projects"}</h1>
           </div>
           <div className="top-actions">
-            {selectedRepo && <button className="icon" onClick={clearProjectSelection} title="Проекты"><ArrowLeft size={18} /></button>}
+            {selectedRepo && (
+              <>
+                <button className="icon" onClick={clearProjectSelection} title="Проекты" type="button"><ArrowLeft size={18} /></button>
+                <button
+                  aria-label="Open Online Editor"
+                  className="icon"
+                  onClick={() => void openProjectIde(activeChat ?? undefined)}
+                  title="Open Online Editor"
+                  type="button"
+                >
+                  <FilePenLine size={18} />
+                </button>
+              </>
+            )}
             <button
               aria-label="Обновить данные интерфейса"
               className="icon"
