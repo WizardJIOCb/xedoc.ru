@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { join, resolve } from "node:path";
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import {
   AgentToServerSchema,
@@ -17,6 +17,8 @@ import {
   CreateJobSchema,
   CreateProjectSchema,
   CreateUserSchema,
+  ModelGatewayCreateChatSchema,
+  ModelGatewayRunSchema,
   NginxSchema,
   ProjectFileListQuerySchema,
   PasswordUpdateSchema,
@@ -580,6 +582,62 @@ function canWriteRepo(user: AuthUser, agentId: string, repoId: string): boolean 
   if (!resolvedUser?.email) return false;
   const allowed = safeJsonArray(row.write_users_json).map((item) => item.trim().toLowerCase()).filter(Boolean);
   return allowed.includes(resolvedUser.email.toLowerCase()) || Boolean(resolvedUser.nickname && allowed.includes(resolvedUser.nickname.toLowerCase()));
+}
+
+function safeTokenEquals(leftValue: string, rightValue: string): boolean {
+  const left = Buffer.from(leftValue);
+  const right = Buffer.from(rightValue);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function modelApiAllowedOrigin(request: FastifyRequest): string | undefined {
+  const origin = request.headers.origin;
+  if (typeof origin !== "string") return undefined;
+  return config.modelApiAllowedOrigins.includes(origin) ? origin : undefined;
+}
+
+function setModelApiCors(request: FastifyRequest, reply: FastifyReply): boolean {
+  const originHeader = request.headers.origin;
+  const allowedOrigin = modelApiAllowedOrigin(request);
+  reply.header("Vary", "Origin");
+  reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  reply.header("Access-Control-Max-Age", "600");
+  if (allowedOrigin) reply.header("Access-Control-Allow-Origin", allowedOrigin);
+  return typeof originHeader !== "string" || Boolean(allowedOrigin);
+}
+
+function modelApiBearerToken(request: FastifyRequest): string | undefined {
+  const authHeader = request.headers.authorization;
+  if (typeof authHeader !== "string" || !authHeader.startsWith("Bearer ")) return undefined;
+  const token = authHeader.slice("Bearer ".length).trim();
+  return token || undefined;
+}
+
+function requireModelApiAccess(request: FastifyRequest, reply: FastifyReply): boolean {
+  if (!setModelApiCors(request, reply)) {
+    reply.code(403).send({ error: "origin_not_allowed" });
+    return false;
+  }
+  const expectedToken = config.modelApiToken?.trim();
+  const token = modelApiBearerToken(request);
+  if (!expectedToken || !token || !safeTokenEquals(token, expectedToken)) {
+    reply.code(401).send({ error: "invalid_token" });
+    return false;
+  }
+  return true;
+}
+
+function modelApiProject(input: { agentId?: string; repoId?: string }): { agentId: string; repoId: string; repo: RepoRow } | { error: string } {
+  const agentId = input.agentId?.trim() || config.modelApiDefaultAgentId?.trim();
+  const repoId = input.repoId?.trim() || config.modelApiDefaultRepoId?.trim();
+  if (!agentId || !repoId) return { error: "model_project_required" };
+  const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
+    .get(agentId, repoId) as RepoRow | undefined;
+  if (!repo) return { error: "repo_not_found" };
+  const allowedSandboxes = safeJsonArray(repo.allowed_sandboxes);
+  if (!allowedSandboxes.includes("read-only")) return { error: "read_only_sandbox_required" };
+  return { agentId, repoId, repo };
 }
 
 function canOwnRepoSettings(user: AuthUser, agentId: string, repoId: string): boolean {
@@ -2135,6 +2193,131 @@ function serializeChat(chat: ChatRow) {
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+function createModelApiChat(project: { agentId: string; repoId: string; repo: RepoRow }, input: { title: string; source: string; externalId?: string; systemPrompt?: string }): ChatRow {
+  const chatId = id("chat");
+  const stamp = nowIso();
+  db.prepare("INSERT INTO chats (id,user_id,agent_id,repo_id,title,source,external_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
+    .run(
+      chatId,
+      project.repo.user_id,
+      project.agentId,
+      project.repoId,
+      input.title,
+      input.source,
+      input.externalId?.trim() || null,
+      stamp,
+      stamp
+    );
+  appendChatMessage({
+    chat_id: chatId,
+    role: "system",
+    content: input.systemPrompt?.trim() || "External model gateway chat created for TG Hunter. Produce drafts for manual review only; do not automate Telegram posting.",
+    source: input.source,
+    external_id: `chat:${chatId}:created`,
+    metadata_json: JSON.stringify({ source: "model-gateway" }),
+    created_at: stamp
+  });
+  broadcast({ type: "chats.updated", agentId: project.agentId, repoId: project.repoId, chatId });
+  return db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow;
+}
+
+function createModelApiJob(
+  project: { agentId: string; repoId: string },
+  chat: ChatRow,
+  input: {
+    prompt: string;
+    displayPrompt?: string;
+    kind: "codex" | "grok" | "gemini-cli" | "gemini";
+    model?: string;
+    reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+    speed?: "standard" | "fast";
+  }
+): JobRow {
+  const jobId = id("job");
+  const createdAt = nowIso();
+  const promptMessageId = id("msg");
+  const displayPrompt = input.displayPrompt?.trim() || input.prompt;
+  db.prepare(`
+    INSERT INTO jobs (id,chat_id,agent_id,repo_id,prompt,sandbox,branch_mode,model,reasoning_effort,speed,kind,status,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    jobId,
+    chat.id,
+    project.agentId,
+    project.repoId,
+    input.prompt,
+    "read-only",
+    "current",
+    input.model ?? null,
+    input.reasoningEffort ?? null,
+    input.speed ?? null,
+    input.kind,
+    "queued",
+    createdAt
+  );
+  appendChatMessage({
+    id: promptMessageId,
+    chat_id: chat.id,
+    role: "user",
+    content: displayPrompt,
+    source: "tg-hunter",
+    external_id: `job:${jobId}:prompt`,
+    metadata_json: JSON.stringify({
+      jobId,
+      prompt: input.prompt,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      speed: input.speed,
+      kind: input.kind,
+      source: "model-gateway"
+    }),
+    created_at: createdAt
+  });
+  db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?").run(createdAt, chat.id);
+  broadcast({ type: "chats.updated", agentId: project.agentId, repoId: project.repoId, chatId: chat.id });
+  broadcast({ type: "job.created", jobId });
+  broadcast({ type: "job.updated", jobId, status: "queued" });
+  void dispatchQueue(project.agentId);
+  return db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as JobRow;
+}
+
+async function waitForModelApiJob(jobId: string, waitMs: number): Promise<JobRow | undefined> {
+  let job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as JobRow | undefined;
+  if (!job || waitMs <= 0) return job;
+  const deadline = Date.now() + waitMs;
+  while (job && isRunningJobStatus(job.status) && Date.now() < deadline) {
+    await sleep(Math.min(700, Math.max(50, deadline - Date.now())));
+    job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as JobRow | undefined;
+  }
+  return job;
+}
+
+function latestAssistantMessageForJob(job: JobRow): ChatMessageRow | undefined {
+  if (!job.chat_id) return undefined;
+  return db.prepare(`
+    SELECT * FROM chat_messages
+    WHERE chat_id = ? AND role = 'assistant' AND external_id = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(job.chat_id, `job:${job.id}:final`) as ChatMessageRow | undefined;
+}
+
+function serializeModelApiJob(job: JobRow) {
+  const assistantMessage = latestAssistantMessageForJob(job);
+  const finalMessage = assistantMessage?.content ?? finalMessageForCompletedJob(job.id, job.final_message ?? undefined);
+  return {
+    job: serializeJob(job, { includeDiff: false }),
+    finalMessage,
+    assistantMessage: assistantMessage
+      ? serializeMessagesForChat(assistantMessage.chat_id, [assistantMessage], { lightMetadata: true })[0]
+      : undefined
+  };
+}
+
 function serializeAdminChat(chat: AdminChatRow) {
   return {
     ...serializeChat(chat),
@@ -3112,6 +3295,75 @@ async function createApp(): Promise<FastifyInstance> {
   });
 
   app.get("/api/health", async () => ({ ok: true, now: nowIso() }));
+
+  const modelApiOptions = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!setModelApiCors(request, reply)) return reply.code(403).send({ error: "origin_not_allowed" });
+    return reply.code(204).send();
+  };
+  app.options("/api/external/model/chats", modelApiOptions);
+  app.options("/api/external/model/chats/:id", modelApiOptions);
+  app.options("/api/external/model/chats/:id/messages", modelApiOptions);
+  app.options("/api/external/model/jobs/:id", modelApiOptions);
+
+  app.post("/api/external/model/chats", async (request, reply) => {
+    if (!requireModelApiAccess(request, reply)) return;
+    const parsed = ModelGatewayCreateChatSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_chat", details: parsed.error.flatten() });
+    const project = modelApiProject(parsed.data);
+    if ("error" in project) {
+      const status = project.error === "repo_not_found" ? 404 : 400;
+      return reply.code(status).send({ error: project.error });
+    }
+    const chat = createModelApiChat(project, parsed.data);
+    return reply.code(201).send({ ok: true, chatId: chat.id, chat: serializeChat(chat) });
+  });
+
+  app.get("/api/external/model/chats/:id", async (request, reply) => {
+    if (!requireModelApiAccess(request, reply)) return;
+    const chatId = (request.params as { id: string }).id;
+    const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
+    if (!chat) return reply.code(404).send({ error: "not_found" });
+    const project = modelApiProject({ agentId: chat.agent_id, repoId: chat.repo_id });
+    if ("error" in project || project.agentId !== chat.agent_id || project.repoId !== chat.repo_id) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    const jobs = db.prepare("SELECT * FROM jobs WHERE chat_id = ? ORDER BY created_at DESC").all(chatId) as JobRow[];
+    const messages = db.prepare("SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY created_at ASC").all(chatId) as ChatMessageRow[];
+    return {
+      ok: true,
+      chat: serializeChat(chat),
+      jobs: jobs.map((row) => serializeJob(row, { includeDiff: false })),
+      messages: serializeMessagesForChat(chatId, messages, { lightMetadata: true })
+    };
+  });
+
+  app.post("/api/external/model/chats/:id/messages", async (request, reply) => {
+    if (!requireModelApiAccess(request, reply)) return;
+    const chatId = (request.params as { id: string }).id;
+    const parsed = ModelGatewayRunSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_message", details: parsed.error.flatten() });
+    const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
+    if (!chat) return reply.code(404).send({ error: "chat_not_found" });
+    const project = modelApiProject({ agentId: parsed.data.agentId ?? chat.agent_id, repoId: parsed.data.repoId ?? chat.repo_id });
+    if ("error" in project || project.agentId !== chat.agent_id || project.repoId !== chat.repo_id) {
+      return reply.code(404).send({ error: "chat_not_found" });
+    }
+    if (isAgentLocallyBusy(project.agentId)) return reply.code(409).send({ error: "agent_local_busy" });
+    const job = createModelApiJob(project, chat, parsed.data);
+    const resolvedJob = await waitForModelApiJob(job.id, parsed.data.waitMs);
+    if (!resolvedJob) return reply.code(404).send({ error: "job_not_found" });
+    return reply.code(201).send({ ok: true, chatId: chat.id, jobId: resolvedJob.id, ...serializeModelApiJob(resolvedJob) });
+  });
+
+  app.get("/api/external/model/jobs/:id", async (request, reply) => {
+    if (!requireModelApiAccess(request, reply)) return;
+    const jobId = (request.params as { id: string }).id;
+    const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as JobRow | undefined;
+    if (!job) return reply.code(404).send({ error: "not_found" });
+    const project = modelApiProject({ agentId: job.agent_id, repoId: job.repo_id });
+    if ("error" in project) return reply.code(404).send({ error: "not_found" });
+    return { ok: true, chatId: job.chat_id, jobId: job.id, ...serializeModelApiJob(job) };
+  });
 
   app.get("/api/shared/chats/:token", async (request, reply) => {
     const token = (request.params as { token: string }).token;

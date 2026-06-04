@@ -317,6 +317,32 @@ export type AgentToServer = z.infer<typeof AgentToServerSchema>;
 export const CodexModelSchema = z.string().min(1).max(80);
 export const ReasoningEffortSchema = z.enum(["low", "medium", "high", "xhigh"]);
 export const CodexSpeedSchema = z.enum(["standard", "fast"]);
+export const ModelGatewayKindSchema = z.enum(["codex", "grok", "gemini-cli", "gemini"]);
+export type ModelGatewayKind = z.infer<typeof ModelGatewayKindSchema>;
+
+const ModelGatewayProjectSchema = z.object({
+  agentId: z.string().min(1).max(80).optional(),
+  repoId: z.string().min(1).max(80).optional()
+});
+
+export const ModelGatewayCreateChatSchema = ModelGatewayProjectSchema.extend({
+  title: z.string().trim().min(1).max(160),
+  source: z.string().trim().min(1).max(40).default("tg-hunter"),
+  externalId: z.string().trim().max(300).optional(),
+  systemPrompt: z.string().trim().max(2000).optional()
+});
+export type ModelGatewayCreateChat = z.infer<typeof ModelGatewayCreateChatSchema>;
+
+export const ModelGatewayRunSchema = ModelGatewayProjectSchema.extend({
+  prompt: z.string().min(3).max(16000),
+  displayPrompt: z.string().min(1).max(16000).optional(),
+  kind: ModelGatewayKindSchema.default("codex"),
+  model: CodexModelSchema.optional(),
+  reasoningEffort: ReasoningEffortSchema.optional(),
+  speed: CodexSpeedSchema.optional(),
+  waitMs: z.coerce.number().int().min(0).max(120000).default(0)
+});
+export type ModelGatewayRun = z.infer<typeof ModelGatewayRunSchema>;
 
 export const ServerJobRunSchema = z.object({
   type: z.literal("job.run"),
