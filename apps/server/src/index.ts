@@ -527,10 +527,11 @@ function visibleAgentIds(user: AuthUser): string[] {
   const ownedRows = db.prepare("SELECT id FROM agents WHERE user_id = ?").all(user.id) as Array<{ id: string }>;
   const ids = new Set(ownedRows.map((row) => row.id));
   const repoRows = db.prepare(`
-    SELECT agent_id, id
-    FROM repos
-    WHERE user_id = ? OR write_access = 'everyone' OR write_access = 'users'
-  `).all(user.id) as Array<{ agent_id: string; id: string }>;
+    SELECT r.agent_id, r.id
+    FROM repos r
+    LEFT JOIN repo_links rl ON rl.agent_id = r.agent_id AND rl.repo_id = r.id AND rl.user_id = ?
+    WHERE r.user_id = ? OR r.write_access = 'everyone' OR r.write_access = 'users' OR rl.user_id IS NOT NULL
+  `).all(user.id, user.id) as Array<{ agent_id: string; id: string }>;
   for (const row of repoRows) {
     if (canAccessRepo(user, row.agent_id, row.id)) ids.add(row.agent_id);
   }
@@ -550,13 +551,14 @@ function safeJsonArray(value: string | null | undefined): string[] {
 function canAccessRepo(user: AuthUser, agentId: string, repoId: string): boolean {
   if (isAdmin(user)) return true;
   const row = db.prepare(`
-    SELECT r.user_id, r.write_access, r.write_users_json
+    SELECT r.user_id, r.visibility, r.write_access, r.write_users_json
     FROM repos r
     WHERE r.agent_id = ? AND r.id = ?
-  `).get(agentId, repoId) as Pick<RepoRow, "user_id" | "write_access" | "write_users_json"> | undefined;
+  `).get(agentId, repoId) as Pick<RepoRow, "user_id" | "visibility" | "write_access" | "write_users_json"> | undefined;
   if (!row) return false;
   if (row.user_id === user.id) return true;
   if (row.write_access === "everyone") return true;
+  if (row.visibility === "public" && hasLinkedPublicRepo(user, agentId, repoId)) return true;
   if (row.write_access !== "users") return false;
   const resolvedUser = user.email
     ? user
@@ -564,6 +566,21 @@ function canAccessRepo(user: AuthUser, agentId: string, repoId: string): boolean
   if (!resolvedUser?.email) return false;
   const allowed = safeJsonArray(row.write_users_json).map((item) => item.trim().toLowerCase()).filter(Boolean);
   return allowed.includes(resolvedUser.email.toLowerCase()) || Boolean(resolvedUser.nickname && allowed.includes(resolvedUser.nickname.toLowerCase()));
+}
+
+function hasLinkedPublicRepo(user: AuthUser, agentId: string, repoId: string): boolean {
+  const row = db.prepare(`
+    SELECT 1
+    FROM repo_links rl
+    JOIN repos r ON r.agent_id = rl.agent_id AND r.id = rl.repo_id
+    JOIN users u ON u.id = r.user_id
+    WHERE rl.user_id = ?
+      AND rl.agent_id = ?
+      AND rl.repo_id = ?
+      AND r.visibility = 'public'
+      AND u.blocked_at IS NULL
+  `).get(user.id, agentId, repoId) as { 1: number } | undefined;
+  return Boolean(row);
 }
 
 function canWriteRepo(user: AuthUser, agentId: string, repoId: string): boolean {
@@ -938,18 +955,30 @@ function markAgentStatus(agentId: string, status: "online" | "offline"): void {
 function repoInfosForAgent(agentId: string, user?: AuthUser): RepoInfo[] {
   const rows = user
     ? db.prepare(`
-        SELECT * FROM repos
-        WHERE agent_id = ?
+        SELECT r.* FROM repos r
+        LEFT JOIN repo_links rl ON rl.agent_id = r.agent_id AND rl.repo_id = r.id AND rl.user_id = ?
+        WHERE r.agent_id = ?
           AND (
-            user_id = ?
-            OR write_access = 'everyone'
-            OR write_access = 'users'
+            r.user_id = ?
+            OR r.write_access = 'everyone'
+            OR r.write_access = 'users'
+            OR rl.user_id IS NOT NULL
           )
         ORDER BY name
-      `).all(agentId, user.id) as RepoRow[]
+      `).all(user.id, agentId, user.id) as RepoRow[]
     : db.prepare("SELECT * FROM repos WHERE agent_id = ? ORDER BY name")
       .all(agentId) as RepoRow[];
-  return (user ? rows.filter((row) => canAccessRepo(user, row.agent_id, row.id)) : rows).map(mapRepo);
+  return (user ? rows.filter((row) => canAccessRepo(user, row.agent_id, row.id)) : rows)
+    .map((row) => user ? repoInfoForUser(row, user) : mapRepo(row));
+}
+
+function repoInfoForUser(row: RepoRow, user: AuthUser): RepoInfo {
+  return {
+    ...mapRepo(row),
+    canWrite: canWriteRepo(user, row.agent_id, row.id),
+    canManage: canOwnRepoSettings(user, row.agent_id, row.id),
+    linked: row.user_id !== user.id && hasLinkedPublicRepo(user, row.agent_id, row.id)
+  };
 }
 
 function safeDownloadName(path: string, mimeType: string | undefined): string {
@@ -3524,6 +3553,35 @@ async function createApp(): Promise<FastifyInstance> {
     return { type, projects: rows.map((row) => serializePublicProject(row, request)) };
   });
 
+  app.post("/api/public/projects/:agentId/:repoId/add", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const { agentId, repoId } = request.params as { agentId: string; repoId: string };
+    const repo = db.prepare(`
+      SELECT r.*
+      FROM repos r
+      JOIN agents a ON a.id = r.agent_id
+      JOIN users u ON u.id = r.user_id
+      WHERE r.agent_id = ? AND r.id = ? AND r.visibility = 'public' AND u.blocked_at IS NULL
+    `).get(agentId, repoId) as RepoRow | undefined;
+    if (!repo) return reply.code(404).send({ error: "project_not_found" });
+    if (repo.user_id !== auth.user.id) {
+      db.prepare(`
+        INSERT OR IGNORE INTO repo_links (user_id, agent_id, repo_id, created_at)
+        VALUES (?,?,?,?)
+      `).run(auth.user.id, agentId, repoId, nowIso());
+    }
+    broadcast({ type: "repos.updated", agentId, repos: repoInfosForAgent(agentId) });
+    return {
+      ok: true,
+      repo: {
+        ...repoInfoForUser(repo, auth.user),
+        agentId: repo.agent_id,
+        updatedAt: repo.updated_at
+      }
+    };
+  });
+
   app.get("/api/public/projects/:agentId/:repoId/chats", async (request, reply) => {
     const { agentId, repoId } = request.params as { agentId: string; repoId: string };
     const project = db.prepare(`
@@ -4038,10 +4096,15 @@ async function createApp(): Promise<FastifyInstance> {
     const rows = db.prepare(`
       SELECT r.* FROM repos r
       JOIN agents a ON a.id = r.agent_id
-      WHERE r.user_id = ? OR r.write_access = 'everyone' OR r.write_access = 'users'
+      LEFT JOIN repo_links rl ON rl.agent_id = r.agent_id AND rl.repo_id = r.id AND rl.user_id = ?
+      WHERE r.user_id = ? OR r.write_access = 'everyone' OR r.write_access = 'users' OR rl.user_id IS NOT NULL
       ORDER BY r.name
-    `).all(auth.user.id) as RepoRow[];
-    return { repos: rows.filter((row) => canAccessRepo(auth.user, row.agent_id, row.id)).map((row) => ({ ...mapRepo(row), agentId: row.agent_id, updatedAt: row.updated_at })) };
+    `).all(auth.user.id, auth.user.id) as RepoRow[];
+    return {
+      repos: rows
+        .filter((row) => canAccessRepo(auth.user, row.agent_id, row.id))
+        .map((row) => ({ ...repoInfoForUser(row, auth.user), agentId: row.agent_id, updatedAt: row.updated_at }))
+    };
   });
 
   app.post("/api/projects", async (request, reply) => {
@@ -5023,12 +5086,13 @@ async function createApp(): Promise<FastifyInstance> {
       : db.prepare(`
           SELECT j.* FROM jobs j
           JOIN repos r ON r.agent_id = j.agent_id AND r.id = j.repo_id
+          LEFT JOIN repo_links rl ON rl.agent_id = r.agent_id AND rl.repo_id = r.id AND rl.user_id = ?
           LEFT JOIN chats c ON c.id = j.chat_id
-          WHERE r.user_id = ?
+          WHERE (r.user_id = ? OR r.write_access = 'everyone' OR r.write_access = 'users' OR rl.user_id IS NOT NULL)
             AND (j.chat_id IS NULL OR c.user_id IS NULL OR c.user_id = ?)
           ORDER BY j.created_at DESC LIMIT 50
-        `).all(auth.user.id, auth.user.id) as JobRow[];
-    return { jobs: rows.map((row) => serializeJob(row)) };
+        `).all(auth.user.id, auth.user.id, auth.user.id) as JobRow[];
+    return { jobs: rows.filter((row) => canAccessRepo(auth.user, row.agent_id, row.repo_id)).map((row) => serializeJob(row)) };
   });
 
   app.get("/api/jobs/:id", async (request, reply) => {

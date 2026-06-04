@@ -406,6 +406,14 @@ export function openDb(path: string): DatabaseSync {
       created_at TEXT NOT NULL,
       PRIMARY KEY (agent_id, repo_id)
     );
+    CREATE TABLE IF NOT EXISTS repo_links (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      repo_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, agent_id, repo_id),
+      FOREIGN KEY (agent_id, repo_id) REFERENCES repos(agent_id, id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS user_activity_days (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       day TEXT NOT NULL,
@@ -570,6 +578,7 @@ export function openDb(path: string): DatabaseSync {
   db.exec("CREATE INDEX IF NOT EXISTS idx_chat_shares_chat ON chat_shares(chat_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_chat_shares_agent ON chat_shares(agent_id, updated_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_file_shares_project ON file_shares(agent_id, repo_id, updated_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_repo_links_project ON repo_links(agent_id, repo_id)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_external ON chats(agent_id, source, external_id) WHERE external_id IS NOT NULL");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON chat_messages(chat_id, source, external_id) WHERE external_id IS NOT NULL");
   return db;

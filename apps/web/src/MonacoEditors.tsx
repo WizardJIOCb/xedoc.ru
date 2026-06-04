@@ -441,6 +441,7 @@ type MonacoCodeEditorProps = {
   onCursorChange?: (cursor: EditorCursorState) => void;
   projectFiles?: ProjectFileEntry[];
   onOpenFile?: (path: string) => void | Promise<void>;
+  readOnly?: boolean;
 };
 
 export function MonacoCodeEditor({
@@ -454,7 +455,8 @@ export function MonacoCodeEditor({
   onSave,
   onCursorChange,
   projectFiles = [],
-  onOpenFile
+  onOpenFile,
+  readOnly = false
 }: MonacoCodeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -526,6 +528,7 @@ export function MonacoCodeEditor({
       cursorSmoothCaretAnimation: "on",
       smoothScrolling: true,
       contextmenu: true,
+      readOnly,
       fixedOverflowWidgets: true
     });
     editorRef.current = editor;
@@ -618,6 +621,10 @@ export function MonacoCodeEditor({
   useEffect(() => {
     monaco.editor.setTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({ readOnly });
+  }, [readOnly]);
 
   useEffect(() => {
     const editor = editorRef.current;

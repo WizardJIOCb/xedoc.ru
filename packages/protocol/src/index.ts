@@ -63,6 +63,9 @@ export const RepoInfoSchema = z.object({
   dirty: z.boolean(),
   defaultSandbox: SandboxSchema,
   allowedSandboxes: z.array(SandboxSchema).min(1),
+  canWrite: z.boolean().optional(),
+  canManage: z.boolean().optional(),
+  linked: z.boolean().optional(),
   testCommands: z.array(z.object({
     id: z.string().min(1).max(80),
     label: z.string().min(1).max(120)

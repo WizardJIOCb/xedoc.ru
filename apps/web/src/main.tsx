@@ -370,6 +370,9 @@ type Repo = {
   dirty: boolean;
   defaultSandbox: Sandbox;
   allowedSandboxes: Sandbox[];
+  canWrite?: boolean;
+  canManage?: boolean;
+  linked?: boolean;
   testCommands: Array<{ id: string; label: string }>;
 };
 
@@ -1110,6 +1113,14 @@ function projectUrl(domain?: string) {
 
 function repoKeyFor(repo: Pick<Repo, "agentId" | "id">) {
   return `${repo.agentId}:${repo.id}`;
+}
+
+function repoCanWrite(repo: Pick<Repo, "canWrite"> | null | undefined) {
+  return repo?.canWrite !== false;
+}
+
+function repoCanManage(repo: Pick<Repo, "canManage"> | null | undefined) {
+  return repo?.canManage !== false;
 }
 
 function normalizeProjectFilePath(path: string) {
@@ -2969,10 +2980,16 @@ function PublicChatThread({ payload, onPreview }: { payload: PublicChatPayload; 
 
 function PublicProjectCard({
   project,
+  added = false,
+  adding = false,
+  onAddProject,
   onOpenChat,
   showAuthor = false
 }: {
   project: PublicProject;
+  added?: boolean;
+  adding?: boolean;
+  onAddProject?: (project: PublicProject) => void | Promise<void>;
   onOpenChat: (chat: Chat) => void | Promise<void>;
   showAuthor?: boolean;
 }) {
@@ -2994,6 +3011,12 @@ function PublicProjectCard({
             <p><Link2 size={14} /> {targetLabel}</p>
           </div>
           <div className="public-project-actions">
+            {onAddProject && (
+              <button className="secondary compact" disabled={adding} type="button" onClick={() => void onAddProject(project)}>
+                {added ? <Check size={15} /> : adding ? <RefreshCw className="spin" size={15} /> : <Plus size={15} />}
+                {added ? "Open in Projects" : adding ? "Adding" : "Add to Projects"}
+              </button>
+            )}
             {project.url && <a className="secondary compact" href={project.url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open</a>}
             {project.githubUrl && <a className="secondary compact" href={project.githubUrl} target="_blank" rel="noreferrer"><Github size={15} /> GitHub</a>}
           </div>
@@ -4329,6 +4352,7 @@ function App() {
   const [searchProfiles, setSearchProfiles] = useState<PublicProfile[]>([]);
   const [searchNotice, setSearchNotice] = useState("");
   const [searchOpenedChat, setSearchOpenedChat] = useState<PublicChatPayload | null>(null);
+  const [publicProjectAddingKey, setPublicProjectAddingKey] = useState("");
   const [users, setUsers] = useState<User[]>([]);
   const [profileStatsData, setProfileStatsData] = useState<ProfileStats | null>(null);
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
@@ -4645,7 +4669,7 @@ function App() {
   const canSaveProject = Boolean(!busy && (
     projectPanel === "new"
       ? projectSaveAgentOnline
-      : selectedRepo && (!projectSettingsNeedsAgent || projectSaveAgentOnline)
+      : selectedRepo && repoCanManage(selectedRepo) && (!projectSettingsNeedsAgent || projectSaveAgentOnline)
   ));
   const canSaveAndRunProject = Boolean(canSaveProject && projectSaveAgentOnline && projectStartPrompt.trim());
   const repoAgentLabel = (repo: Repo) => agentNameById.get(repo.agentId) ?? repo.agentId;
@@ -5396,6 +5420,47 @@ function App() {
     trackMetrikaGoal("public_chat_open", { status: "success", source: "search" });
   }
 
+  async function addPublicProject(project: PublicProject) {
+    const key = `${project.agentId}:${project.id}`;
+    const existingRepo = repos.find((repo) => repoKeyFor(repo) === key);
+    if (existingRepo) {
+      selectProject(existingRepo);
+      return;
+    }
+    if (!csrf) {
+      setSearchNotice("Нужно войти, чтобы добавить проект в свой список.");
+      return;
+    }
+    setPublicProjectAddingKey(key);
+    setSearchNotice("");
+    try {
+      const response = await api(`/api/public/projects/${encodeURIComponent(project.agentId)}/${encodeURIComponent(project.id)}/add`, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: "{}"
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setSearchNotice(data.error || "Не удалось добавить проект.");
+        trackMetrikaGoal("public_project_add", { status: "failed", error: data.error });
+        return;
+      }
+      const addedRepo = data.repo as Repo | undefined;
+      if (addedRepo) {
+        setRepos((current) => current.some((repo) => repoKeyFor(repo) === key)
+          ? current
+          : [...current, addedRepo].sort((left, right) => left.name.localeCompare(right.name)));
+      }
+      const refreshedRepos = await refresh({ keepRepoKey: key }).catch(() => undefined);
+      const nextRepo = refreshedRepos?.find((repo) => repoKeyFor(repo) === key) ?? addedRepo;
+      if (nextRepo) selectProject(nextRepo);
+      setSearchNotice(`Проект ${project.name} добавлен в Projects.`);
+      trackMetrikaGoal("public_project_add", { status: "success" });
+    } finally {
+      setPublicProjectAddingKey("");
+    }
+  }
+
   async function loadChats(repo: Repo, selectFirst = false, options: { showLoading?: boolean } = {}): Promise<Chat[] | undefined> {
     const loadingRepoKey = repoKeyFor(repo);
     const controller = new AbortController();
@@ -5880,7 +5945,7 @@ function App() {
     setProjectActionsOpen(false);
     saveProjectState(repo);
     loadChats(repo, false, { showLoading: true });
-    void syncLocalChats(repo);
+    if (repoCanManage(repo)) void syncLocalChats(repo);
   }
 
   function clearProjectSelection() {
@@ -6112,6 +6177,11 @@ function App() {
   }
 
   function openProjectSettings(repo: Repo) {
+    if (!repoCanManage(repo)) {
+      setChatNoticeOk(false);
+      setChatNotice("Настройки этого public-проекта доступны только владельцу или администратору.");
+      return;
+    }
     const repoAgent = agents.find((agent) => agent.id === repo.agentId);
     const deployMode = repo.deploy?.mode ?? defaultDeployModeForAgent(repoAgent);
     const unifiedFolder = isUnifiedProjectFolderMode(repoAgent, deployMode);
@@ -7267,6 +7337,7 @@ function App() {
     const isNew = projectPanel === "new";
     const targetAgent = isNew ? projectFormAgent : selectedRepoAgent ?? selectedAgent;
     if (!csrf || !targetAgent || !projectName.trim() || !projectPath.trim()) return;
+    if (!isNew && (!selectedRepo || !repoCanManage(selectedRepo))) return;
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const shouldRunPrompt = submitter?.value === "run-prompt" && Boolean(projectStartPrompt.trim());
     if ((isNew || projectSettingsNeedsAgent) && !projectSaveAgentOnline) {
@@ -7390,7 +7461,7 @@ function App() {
   }
 
   async function deleteProject() {
-    if (!csrf || !selectedRepo) return;
+    if (!csrf || !selectedRepo || !repoCanManage(selectedRepo)) return;
     const activeInProject = activeJob?.agentId === selectedRepo.agentId && activeJob.repoId === selectedRepo.id && ["queued", "assigned", "running"].includes(activeJob.status);
     if (activeInProject) {
       setProjectNotice("Stop the running job before removing this project from the service.");
@@ -7418,6 +7489,11 @@ function App() {
   async function createJob(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedRepo || (!prompt.trim() && !attachments.length) || !csrf) return;
+    if (!repoCanWrite(selectedRepo)) {
+      setChatNoticeOk(false);
+      setChatNotice("Этот public-проект добавлен в режиме просмотра. Запуск задач доступен только владельцу или пользователям с правом записи.");
+      return;
+    }
     if (localCodexBusy) {
       setChatNoticeOk(false);
       setChatNotice("Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web.");
@@ -7796,7 +7872,7 @@ function App() {
 
   async function runGitSync() {
     const commitMessage = effectiveGitMessage.trim();
-    if (!selectedRepo || !csrf || !commitMessage || launchBusy || projectActionBusyRef.current.gitSync) return;
+    if (!selectedRepo || !csrf || !commitMessage || !repoCanWrite(selectedRepo) || launchBusy || projectActionBusyRef.current.gitSync) return;
     projectActionBusyRef.current.gitSync = true;
     let targetChatId = "";
     const operationDetails = [`Сообщение коммита: \`${safeMarkdownInlineCode(commitMessage)}\`.`];
@@ -8085,6 +8161,10 @@ function App() {
   async function submitIdeChat(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedRepo || !csrf || (!ideChatPrompt.trim() && !attachments.length) || ideChatSending) return;
+    if (!repoCanWrite(selectedRepo)) {
+      setIdeChatNotice("Этот public-проект добавлен в режиме просмотра. Запуск задач доступен только владельцу или пользователям с правом записи.");
+      return;
+    }
     if (localCodexBusy || activeRunBusy) {
       setIdeChatNotice("Codex сейчас занят. Новую задачу можно отправить после завершения текущей.");
       return;
@@ -8262,6 +8342,15 @@ function App() {
   async function saveProjectFile(targetEditor = fileEditor, options: { refreshAfterSave?: boolean } = {}) {
     if (!targetEditor || targetEditor.loading || targetEditor.saving || !csrf) return false;
     if (targetEditor.binary) return false;
+    const targetRepo = repos.find((repo) => repo.agentId === targetEditor.agentId && repo.id === targetEditor.repoId)
+      ?? (selectedRepo?.agentId === targetEditor.agentId && selectedRepo.id === targetEditor.repoId ? selectedRepo : undefined);
+    if (!targetRepo || !repoCanWrite(targetRepo)) {
+      const targetKey = editorFileKey(targetEditor);
+      const error = "Этот public-проект открыт только для просмотра.";
+      setFileEditor((current) => current && editorFileKey(current) === targetKey ? { ...current, saving: false, error } : current);
+      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === targetKey ? { ...tab, saving: false, error } : tab));
+      return false;
+    }
     if (targetEditor.content === targetEditor.originalContent) return true;
     const { agentId, repoId, path, content } = targetEditor;
     const targetKey = editorFileKey(targetEditor);
@@ -8455,6 +8544,10 @@ function App() {
 
   async function pasteClipboardIntoFile(entry: ProjectFileEntry) {
     if (!selectedRepo || !csrf) return;
+    if (!repoCanWrite(selectedRepo)) {
+      setIdeChatNotice("Этот public-проект открыт только для просмотра.");
+      return;
+    }
     const text = await navigator.clipboard?.readText().catch(() => "");
     if (!text) {
       setIdeChatNotice("В буфере обмена нет текста для вставки.");
@@ -8637,7 +8730,7 @@ function App() {
   }
 
   async function buildProject() {
-    if (!selectedRepo || !csrf || buildBusy) return;
+    if (!selectedRepo || !csrf || buildBusy || !repoCanWrite(selectedRepo)) return;
     let targetChatId = "";
     let pendingMessageId = "";
     setBuildBusy(true);
@@ -8671,7 +8764,7 @@ function App() {
   }
 
   async function deployProject() {
-    if (!selectedRepo || !csrf || projectActionBusyRef.current.deploy) return;
+    if (!selectedRepo || !csrf || projectActionBusyRef.current.deploy || !repoCanWrite(selectedRepo)) return;
     projectActionBusyRef.current.deploy = true;
     let targetChatId = "";
     let pendingMessageId = "";
@@ -8712,6 +8805,7 @@ function App() {
       || !csrf
       || !commitMessage
       || !hasDeployConfig(selectedRepo)
+      || !repoCanWrite(selectedRepo)
       || launchBusy
       || gitBusy
       || deployBusy
@@ -8788,7 +8882,7 @@ function App() {
   }
 
   async function configureNginx() {
-    if (!selectedRepo || !csrf) return;
+    if (!selectedRepo || !csrf || !repoCanWrite(selectedRepo)) return;
     let targetChatId = "";
     let pendingMessageId = "";
     setNginxBusy(true);
@@ -8822,7 +8916,7 @@ function App() {
   }
 
   async function configureSsl() {
-    if (!selectedRepo || !csrf) return;
+    if (!selectedRepo || !csrf || !repoCanWrite(selectedRepo)) return;
     let targetChatId = "";
     let pendingMessageId = "";
     setSslBusy(true);
@@ -8856,7 +8950,7 @@ function App() {
   }
 
   async function launchProject() {
-    if (!selectedRepo || !csrf) return;
+    if (!selectedRepo || !csrf || !repoCanWrite(selectedRepo)) return;
     let targetChatId = "";
     const output: string[] = [];
     const append = (label: string, text: string) => {
@@ -9412,9 +9506,20 @@ function App() {
 
           {searchType === "projects" ? (
             <div className="public-result-list">
-              {searchProjects.map((project) => (
-                <PublicProjectCard key={`${project.agentId}:${project.id}`} project={project} onOpenChat={openPublicChat} showAuthor />
-              ))}
+              {searchProjects.map((project) => {
+                const key = `${project.agentId}:${project.id}`;
+                return (
+                  <PublicProjectCard
+                    added={repos.some((repo) => repoKeyFor(repo) === key)}
+                    adding={publicProjectAddingKey === key}
+                    key={key}
+                    onAddProject={addPublicProject}
+                    onOpenChat={openPublicChat}
+                    project={project}
+                    showAuthor
+                  />
+                );
+              })}
               {!searchProjects.length && <div className="empty">{emptyLabel}</div>}
             </div>
           ) : (
@@ -10782,7 +10887,7 @@ function App() {
               <button disabled={!agentReady || controlIsLinux || vscodeBusy || !activeCodexThreadId} type="button" onClick={() => runVscodeCommand("reopenThread", controlAgent?.id, { threadId: activeCodexThreadId })}>
                 <MessageSquare size={16} /> Reopen active chat
               </button>
-              <button disabled={!syncRepo || !agentReady || localChatSyncing} type="button" onClick={() => syncRepo && syncLocalChats(syncRepo)}>
+              <button disabled={!syncRepo || !repoCanManage(syncRepo) || !agentReady || localChatSyncing} type="button" onClick={() => syncRepo && syncLocalChats(syncRepo)}>
                 <RefreshCw className={localChatSyncing ? "spin" : ""} size={16} /> Sync local chats
               </button>
             </div>
@@ -11302,6 +11407,7 @@ function App() {
     if (!selectedRepo || activeChat) return null;
     const previewLabel = selectedRepo.domain || selectedRepo.githubUrl || selectedRepo.pathMasked;
     const deployConfigured = hasDeployConfig(selectedRepo);
+    const canWriteProject = repoCanWrite(selectedRepo);
     const hasServerPath = Boolean(selectedRepo.serverPath?.trim());
     const hasDomain = Boolean(selectedRepo.domain?.trim());
     const buildMissingPackage = /package\.json|enoent|could not read package/i.test(buildNotice);
@@ -11341,7 +11447,7 @@ function App() {
               <h3><SlidersHorizontal size={16} /> Что делать дальше</h3>
               <small>{nextSetup.label}</small>
             </div>
-            <button className="secondary compact" type="button" onClick={() => openProjectSettings(selectedRepo)}>
+            <button className="secondary compact" disabled={!repoCanManage(selectedRepo)} type="button" onClick={() => openProjectSettings(selectedRepo)}>
               <Settings size={15} /> Project settings
             </button>
           </div>
@@ -11350,27 +11456,27 @@ function App() {
             <span>{nextSetup.detail}</span>
           </div>
           <div className="project-setup-flow" aria-label="Порядок настройки проекта">
-            <button type="button" onClick={() => openProjectSettings(selectedRepo)}>
+            <button disabled={!repoCanManage(selectedRepo)} type="button" onClick={() => openProjectSettings(selectedRepo)}>
               <Settings size={15} />
               <span>Settings</span>
               <small>папка, GitHub, domain, deploy</small>
             </button>
-            <button disabled={buildBusy} type="button" onClick={() => void buildProject()}>
+            <button disabled={!canWriteProject || buildBusy} type="button" onClick={() => void buildProject()}>
               <Terminal size={15} />
               <span>Build</span>
               <small>проверка package/build</small>
             </button>
-            <button disabled={deployBusy || !deployConfigured} type="button" onClick={() => void deployProject()}>
+            <button disabled={!canWriteProject || deployBusy || !deployConfigured} type="button" onClick={() => void deployProject()}>
               <UploadCloud size={15} />
               <span>Deploy</span>
               <small>копия сборки в server folder</small>
             </button>
-            <button disabled={nginxBusy || !deployConfigured || !hasDomain} type="button" onClick={() => void configureNginx()}>
+            <button disabled={!canWriteProject || nginxBusy || !deployConfigured || !hasDomain} type="button" onClick={() => void configureNginx()}>
               <Settings size={15} />
               <span>Nginx</span>
               <small>домен на папку сайта</small>
             </button>
-            <button disabled={sslBusy || !deployConfigured || !hasDomain} type="button" onClick={() => void configureSsl()}>
+            <button disabled={!canWriteProject || sslBusy || !deployConfigured || !hasDomain} type="button" onClick={() => void configureSsl()}>
               <ShieldCheck size={15} />
               <span>SSL</span>
               <small>сертификат после Nginx</small>
@@ -11410,7 +11516,7 @@ function App() {
                 <h3><ExternalLink size={16} /> Сайт</h3>
                 <small>{previewLabel}</small>
               </div>
-              <button className="secondary compact" type="button" onClick={() => openProjectSettings(selectedRepo)}>
+              <button className="secondary compact" disabled={!repoCanManage(selectedRepo)} type="button" onClick={() => openProjectSettings(selectedRepo)}>
                 <Settings size={15} /> Домен
               </button>
             </div>
@@ -11578,8 +11684,9 @@ function App() {
 
   function renderComposer() {
     if (!selectedRepo) return null;
+    const canWriteProject = repoCanWrite(selectedRepo);
     const canSubmit = Boolean(prompt.trim() || attachments.length);
-    const runDisabled = busy || !canSubmit || localCodexBusy || activeRunBusy;
+    const runDisabled = busy || !canWriteProject || !canSubmit || localCodexBusy || activeRunBusy;
     const currentModelOptions = modelOptionsForKind(jobKind);
     const selectedModel = modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel);
     const selectedModelLabel = currentModelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel;
@@ -11712,8 +11819,9 @@ function App() {
         {renderPendingAttachments()}
         {attachmentNotice && <div className="notice danger">{attachmentNotice}</div>}
         <textarea
-          placeholder="Опишите задачу, что вы хотите сделать сегодня?"
+          placeholder={canWriteProject ? "Опишите задачу, что вы хотите сделать сегодня?" : "Public-проект открыт только для просмотра"}
           value={prompt}
+          disabled={!canWriteProject}
           onChange={(event) => setPrompt(event.target.value)}
           onKeyDown={handleComposerKeyDown}
           onPaste={handleComposerPaste}
@@ -11914,37 +12022,37 @@ function App() {
                   </div>
                 )}
                 <div className="menu-divider" />
-                <button className="project-menu-action" disabled={launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
+                <button className="project-menu-action" disabled={!repoCanWrite(selectedRepo) || launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={launchProject}>
                   <Rocket size={16} />
                   <span className="step-badge">1-4</span>
                   <span>Launch</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || gitBusy || !effectiveGitMessage.trim()} role="menuitem" type="button" onClick={runGitSync}>
+                <button className="project-menu-action" disabled={!repoCanWrite(selectedRepo) || launchBusy || gitBusy || !effectiveGitMessage.trim()} role="menuitem" type="button" onClick={runGitSync}>
                   <UploadCloud size={16} />
                   <span className="step-badge">1</span>
                   <span>Commit & push</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={commitAndDeployProject}>
+                <button className="project-menu-action" disabled={!repoCanWrite(selectedRepo) || launchBusy || gitBusy || deployBusy || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={commitAndDeployProject}>
                   <UploadCloud size={16} />
                   <span className="step-badge">1-2</span>
                   <span>Commit & Deploy</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || buildBusy} role="menuitem" type="button" onClick={buildProject}>
+                <button className="project-menu-action" disabled={!repoCanWrite(selectedRepo) || launchBusy || buildBusy} role="menuitem" type="button" onClick={buildProject}>
                   <Terminal size={16} />
                   <span className="step-badge">B</span>
                   <span>Build</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={deployProject}>
+                <button className="project-menu-action" disabled={!repoCanWrite(selectedRepo) || launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={deployProject}>
                   <UploadCloud size={16} />
                   <span className="step-badge">2</span>
                   <span>Deploy</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={configureNginx}>
+                <button className="project-menu-action" disabled={!repoCanWrite(selectedRepo) || launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={configureNginx}>
                   <Settings size={16} />
                   <span className="step-badge">3</span>
                   <span>Nginx</span>
                 </button>
-                <button className="project-menu-action" disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={configureSsl}>
+                <button className="project-menu-action" disabled={!repoCanWrite(selectedRepo) || launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={configureSsl}>
                   <Settings size={16} />
                   <span className="step-badge">4</span>
                   <span>SSL</span>
@@ -12155,7 +12263,7 @@ function App() {
               icon: <Save size={14} />,
               label: "Save",
               shortcut: "Ctrl+S",
-              disabled: !csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent,
+              disabled: !csrf || !repoCanWrite(selectedRepo) || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent,
               onClick: () => void saveProjectFile()
             })}
             {renderIdeMenuItem({
@@ -12181,7 +12289,7 @@ function App() {
             {renderIdeMenuItem({
               icon: <Settings size={14} />,
               label: "Project Settings",
-              disabled: !selectedRepo,
+              disabled: !selectedRepo || !repoCanManage(selectedRepo),
               onClick: () => selectedRepo && openProjectSettings(selectedRepo)
             })}
             <div className="ide-menu-divider" />
@@ -12225,6 +12333,7 @@ function App() {
               icon: <SlidersHorizontal size={14} />,
               label: "Format Document",
               shortcut: "Shift+Alt+F",
+              disabled: !repoCanWrite(selectedRepo),
               onClick: () => triggerEditorCommand("format")
             })}
           </>
@@ -12382,13 +12491,13 @@ function App() {
             {renderIdeMenuItem({
               icon: <Terminal size={14} />,
               label: "Build",
-              disabled: buildBusy || !selectedRepo,
+              disabled: buildBusy || !selectedRepo || !repoCanWrite(selectedRepo),
               onClick: buildProject
             })}
             {renderIdeMenuItem({
               icon: <Rocket size={14} />,
               label: "Launch",
-              disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo),
+              disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !hasDeployConfig(selectedRepo),
               onClick: launchProject
             })}
             {renderIdeMenuItem({
@@ -12403,31 +12512,31 @@ function App() {
             {renderIdeMenuItem({
               icon: <GitBranch size={14} />,
               label: "Commit & Push",
-              disabled: !selectedRepo || gitBusy || !effectiveGitMessage.trim(),
+              disabled: !selectedRepo || !repoCanWrite(selectedRepo) || gitBusy || !effectiveGitMessage.trim(),
               onClick: runGitSync
             })}
             {renderIdeMenuItem({
               icon: <UploadCloud size={14} />,
               label: "Commit & Deploy",
-              disabled: launchBusy || gitBusy || deployBusy || !selectedRepo || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo),
+              disabled: launchBusy || gitBusy || deployBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo),
               onClick: commitAndDeployProject
             })}
             {renderIdeMenuItem({
               icon: <UploadCloud size={14} />,
               label: "Deploy",
-              disabled: deployBusy || !selectedRepo || !hasDeployConfig(selectedRepo),
+              disabled: deployBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !hasDeployConfig(selectedRepo),
               onClick: deployProject
             })}
             {renderIdeMenuItem({
               icon: <Settings size={14} />,
               label: "Configure Nginx",
-              disabled: nginxBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain,
+              disabled: nginxBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !hasDeployConfig(selectedRepo) || !selectedRepo.domain,
               onClick: configureNginx
             })}
             {renderIdeMenuItem({
               icon: <ShieldCheck size={14} />,
               label: "Issue SSL",
-              disabled: sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain,
+              disabled: sslBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !hasDeployConfig(selectedRepo) || !selectedRepo.domain,
               onClick: configureSsl
             })}
           </>
@@ -12437,7 +12546,7 @@ function App() {
             {renderIdeMenuItem({
               icon: <Terminal size={14} />,
               label: "Run Build",
-              disabled: buildBusy || !selectedRepo,
+              disabled: buildBusy || !selectedRepo || !repoCanWrite(selectedRepo),
               onClick: buildProject
             })}
             <div className="ide-menu-divider" />
@@ -12505,11 +12614,11 @@ function App() {
   function renderIdeCommandPalette(editor: ProjectFileEditor) {
     if (!ideCommandPaletteOpen) return null;
     const commandItems = [
-      { group: "File", label: "Save current file", shortcut: "Ctrl+S", disabled: !csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent, run: () => void saveProjectFile() },
+      { group: "File", label: "Save current file", shortcut: "Ctrl+S", disabled: !csrf || !repoCanWrite(selectedRepo) || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent, run: () => void saveProjectFile() },
       { group: "File", label: "Reload current file", run: () => openProjectFile(editor.path) },
       { group: "File", label: "Copy file path", run: () => copyEditorPath(editor.path) },
       { group: "Edit", label: "Find in file", shortcut: "Ctrl+F", run: focusEditorFind },
-      { group: "Edit", label: "Format document", shortcut: "Shift+Alt+F", run: () => triggerEditorCommand("format") },
+      { group: "Edit", label: "Format document", shortcut: "Shift+Alt+F", disabled: !repoCanWrite(selectedRepo), run: () => triggerEditorCommand("format") },
       { group: "View", label: ideExplorerOpen ? "Hide Explorer" : "Show Explorer", run: () => setIdeExplorerOpen((value) => !value) },
       { group: "View", label: ideEditorPaneOpen ? "Hide Code Editor" : "Show Code Editor", run: toggleIdeEditorPane },
       { group: "View", label: ideChatPanelOpen ? "Hide Chat" : "Show Chat", run: toggleIdeChatPanel },
@@ -12521,16 +12630,16 @@ function App() {
         run: () => setIdeChatWidth(option.value)
       })),
       { group: "View", label: fileEditorFullscreen ? "Exit Full Screen" : "Full Screen", shortcut: "F11", run: () => setFileEditorFullscreen((value) => !value) },
-      { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo, run: buildProject },
-      { group: "Run", label: "Launch project", disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: launchProject },
+      { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo || !repoCanWrite(selectedRepo), run: buildProject },
+      { group: "Run", label: "Launch project", disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !hasDeployConfig(selectedRepo), run: launchProject },
       { group: "Run", label: selectedRepo?.domain ? `Open Project Link (${selectedRepo.domain})` : "Open Project Link", disabled: !selectedProjectUrl, run: () => {
         if (selectedProjectUrl) window.open(selectedProjectUrl, "_blank", "noopener,noreferrer");
       } },
-      { group: "Project", label: "Commit & Push", disabled: !selectedRepo || gitBusy || !effectiveGitMessage.trim(), run: runGitSync },
-      { group: "Project", label: "Commit & Deploy", disabled: launchBusy || gitBusy || deployBusy || !selectedRepo || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo), run: commitAndDeployProject },
-      { group: "Project", label: "Deploy", disabled: deployBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: deployProject },
-      { group: "Project", label: "Configure Nginx", disabled: nginxBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureNginx },
-      { group: "Project", label: "Issue SSL", disabled: sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureSsl },
+      { group: "Project", label: "Commit & Push", disabled: !selectedRepo || !repoCanWrite(selectedRepo) || gitBusy || !effectiveGitMessage.trim(), run: runGitSync },
+      { group: "Project", label: "Commit & Deploy", disabled: launchBusy || gitBusy || deployBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo), run: commitAndDeployProject },
+      { group: "Project", label: "Deploy", disabled: deployBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !hasDeployConfig(selectedRepo), run: deployProject },
+      { group: "Project", label: "Configure Nginx", disabled: nginxBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureNginx },
+      { group: "Project", label: "Issue SSL", disabled: sslBusy || !selectedRepo || !repoCanWrite(selectedRepo) || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureSsl },
       { group: "Help", label: "Open xedoc.ru", run: () => {
         window.open("https://xedoc.ru", "_blank", "noopener,noreferrer");
       } }
@@ -12858,7 +12967,7 @@ function App() {
         <button type="button" role="menuitem" disabled={directory} onClick={() => { setFileContextMenu(null); void copyProjectFileContent(entry); }}>
           <FilePenLine size={14} /> {image ? "Copy share link" : "Copy content"}
         </button>
-        <button type="button" role="menuitem" disabled={directory || image} onClick={() => { setFileContextMenu(null); void pasteClipboardIntoFile(entry); }}>
+        <button type="button" role="menuitem" disabled={directory || image || !repoCanWrite(selectedRepo)} onClick={() => { setFileContextMenu(null); void pasteClipboardIntoFile(entry); }}>
           <UploadCloud size={14} /> Paste into file
         </button>
         <button type="button" role="menuitem" disabled={directory} onClick={() => { setFileContextMenu(null); void shareProjectFile(entry); }}>
@@ -13143,7 +13252,7 @@ function App() {
               <button
                 aria-label="Синхронизировать локальные чаты проекта"
                 className="icon"
-                disabled={localChatSyncing || !chromeOnline}
+                disabled={localChatSyncing || !chromeOnline || !repoCanManage(chromeRepo)}
                 onClick={() => syncLocalChats(chromeRepo).catch(() => {
                   setChatNoticeOk(false);
                   setChatNotice("Не получилось синхронизировать локальные чаты.");
@@ -13190,7 +13299,7 @@ function App() {
                   <small>{repo.pathMasked}</small>
                   {repo.domain && <small>{repo.domain}</small>}
                 </button>
-                <button className="project-settings-button" onClick={() => {
+                <button className="project-settings-button" disabled={!repoCanManage(repo)} onClick={() => {
                   setRepoKey(`${repo.agentId}:${repo.id}`);
                   openProjectSettings(repo);
                 }} title="Настройки проекта" type="button"><Settings size={15} /></button>
@@ -13282,7 +13391,7 @@ function App() {
                     <Link2 size={16} />
                   </button>
                 )}
-                <button className="icon tiny" onClick={() => openProjectSettings(selectedRepo)} title="Настройки"><Settings size={16} /></button>
+                <button className="icon tiny" disabled={!repoCanManage(selectedRepo)} onClick={() => openProjectSettings(selectedRepo)} title="Настройки"><Settings size={16} /></button>
               </div>
             </div>
             <div className="repo-meta">
@@ -13298,9 +13407,11 @@ function App() {
                     ? <> На этом же ПК online <strong>{onlineAgentOnSameHost.name}</strong>, но у него нет этих проектов и чатов, поэтому Sync получает 503.</>
                     : <> Пока агент проекта offline, локальные чаты не синхронизируются.</>}
                 </p>
-                <button className="secondary compact" disabled={busy} type="button" onClick={() => void downloadAgentSetup(selectedRepoAgent)}>
-                  <Download size={15} /> Setup для {selectedRepoAgent.name}
-                </button>
+                {repoCanManage(selectedRepo) && (
+                  <button className="secondary compact" disabled={busy} type="button" onClick={() => void downloadAgentSetup(selectedRepoAgent)}>
+                    <Download size={15} /> Setup для {selectedRepoAgent.name}
+                  </button>
+                )}
               </div>
             )}
             {!activeChat && renderProjectOverview()}
@@ -13316,7 +13427,7 @@ function App() {
                   </div>
                   <button
                     className="cockpit-launch"
-                    disabled={launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)}
+                    disabled={!repoCanWrite(selectedRepo) || launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !hasDeployConfig(selectedRepo)}
                     type="button"
                     onClick={() => {
                       setProjectActionsOpen(false);
@@ -13337,12 +13448,12 @@ function App() {
                     </button>
                     {projectActionsOpen && (
                       <div className="project-action-menu" role="menu">
-                        <button disabled={launchBusy || gitBusy || !effectiveGitMessage.trim()} role="menuitem" type="submit" onClick={() => setProjectActionsOpen(false)}>
+                        <button disabled={!repoCanWrite(selectedRepo) || launchBusy || gitBusy || !effectiveGitMessage.trim()} role="menuitem" type="submit" onClick={() => setProjectActionsOpen(false)}>
                           <UploadCloud size={16} />
                           <span className="step-badge">1</span>
                           <span>Commit & push</span>
                         </button>
-                        <button disabled={launchBusy || gitBusy || deployBusy || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
+                        <button disabled={!repoCanWrite(selectedRepo) || launchBusy || gitBusy || deployBusy || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
                           void commitAndDeployProject();
                         }}>
@@ -13350,7 +13461,7 @@ function App() {
                           <span className="step-badge">1-2</span>
                           <span>Commit & Deploy</span>
                         </button>
-                        <button disabled={launchBusy || buildBusy} role="menuitem" type="button" onClick={() => {
+                        <button disabled={!repoCanWrite(selectedRepo) || launchBusy || buildBusy} role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
                           void buildProject();
                         }}>
@@ -13358,7 +13469,7 @@ function App() {
                           <span className="step-badge">B</span>
                           <span>Build</span>
                         </button>
-                        <button disabled={launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
+                        <button disabled={!repoCanWrite(selectedRepo) || launchBusy || deployBusy || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
                           void deployProject();
                         }}>
@@ -13366,7 +13477,7 @@ function App() {
                           <span className="step-badge">2</span>
                           <span>Deploy</span>
                         </button>
-                        <button disabled={launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
+                        <button disabled={!repoCanWrite(selectedRepo) || launchBusy || nginxBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
                           void configureNginx();
                         }}>
@@ -13374,7 +13485,7 @@ function App() {
                           <span className="step-badge">3</span>
                           <span>Nginx</span>
                         </button>
-                        <button disabled={launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
+                        <button disabled={!repoCanWrite(selectedRepo) || launchBusy || sslBusy || !hasDeployConfig(selectedRepo) || !selectedRepo.domain} role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
                           void configureSsl();
                         }}>
@@ -13399,7 +13510,7 @@ function App() {
                           <FilePenLine size={16} />
                           <span>Open IDE</span>
                         </button>
-                        <button role="menuitem" type="button" onClick={() => {
+                        <button disabled={!repoCanManage(selectedRepo)} role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
                           openProjectSettings(selectedRepo);
                         }}>
@@ -13819,6 +13930,7 @@ function App() {
                       key={`${fileEditor.agentId}:${fileEditor.repoId}:${fileEditor.path}`}
                       path={fileEditor.path}
                       projectFiles={projectFiles}
+                      readOnly={!repoCanWrite(selectedRepo)}
                       theme={editorTheme}
                       value={fileEditor.content}
                       onOpenFile={openProjectFile}
@@ -13851,7 +13963,7 @@ function App() {
                           <button disabled={!fileEditor || Boolean(selectedProjectFolderPath)} role="menuitem" type="button" onClick={() => void shareCurrentProjectFile()}>
                             <Link2 size={14} /> Поделиться файлом
                           </button>
-                          <button role="menuitem" type="button" onClick={() => {
+                          <button disabled={!repoCanManage(selectedRepo)} role="menuitem" type="button" onClick={() => {
                             setIdeChatMenuOpen(false);
                             selectedRepo && openProjectSettings(selectedRepo);
                           }}>
@@ -13922,7 +14034,8 @@ function App() {
                     {renderPendingAttachments("attachment-list ide-chat-attachment-list")}
                     {attachmentNotice && <div className="notice danger ide-chat-attachment-notice">{attachmentNotice}</div>}
                     <textarea
-                      placeholder={activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту"}
+                      disabled={!repoCanWrite(selectedRepo)}
+                      placeholder={repoCanWrite(selectedRepo) ? (activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту") : "Public-проект открыт только для просмотра"}
                       value={ideChatPrompt}
                       onChange={(event) => {
                         setIdeChatPrompt(event.target.value);
@@ -13951,7 +14064,7 @@ function App() {
                       </label>
                       <button
                         className="ide-chat-submit-button"
-                        disabled={(!ideChatPrompt.trim() && !attachments.length) || ideChatSending || localCodexBusy || activeRunBusy}
+                        disabled={!repoCanWrite(selectedRepo) || (!ideChatPrompt.trim() && !attachments.length) || ideChatSending || localCodexBusy || activeRunBusy}
                         title={ideChatRunnerSummary()}
                         type="submit"
                       >
