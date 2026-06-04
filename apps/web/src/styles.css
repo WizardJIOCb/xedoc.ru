@@ -5779,24 +5779,50 @@ button.message-attachment.image:hover {
 
 .ide-chat-body.rich-text {
   gap: 7px;
+  font-size: var(--ide-chat-font-size);
+  line-height: var(--ide-chat-line-height);
 }
 
-.ide-chat-body h3 {
+.ide-chat-body p,
+.ide-chat-body ul,
+.ide-chat-body ol,
+.ide-chat-body blockquote,
+.ide-chat-body pre,
+.ide-chat-body table {
+  font-size: var(--ide-chat-font-size);
+  line-height: var(--ide-chat-line-height);
+}
+
+.ide-chat-body h1,
+.ide-chat-body h2,
+.ide-chat-body h3,
+.ide-chat-body h4,
+.ide-chat-body h5,
+.ide-chat-body h6 {
+  margin-top: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
   font-size: var(--ide-chat-heading-size);
   line-height: 1.28;
 }
 
 .ide-chat-body ul,
 .ide-chat-body ol {
-  padding-left: 18px;
+  gap: 3px;
+  padding-left: 16px;
 }
 
 .ide-chat-body li + li {
   margin-top: 3px;
 }
 
+.ide-chat-body blockquote {
+  padding: 6px 8px;
+}
+
 .ide-chat-body code {
   max-width: 100%;
+  font-size: var(--ide-chat-code-size);
   white-space: normal;
 }
 
@@ -5804,13 +5830,21 @@ button.message-attachment.image:hover {
   max-width: 100%;
   max-height: 260px;
   overflow: auto;
+  padding: 8px;
   font-size: var(--ide-chat-code-size);
 }
 
-.ide-chat-message .system-message-body.ide-chat-body {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
+.ide-chat-body .rich-code code {
+  white-space: pre;
+}
+
+.ide-chat-body .rich-table-wrap th,
+.ide-chat-body .rich-table-wrap td {
+  padding: 6px 8px;
+}
+
+.ide-chat-system-body {
+  color: var(--muted);
 }
 
 .ide-chat-message .message-attachments {

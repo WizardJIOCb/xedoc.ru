@@ -13671,9 +13671,14 @@ function App() {
                               <span className="ide-chat-message-author">{message.role === "user" ? (currentUser?.nickname || "You") : message.role === "assistant" ? "Codex" : message.role}</span>
                               <small>{formatDateTime(message.createdAt)}</small>
                             </div>
-                            {message.role === "system"
-                              ? <div className="system-message-body ide-chat-body">{normalizeDisplayText(message.content).trim()}</div>
-                              : renderRichText(message.content, "rich-text compact ide-chat-body", richTextOptions)}
+                            <MemoRichText
+                              className={`rich-text compact ide-chat-body${message.role === "system" ? " ide-chat-system-body" : ""}`}
+                              onFileReference={selectedRepo ? openProjectFile : undefined}
+                              projectReferenceNames={richTextOptions?.projectReferenceNames}
+                              projectRoot={richTextOptions?.projectRoot}
+                              projectRoots={richTextOptions?.projectRoots}
+                              value={message.content}
+                            />
                             {renderMessageAttachments(message.attachments, setImagePreview)}
                           </article>
                         );
