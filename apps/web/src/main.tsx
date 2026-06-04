@@ -8048,9 +8048,9 @@ function App() {
   }
 
   async function saveProjectFile() {
-    if (!fileEditor || fileEditor.loading || fileEditor.saving || !csrf) return;
-    if (fileEditor.binary) return;
-    if (fileEditor.content === fileEditor.originalContent) return;
+    if (!fileEditor || fileEditor.loading || fileEditor.saving || !csrf) return false;
+    if (fileEditor.binary) return false;
+    if (fileEditor.content === fileEditor.originalContent) return true;
     const { agentId, repoId, path, content } = fileEditor;
     setFileEditor((current) => current ? { ...current, saving: true, notice: "", error: "" } : current);
     setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: true, notice: "", error: "" } : tab));
@@ -8065,7 +8065,7 @@ function App() {
         setFileEditor((current) => current ? { ...current, saving: false, error: data.error || "Не получилось сохранить файл." } : current);
         setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: false, error: data.error || "Не получилось сохранить файл." } : tab));
         trackMetrikaGoal("file_save", { status: "failed", error: data.error, ext: fileExtensionForAnalytics(path) });
-        return;
+        return false;
       }
       const patchSaved = (current: ProjectFileEditor) => ({
         ...current,
@@ -8088,12 +8088,14 @@ function App() {
         size_bucket: byteBucketForAnalytics(typeof data.size === "number" ? data.size : content.length)
       });
       await refresh();
+      return true;
     } catch (error) {
       setFileEditor((current) => current
         ? { ...current, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." }
         : current);
       setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." } : tab));
       trackMetrikaGoal("file_save", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(path) });
+      return false;
     }
   }
 
@@ -8450,6 +8452,104 @@ function App() {
     } finally {
       projectActionBusyRef.current.deploy = false;
       setDeployBusy(false);
+    }
+  }
+
+  async function commitAndDeployProject() {
+    const commitMessage = effectiveGitMessage.trim();
+    if (
+      !selectedRepo
+      || !csrf
+      || !commitMessage
+      || !hasDeployConfig(selectedRepo)
+      || launchBusy
+      || gitBusy
+      || deployBusy
+      || projectActionBusyRef.current.commitDeploy
+    ) return;
+    projectActionBusyRef.current.commitDeploy = true;
+    const targetChatId = activeChatId || activeChat?.id || "";
+    const output: string[] = [];
+    const append = (label: string, text: string) => {
+      output.push(`== ${label} ==\n${text}`);
+      if (!targetChatId) setLaunchNotice(output.join("\n\n"));
+    };
+    const callProjectAction = async (label: string, path: string, body: Record<string, unknown> = {}) => {
+      if (!targetChatId) setLaunchNotice([...output, `== ${label} ==\nRunning...`].join("\n\n"));
+      const response = await api(path, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({ ...body, chatId: targetChatId || undefined })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+        throw new Error(data.output || data.error || `${label} failed.`);
+      }
+      append(label, data.output || "Done.");
+      if (targetChatId) await loadChat(targetChatId).catch(() => undefined);
+      return data;
+    };
+
+    setLaunchBusy(true);
+    setGitBusy(true);
+    setDeployBusy(true);
+    setActionMenuOpen(false);
+    setProjectActionsOpen(false);
+    setLaunchNotice(targetChatId ? "" : "Commit & Deploy started...");
+    try {
+      if (
+        fileEditor
+        && fileEditor.agentId === selectedRepo.agentId
+        && fileEditor.repoId === selectedRepo.id
+        && !fileEditor.binary
+        && fileEditor.content !== fileEditor.originalContent
+      ) {
+        if (!targetChatId) setLaunchNotice("Saving current file...");
+        const saved = await saveProjectFile();
+        if (!saved) throw new Error("Current file was not saved. Commit & Deploy stopped.");
+      }
+
+      const remoteUrl = gitRemoteUrl.trim() || selectedRepo.githubUrl || "";
+      const gitData = await callProjectAction(
+        "Commit & Push",
+        `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/git-sync`,
+        {
+          message: commitMessage,
+          remoteUrl: remoteUrl || undefined,
+          createRemote: Boolean(remoteUrl),
+          remoteVisibility: "private"
+        }
+      );
+      setGitRemoteUrl("");
+      setGitStatusContext("");
+      setGitMessageRefreshNotice("");
+      if (!targetChatId) setGitNotice(gitData.output || gitData.status || "Git sync completed.");
+
+      const deployData = await callProjectAction("Deploy", `/api/projects/${selectedRepo.agentId}/${selectedRepo.id}/deploy`);
+      if (!targetChatId) setDeployNotice(deployData.output || "Deploy completed.");
+
+      const url = projectUrl(selectedRepo.domain);
+      if (url) append("Open", url);
+      trackMetrikaGoal("project_commit_deploy", {
+        status: "success",
+        has_chat: Boolean(targetChatId),
+        has_remote: Boolean(remoteUrl)
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      append("Commit & Deploy failed", message);
+      if (!targetChatId) {
+        setGitNotice(message);
+        setDeployNotice(message);
+      }
+      trackMetrikaGoal("project_commit_deploy", { status: "failed", error: "client_error", has_chat: Boolean(targetChatId) });
+    } finally {
+      projectActionBusyRef.current.commitDeploy = false;
+      setLaunchBusy(false);
+      setGitBusy(false);
+      setDeployBusy(false);
+      await refresh();
     }
   }
 
@@ -11609,6 +11709,11 @@ function App() {
                   <span className="step-badge">1</span>
                   <span>Commit & push</span>
                 </button>
+                <button className="project-menu-action" disabled={launchBusy || gitBusy || deployBusy || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={commitAndDeployProject}>
+                  <UploadCloud size={16} />
+                  <span className="step-badge">1-2</span>
+                  <span>Commit & Deploy</span>
+                </button>
                 <button className="project-menu-action" disabled={launchBusy || buildBusy} role="menuitem" type="button" onClick={buildProject}>
                   <Terminal size={16} />
                   <span className="step-badge">B</span>
@@ -11837,7 +11942,7 @@ function App() {
               label: "Save",
               shortcut: "Ctrl+S",
               disabled: !csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent,
-              onClick: saveProjectFile
+              onClick: () => void saveProjectFile()
             })}
             {renderIdeMenuItem({
               icon: <RefreshCw size={14} />,
@@ -12070,6 +12175,12 @@ function App() {
             })}
             {renderIdeMenuItem({
               icon: <UploadCloud size={14} />,
+              label: "Commit & Deploy",
+              disabled: launchBusy || gitBusy || deployBusy || !selectedRepo || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo),
+              onClick: commitAndDeployProject
+            })}
+            {renderIdeMenuItem({
+              icon: <UploadCloud size={14} />,
               label: "Deploy",
               disabled: deployBusy || !selectedRepo || !hasDeployConfig(selectedRepo),
               onClick: deployProject
@@ -12141,7 +12252,7 @@ function App() {
           <button
             className="secondary compact"
             disabled={!csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent}
-            onClick={saveProjectFile}
+            onClick={() => void saveProjectFile()}
             type="button"
           >
             <Save size={15} />
@@ -12168,7 +12279,7 @@ function App() {
   function renderIdeCommandPalette(editor: ProjectFileEditor) {
     if (!ideCommandPaletteOpen) return null;
     const commandItems = [
-      { group: "File", label: "Save current file", shortcut: "Ctrl+S", disabled: !csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent, run: saveProjectFile },
+      { group: "File", label: "Save current file", shortcut: "Ctrl+S", disabled: !csrf || editor.binary || editor.loading || editor.saving || editor.content === editor.originalContent, run: () => void saveProjectFile() },
       { group: "File", label: "Reload current file", run: () => openProjectFile(editor.path) },
       { group: "File", label: "Copy file path", run: () => copyEditorPath(editor.path) },
       { group: "Edit", label: "Find in file", shortcut: "Ctrl+F", run: focusEditorFind },
@@ -12181,6 +12292,7 @@ function App() {
       { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo, run: buildProject },
       { group: "Run", label: "Launch project", disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: launchProject },
       { group: "Project", label: "Commit & Push", disabled: !selectedRepo || gitBusy || !effectiveGitMessage.trim(), run: runGitSync },
+      { group: "Project", label: "Commit & Deploy", disabled: launchBusy || gitBusy || deployBusy || !selectedRepo || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo), run: commitAndDeployProject },
       { group: "Project", label: "Deploy", disabled: deployBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: deployProject },
       { group: "Project", label: "Configure Nginx", disabled: nginxBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureNginx },
       { group: "Project", label: "Issue SSL", disabled: sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo) || !selectedRepo.domain, run: configureSsl },
@@ -12980,6 +13092,14 @@ function App() {
                           <span className="step-badge">1</span>
                           <span>Commit & push</span>
                         </button>
+                        <button disabled={launchBusy || gitBusy || deployBusy || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo)} role="menuitem" type="button" onClick={() => {
+                          setProjectActionsOpen(false);
+                          void commitAndDeployProject();
+                        }}>
+                          <UploadCloud size={16} />
+                          <span className="step-badge">1-2</span>
+                          <span>Commit & Deploy</span>
+                        </button>
                         <button disabled={launchBusy || buildBusy} role="menuitem" type="button" onClick={() => {
                           setProjectActionsOpen(false);
                           void buildProject();
@@ -13467,7 +13587,7 @@ function App() {
                       theme={editorTheme}
                       value={fileEditor.content}
                       onOpenFile={openProjectFile}
-                      onSave={saveProjectFile}
+                      onSave={() => void saveProjectFile()}
                       onCursorChange={setEditorCursor}
                       onChange={(value) => {
                         setFileEditor((current) => current ? { ...current, content: value, notice: "" } : current);
