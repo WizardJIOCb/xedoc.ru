@@ -4771,6 +4771,9 @@ function App() {
   const fileEditorGutterRef = useRef<HTMLDivElement | null>(null);
   const editorFindInputRef = useRef<HTMLInputElement | null>(null);
   const ideChatFeedRef = useRef<HTMLDivElement | null>(null);
+  const ideChatScrollStateRafRef = useRef<number | undefined>(undefined);
+  const ideChatStickToBottomRef = useRef(true);
+  const ideChatAutoScrollingUntilRef = useRef(0);
   const ideMenuRef = useRef<HTMLElement | null>(null);
   const ideCommandInputRef = useRef<HTMLInputElement | null>(null);
   const currentScrollChatRef = useRef("");
@@ -5064,25 +5067,57 @@ function App() {
     window.setTimeout(updateChatBottomState, behavior === "smooth" ? 260 : 0);
   }
 
-  function updateIdeChatScrollDirection() {
+  function updateIdeChatScrollState(source: "scroll" | "measure" = "measure") {
     const feed = ideChatFeedRef.current;
     if (!feed) {
       setIdeChatScrollDirection("");
       return;
     }
-    const maxScrollTop = feed.scrollHeight - feed.clientHeight;
-    if (maxScrollTop <= 24) {
+    if (feed.clientHeight <= 0) {
       setIdeChatScrollDirection("");
       return;
     }
+    const maxScrollTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
+    if (maxScrollTop <= 24) {
+      ideChatStickToBottomRef.current = true;
+      setIdeChatScrollDirection("");
+      return;
+    }
+    const distanceToBottom = maxScrollTop - feed.scrollTop;
+    const atBottom = distanceToBottom <= CHAT_BOTTOM_THRESHOLD_PX;
+    if (atBottom) ideChatStickToBottomRef.current = true;
+    else if (source === "scroll" && Date.now() > ideChatAutoScrollingUntilRef.current) ideChatStickToBottomRef.current = false;
     setIdeChatScrollDirection(feed.scrollTop > maxScrollTop / 2 ? "up" : "down");
+  }
+
+  function scheduleIdeChatScrollStateUpdate(source: "scroll" | "measure" = "measure") {
+    if (ideChatScrollStateRafRef.current) return;
+    ideChatScrollStateRafRef.current = window.requestAnimationFrame(() => {
+      ideChatScrollStateRafRef.current = undefined;
+      updateIdeChatScrollState(source);
+    });
+  }
+
+  function scrollIdeChatToBottom(behavior: ScrollBehavior = "auto") {
+    const feed = ideChatFeedRef.current;
+    if (!feed || feed.clientHeight <= 0) return;
+    ideChatAutoScrollingUntilRef.current = Date.now() + (behavior === "smooth" ? 420 : 80);
+    feed.scrollTo({ top: feed.scrollHeight, behavior });
+    ideChatStickToBottomRef.current = true;
+    window.setTimeout(() => updateIdeChatScrollState("measure"), behavior === "smooth" ? 260 : 0);
   }
 
   function scrollIdeChatFeed(direction = ideChatScrollDirection) {
     const feed = ideChatFeedRef.current;
     if (!feed || !direction) return;
-    feed.scrollTo({ top: direction === "up" ? 0 : feed.scrollHeight, behavior: "smooth" });
-    window.setTimeout(updateIdeChatScrollDirection, 280);
+    if (direction === "down") {
+      scrollIdeChatToBottom("smooth");
+      return;
+    }
+    ideChatAutoScrollingUntilRef.current = Date.now() + 420;
+    ideChatStickToBottomRef.current = false;
+    feed.scrollTo({ top: 0, behavior: "smooth" });
+    window.setTimeout(() => updateIdeChatScrollState("measure"), 280);
   }
 
   function updateComposerPlacement() {
@@ -6550,13 +6585,54 @@ function App() {
   }, [ideChatTextStyle]);
 
   useEffect(() => {
-    if (!fileEditor || !ideChatPanelOpen || ideMobilePane !== "chat") {
+    const feed = ideChatFeedRef.current;
+    if (!fileEditor || !ideChatPanelOpen || !feed) {
+      ideChatStickToBottomRef.current = true;
       setIdeChatScrollDirection("");
       return;
     }
-    const frame = window.requestAnimationFrame(updateIdeChatScrollDirection);
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeChatId, fileEditor, ideChatMessages.length, ideChatPanelOpen, ideMobilePane]);
+
+    ideChatStickToBottomRef.current = true;
+    const stickOrMeasure = () => {
+      if (ideChatStickToBottomRef.current) scrollIdeChatToBottom("auto");
+      else scheduleIdeChatScrollStateUpdate("measure");
+    };
+    const observeMessageHeights = (observer: ResizeObserver) => {
+      observer.disconnect();
+      observer.observe(feed);
+      Array.from(feed.children).forEach((child) => observer.observe(child));
+    };
+
+    const resizeObserver = new ResizeObserver(stickOrMeasure);
+    observeMessageHeights(resizeObserver);
+    const mutationObserver = new MutationObserver((records) => {
+      if (records.some((record) => record.type === "childList")) observeMessageHeights(resizeObserver);
+      stickOrMeasure();
+    });
+    mutationObserver.observe(feed, { childList: true, characterData: true, subtree: true });
+
+    const timers: number[] = [];
+    const frame = window.requestAnimationFrame(() => {
+      stickOrMeasure();
+      timers.push(window.setTimeout(stickOrMeasure, 40));
+      timers.push(window.setTimeout(stickOrMeasure, 180));
+      timers.push(window.setTimeout(stickOrMeasure, 420));
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      timers.forEach((timer) => window.clearTimeout(timer));
+      mutationObserver.disconnect();
+      resizeObserver.disconnect();
+    };
+  }, [
+    activeChatId,
+    Boolean(fileEditor),
+    ideChatPanelOpen,
+    ideChatTextSize,
+    ideChatTextStyle,
+    ideMobilePane
+  ]);
 
   useEffect(() => {
     try {
@@ -6693,6 +6769,7 @@ function App() {
       if (loadAllJobsTimerRef.current) window.clearTimeout(loadAllJobsTimerRef.current);
       if (wsFlushRafRef.current) window.cancelAnimationFrame(wsFlushRafRef.current);
       if (scrollStateRafRef.current) window.cancelAnimationFrame(scrollStateRafRef.current);
+      if (ideChatScrollStateRafRef.current) window.cancelAnimationFrame(ideChatScrollStateRafRef.current);
       ws?.close();
     };
   }, [csrf]);
@@ -13649,7 +13726,7 @@ function App() {
                       )}
                     </div>
                   </header>
-                  <div className="ide-chat-feed" ref={ideChatFeedRef} onScroll={updateIdeChatScrollDirection}>
+                  <div className="ide-chat-feed" ref={ideChatFeedRef} onScroll={() => scheduleIdeChatScrollStateUpdate("scroll")}>
                     {activeChat ? (
                       ideChatMessages.length ? ideChatMessages.map((message) => {
                         const richTextOptions: RichTextOptions | undefined = selectedRepo ? {
