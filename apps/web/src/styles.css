@@ -4722,11 +4722,11 @@ button.message-attachment.image:hover {
 }
 
 .file-editor-workspace.without-editor.with-chat.chat-width-small {
-  grid-template-columns: minmax(210px, 270px) minmax(240px, 300px);
+  grid-template-columns: minmax(210px, 270px) minmax(0, 1fr);
 }
 
 .file-editor-workspace.without-editor.with-chat.chat-width-large {
-  grid-template-columns: minmax(190px, 240px) minmax(520px, 680px);
+  grid-template-columns: minmax(210px, 270px) minmax(0, 1fr);
 }
 
 .file-editor-workspace.without-explorer.without-editor {
@@ -5710,7 +5710,19 @@ button.message-attachment.image:hover {
 }
 
 .ide-chat-panel.wide .ide-chat-message {
-  max-width: min(980px, 100%);
+  width: 100%;
+  max-width: none;
+}
+
+.ide-chat-panel.wide .ide-chat-body,
+.ide-chat-panel.wide .ide-chat-composer,
+.ide-chat-panel.wide .ide-chat-empty {
+  width: 100%;
+  max-width: 100%;
+}
+
+.ide-chat-panel.wide.chat-style-reader .ide-chat-body {
+  max-width: 100%;
 }
 
 .ide-chat-panel.chat-style-plain .ide-chat-message {
