@@ -8047,13 +8047,15 @@ function App() {
     }
   }
 
-  async function saveProjectFile() {
-    if (!fileEditor || fileEditor.loading || fileEditor.saving || !csrf) return false;
-    if (fileEditor.binary) return false;
-    if (fileEditor.content === fileEditor.originalContent) return true;
-    const { agentId, repoId, path, content } = fileEditor;
-    setFileEditor((current) => current ? { ...current, saving: true, notice: "", error: "" } : current);
-    setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: true, notice: "", error: "" } : tab));
+  async function saveProjectFile(targetEditor = fileEditor, options: { refreshAfterSave?: boolean } = {}) {
+    if (!targetEditor || targetEditor.loading || targetEditor.saving || !csrf) return false;
+    if (targetEditor.binary) return false;
+    if (targetEditor.content === targetEditor.originalContent) return true;
+    const { agentId, repoId, path, content } = targetEditor;
+    const targetKey = editorFileKey(targetEditor);
+    const refreshAfterSave = options.refreshAfterSave ?? true;
+    setFileEditor((current) => current && editorFileKey(current) === targetKey ? { ...current, saving: true, notice: "", error: "" } : current);
+    setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === targetKey ? { ...tab, saving: true, notice: "", error: "" } : tab));
     try {
       const response = await api(`/api/projects/${encodeURIComponent(agentId)}/${encodeURIComponent(repoId)}/files/write`, {
         method: "PUT",
@@ -8062,8 +8064,8 @@ function App() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setFileEditor((current) => current ? { ...current, saving: false, error: data.error || "Не получилось сохранить файл." } : current);
-        setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: false, error: data.error || "Не получилось сохранить файл." } : tab));
+        setFileEditor((current) => current && editorFileKey(current) === targetKey ? { ...current, saving: false, error: data.error || "Не получилось сохранить файл." } : current);
+        setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === targetKey ? { ...tab, saving: false, error: data.error || "Не получилось сохранить файл." } : tab));
         trackMetrikaGoal("file_save", { status: "failed", error: data.error, ext: fileExtensionForAnalytics(path) });
         return false;
       }
@@ -8076,27 +8078,57 @@ function App() {
         error: ""
       });
       setFileEditor((current) => current
+        && editorFileKey(current) === targetKey
         ? {
             ...patchSaved(current),
             content
           }
         : current);
-      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...patchSaved(tab), content } : tab));
+      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === targetKey ? { ...patchSaved(tab), content } : tab));
       trackMetrikaGoal("file_save", {
         status: "success",
         ext: fileExtensionForAnalytics(data.path || path),
         size_bucket: byteBucketForAnalytics(typeof data.size === "number" ? data.size : content.length)
       });
-      await refresh();
+      if (refreshAfterSave) await refresh();
       return true;
     } catch (error) {
       setFileEditor((current) => current
+        && editorFileKey(current) === targetKey
         ? { ...current, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." }
         : current);
-      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === editorFileKey(fileEditor) ? { ...tab, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." } : tab));
+      setFileEditorTabs((current) => current.map((tab) => editorFileKey(tab) === targetKey ? { ...tab, saving: false, error: error instanceof Error ? error.message : "Не получилось сохранить файл." } : tab));
       trackMetrikaGoal("file_save", { status: "failed", error: "client_error", ext: fileExtensionForAnalytics(path) });
       return false;
     }
+  }
+
+  async function saveDirtyProjectEditorTabs(repo: Repo) {
+    const dirtyTabsByKey = new Map<string, ProjectFileEditor>();
+    fileEditorTabs.forEach((tab) => {
+      if (tab.agentId !== repo.agentId || tab.repoId !== repo.id || tab.binary || tab.content === tab.originalContent) return;
+      dirtyTabsByKey.set(editorFileKey(tab), tab);
+    });
+    if (
+      fileEditor
+      && fileEditor.agentId === repo.agentId
+      && fileEditor.repoId === repo.id
+      && !fileEditor.binary
+      && fileEditor.content !== fileEditor.originalContent
+    ) {
+      dirtyTabsByKey.set(editorFileKey(fileEditor), fileEditor);
+    }
+    const dirtyTabs = Array.from(dirtyTabsByKey.values());
+    const blockedTab = dirtyTabs.find((tab) => tab.loading || tab.saving);
+    if (blockedTab) {
+      throw new Error(`File ${blockedTab.path} is still loading or saving. Commit & Deploy stopped.`);
+    }
+    for (const tab of dirtyTabs) {
+      const saved = await saveProjectFile(tab, { refreshAfterSave: false });
+      if (!saved) throw new Error(`File ${tab.path} was not saved. Commit & Deploy stopped.`);
+    }
+    if (dirtyTabs.length) await refresh();
+    return dirtyTabs.length;
   }
 
   function closeProjectFileTab(tab = fileEditor) {
@@ -8498,17 +8530,8 @@ function App() {
     setProjectActionsOpen(false);
     setLaunchNotice(targetChatId ? "" : "Commit & Deploy started...");
     try {
-      if (
-        fileEditor
-        && fileEditor.agentId === selectedRepo.agentId
-        && fileEditor.repoId === selectedRepo.id
-        && !fileEditor.binary
-        && fileEditor.content !== fileEditor.originalContent
-      ) {
-        if (!targetChatId) setLaunchNotice("Saving current file...");
-        const saved = await saveProjectFile();
-        if (!saved) throw new Error("Current file was not saved. Commit & Deploy stopped.");
-      }
+      const savedTabs = await saveDirtyProjectEditorTabs(selectedRepo);
+      if (!targetChatId && savedTabs > 0) setLaunchNotice(`Saved ${savedTabs} file${savedTabs === 1 ? "" : "s"}.`);
 
       const remoteUrl = gitRemoteUrl.trim() || selectedRepo.githubUrl || "";
       const gitData = await callProjectAction(
