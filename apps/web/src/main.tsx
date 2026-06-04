@@ -12266,6 +12266,14 @@ function App() {
               disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo),
               onClick: launchProject
             })}
+            {renderIdeMenuItem({
+              icon: <ExternalLink size={14} />,
+              label: selectedRepo?.domain ? `Open Project Link (${selectedRepo.domain})` : "Open Project Link",
+              disabled: !selectedProjectUrl,
+              onClick: () => {
+                if (selectedProjectUrl) window.open(selectedProjectUrl, "_blank", "noopener,noreferrer");
+              }
+            })}
             <div className="ide-menu-divider" />
             {renderIdeMenuItem({
               icon: <GitBranch size={14} />,
@@ -12391,6 +12399,7 @@ function App() {
       { group: "View", label: fileEditorFullscreen ? "Exit Full Screen" : "Full Screen", shortcut: "F11", run: () => setFileEditorFullscreen((value) => !value) },
       { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo, run: buildProject },
       { group: "Run", label: "Launch project", disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: launchProject },
+      { group: "Run", label: selectedRepo?.domain ? `Open Project Link (${selectedRepo.domain})` : "Open Project Link", disabled: !selectedProjectUrl, run: () => selectedProjectUrl && window.open(selectedProjectUrl, "_blank", "noopener,noreferrer") },
       { group: "Project", label: "Commit & Push", disabled: !selectedRepo || gitBusy || !effectiveGitMessage.trim(), run: runGitSync },
       { group: "Project", label: "Commit & Deploy", disabled: launchBusy || gitBusy || deployBusy || !selectedRepo || !effectiveGitMessage.trim() || !hasDeployConfig(selectedRepo), run: commitAndDeployProject },
       { group: "Project", label: "Deploy", disabled: deployBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: deployProject },
