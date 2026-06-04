@@ -3,7 +3,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rm
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import WebSocket from "ws";
 import { ServerToAgentSchema, type AgentToServer, type CodexUsage, type LocalCodexActivity, type ServerToAgent } from "@cmc/protocol";
-import { loadAgentConfig, saveAgentConfig } from "./config.js";
+import { loadAgentConfig, saveAgentConfig, type RepoConfig } from "./config.js";
 import { Runner } from "./codex-runner.js";
 import { detectLocalCodexActivity } from "./local-activity.js";
 import { syncLocalChats, type SyncLocalChatsResult } from "./local-chat-sync.js";
@@ -1380,6 +1380,44 @@ function optionalServerPath(projectPath: string, value: string | undefined): str
   return trimmed === "." ? projectPath : trimmed;
 }
 
+function safeProjectSegment(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+}
+
+function isWindowsProjectPath(value: string): boolean {
+  return /^[a-z]:[\\/]/i.test(value.trim()) || value.trim().startsWith("\\\\");
+}
+
+function normalizeIncomingProjectPath(repoId: string, projectPath: string): string {
+  const trimmed = projectPath.trim();
+  if (process.platform !== "win32" && isWindowsProjectPath(trimmed)) {
+    return join(SERVER_PROJECTS_ROOT, safeProjectSegment(config.agentId), safeProjectSegment(repoId));
+  }
+  return trimmed;
+}
+
+function normalizeIncomingProjectData(data: RepoConfig["data"] | null | undefined, projectPath: string): RepoConfig["data"] | undefined {
+  if (!data) return undefined;
+  if (process.platform !== "win32" && isWindowsProjectPath(data.path)) {
+    return { ...data, path: join(projectPath, "data") };
+  }
+  return data;
+}
+
+function normalizeIncomingDeploy(deploy: RepoConfig["deploy"] | null | undefined): RepoConfig["deploy"] | undefined {
+  if (!deploy) return undefined;
+  if (!deploy.buildCommand || process.platform === "win32") return deploy;
+  const command = deploy.buildCommand.command;
+  if (!/\.cmd$/i.test(command)) return deploy;
+  return {
+    ...deploy,
+    buildCommand: {
+      ...deploy.buildCommand,
+      command: command.slice(0, -4)
+    }
+  };
+}
+
 async function hello(): Promise<AgentToServer> {
   const [repos, codexVersion, grokVersion, gitVersion, codexUsage, grokUsage] = await Promise.all([
     scanRepos(config),
@@ -1554,16 +1592,19 @@ function connect() {
       try {
         logProgress(`project: Creating ${message.project.name}.`);
         if (config.repos.some((repo) => repo.id === message.project.id)) throw new Error("Project id already exists.");
-        await prepareProjectFolder(message.project.path, message.project.cloneGit === false ? undefined : message.project.githubUrl);
+        const projectPath = normalizeIncomingProjectPath(message.project.id, message.project.path);
+        const projectDeploy = normalizeIncomingDeploy(message.project.deploy);
+        const projectData = normalizeIncomingProjectData(message.project.data, projectPath);
+        await prepareProjectFolder(projectPath, message.project.cloneGit === false ? undefined : message.project.githubUrl);
         config.repos.push({
           id: message.project.id,
           name: message.project.name,
-          path: message.project.path,
+          path: projectPath,
           githubUrl: optionalText(message.project.githubUrl),
-          serverPath: optionalServerPath(message.project.path, message.project.serverPath),
+          serverPath: optionalServerPath(projectPath, message.project.serverPath),
           domain: optionalText(message.project.domain),
-          deploy: message.project.deploy ?? undefined,
-          data: message.project.data ?? undefined,
+          deploy: projectDeploy,
+          data: projectData,
           defaultSandbox: message.project.defaultSandbox,
           allowedSandboxes: message.project.allowedSandboxes,
           testCommands: []
@@ -1584,16 +1625,19 @@ function connect() {
         let repo = config.repos.find((item) => item.id === message.repoId);
         if (!repo) {
           if (!message.patch.name || !message.patch.path) throw new Error("Project not found in agent config.");
-          await prepareProjectFolder(message.patch.path, message.patch.githubUrl);
+          const projectPath = normalizeIncomingProjectPath(message.repoId, message.patch.path);
+          const projectDeploy = normalizeIncomingDeploy(message.patch.deploy);
+          const projectData = normalizeIncomingProjectData(message.patch.data, projectPath);
+          await prepareProjectFolder(projectPath, message.patch.githubUrl);
           repo = {
             id: message.repoId,
             name: message.patch.name,
-            path: message.patch.path,
+            path: projectPath,
             githubUrl: optionalText(message.patch.githubUrl),
-            serverPath: optionalServerPath(message.patch.path, message.patch.serverPath),
+            serverPath: optionalServerPath(projectPath, message.patch.serverPath),
             domain: optionalText(message.patch.domain),
-            deploy: message.patch.deploy ?? undefined,
-            data: message.patch.data ?? undefined,
+            deploy: projectDeploy,
+            data: projectData,
             defaultSandbox: message.patch.defaultSandbox ?? "danger-full-access",
             allowedSandboxes: message.patch.allowedSandboxes ?? ["read-only", "workspace-write", "danger-full-access"],
             testCommands: []
@@ -1601,15 +1645,16 @@ function connect() {
           config.repos.push(repo);
         } else {
           if (message.patch.path) {
-            await prepareProjectFolder(message.patch.path, "githubUrl" in message.patch ? optionalText(message.patch.githubUrl) : repo.githubUrl);
-            repo.path = message.patch.path;
+            const projectPath = normalizeIncomingProjectPath(message.repoId, message.patch.path);
+            await prepareProjectFolder(projectPath, "githubUrl" in message.patch ? optionalText(message.patch.githubUrl) : repo.githubUrl);
+            repo.path = projectPath;
           }
           if (message.patch.name) repo.name = message.patch.name;
           if ("githubUrl" in message.patch) repo.githubUrl = optionalText(message.patch.githubUrl);
           if ("serverPath" in message.patch) repo.serverPath = optionalServerPath(repo.path, message.patch.serverPath);
           if ("domain" in message.patch) repo.domain = optionalText(message.patch.domain);
-          if ("deploy" in message.patch) repo.deploy = message.patch.deploy ?? undefined;
-          if ("data" in message.patch) repo.data = message.patch.data ?? undefined;
+          if ("deploy" in message.patch) repo.deploy = normalizeIncomingDeploy(message.patch.deploy);
+          if ("data" in message.patch) repo.data = normalizeIncomingProjectData(message.patch.data, repo.path);
           if (message.patch.defaultSandbox) repo.defaultSandbox = message.patch.defaultSandbox;
           if (message.patch.allowedSandboxes) repo.allowedSandboxes = message.patch.allowedSandboxes;
         }
