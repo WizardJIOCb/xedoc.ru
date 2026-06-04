@@ -37,6 +37,7 @@ const FILE_TREE_IGNORED_DIRS = new Set([
   "target",
   "vendor"
 ]);
+const LOCAL_DEPLOY_IGNORED_ENTRIES = new Set([".git", ".env", ".cache", "node_modules"]);
 
 const IMAGE_MIME_TYPES = new Map([
   [".apng", "image/apng"],
@@ -878,6 +879,10 @@ async function deployProjectLocal(sourceDir: string, deployPath: string, cleanRe
     }
   }
   for (const name of readdirSync(sourceDir)) {
+    if (LOCAL_DEPLOY_IGNORED_ENTRIES.has(name)) {
+      output.push(`Skipped deploy-only entry: ${name}`);
+      continue;
+    }
     cpSync(join(sourceDir, name), join(deployPath, name), { recursive: true, force: true });
   }
   if (process.platform !== "win32") {
@@ -915,6 +920,11 @@ async function configureNginx(repoId: string): Promise<string> {
     "        expires 7d;",
     "        access_log off;",
     "        try_files $uri =404;",
+    "    }",
+    "",
+    "    location ~ /\\.(?!well-known(?:/|$)) {",
+    "        deny all;",
+    "        return 404;",
     "    }"
   ];
   const httpConfig = [
