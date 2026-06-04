@@ -4689,6 +4689,14 @@ button.message-attachment.image:hover {
   grid-template-columns: minmax(210px, 270px) minmax(0, 1fr) minmax(260px, 340px);
 }
 
+.file-editor-workspace.with-chat.chat-width-small {
+  grid-template-columns: minmax(210px, 270px) minmax(0, 1fr) minmax(240px, 300px);
+}
+
+.file-editor-workspace.with-chat.chat-width-large {
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr) minmax(520px, 680px);
+}
+
 .file-editor-workspace.without-explorer {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -4697,12 +4705,28 @@ button.message-attachment.image:hover {
   grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
 }
 
+.file-editor-workspace.without-explorer.with-chat.chat-width-small {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+}
+
+.file-editor-workspace.without-explorer.with-chat.chat-width-large {
+  grid-template-columns: minmax(0, 1fr) minmax(520px, 680px);
+}
+
 .file-editor-workspace.without-editor {
   grid-template-columns: minmax(210px, 280px);
 }
 
 .file-editor-workspace.without-editor.with-chat {
   grid-template-columns: minmax(210px, 270px) minmax(0, 1fr);
+}
+
+.file-editor-workspace.without-editor.with-chat.chat-width-small {
+  grid-template-columns: minmax(210px, 270px) minmax(240px, 300px);
+}
+
+.file-editor-workspace.without-editor.with-chat.chat-width-large {
+  grid-template-columns: minmax(190px, 240px) minmax(520px, 680px);
 }
 
 .file-editor-workspace.without-explorer.without-editor {
@@ -8936,6 +8960,12 @@ button:disabled {
     grid-template-rows: minmax(0, 1fr);
   }
 
+  .file-editor-workspace.with-chat.chat-width-small,
+  .file-editor-workspace.with-chat.chat-width-large {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
   .file-editor-workspace.without-explorer {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr);
@@ -8946,12 +8976,24 @@ button:disabled {
     grid-template-rows: minmax(0, 1fr) minmax(124px, 22dvh);
   }
 
+  .file-editor-workspace.without-explorer.with-chat.chat-width-small,
+  .file-editor-workspace.without-explorer.with-chat.chat-width-large {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(124px, 22dvh);
+  }
+
   .file-editor-workspace.without-editor {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(140px, 1fr);
   }
 
   .file-editor-workspace.without-editor.with-chat {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(84px, 16dvh) minmax(0, 1fr);
+  }
+
+  .file-editor-workspace.without-editor.with-chat.chat-width-small,
+  .file-editor-workspace.without-editor.with-chat.chat-width-large {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(84px, 16dvh) minmax(0, 1fr);
   }

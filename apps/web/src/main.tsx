@@ -88,6 +88,7 @@ type ProjectGitMode = "blank" | "github-create" | "clone";
 type UiTheme = "paper" | "graphite" | "lagoon" | "moss" | "rose";
 type EditorTheme = "xedoc-light" | "xedoc-dark" | "xedoc-aurora" | "xedoc-midnight" | "vs-light" | "vs-dark" | "hc-black";
 type IdeChatTextSize = "small" | "normal" | "large";
+type IdeChatWidth = "small" | "normal" | "large";
 type IdeChatTextStyle = "cards" | "plain" | "reader";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
 type ProjectSettingsTab = "general" | "git" | "deploy" | "data" | "access" | "automation";
@@ -114,6 +115,11 @@ const EDITOR_THEME_OPTIONS: Array<{ value: EditorTheme; label: string; note: str
   { value: "hc-black", label: "High Contrast", note: "Maximum contrast", swatches: ["#000000", "#ffffff", "#1aebff", "#ffcc00"] }
 ];
 const IDE_CHAT_TEXT_SIZE_OPTIONS: Array<{ value: IdeChatTextSize; label: string }> = [
+  { value: "small", label: "Small" },
+  { value: "normal", label: "Default" },
+  { value: "large", label: "Large" }
+];
+const IDE_CHAT_WIDTH_OPTIONS: Array<{ value: IdeChatWidth; label: string }> = [
   { value: "small", label: "Small" },
   { value: "normal", label: "Default" },
   { value: "large", label: "Large" }
@@ -1021,6 +1027,10 @@ function isEditorTheme(value: string | null): value is EditorTheme {
 
 function isIdeChatTextSize(value: string | null): value is IdeChatTextSize {
   return IDE_CHAT_TEXT_SIZE_OPTIONS.some((option) => option.value === value);
+}
+
+function isIdeChatWidth(value: string | null): value is IdeChatWidth {
+  return IDE_CHAT_WIDTH_OPTIONS.some((option) => option.value === value);
 }
 
 function isIdeChatTextStyle(value: string | null): value is IdeChatTextStyle {
@@ -4414,6 +4424,15 @@ function App() {
     }
     return "normal";
   });
+  const [ideChatWidth, setIdeChatWidth] = useState<IdeChatWidth>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.ideChatWidth");
+      if (isIdeChatWidth(stored)) return stored;
+    } catch {
+      // Ignore blocked storage.
+    }
+    return "normal";
+  });
   const [ideChatTextStyle, setIdeChatTextStyle] = useState<IdeChatTextStyle>(() => {
     try {
       const stored = localStorage.getItem("cmc.ideChatTextStyle");
@@ -6563,6 +6582,14 @@ function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem("cmc.ideChatWidth", ideChatWidth);
+    } catch {
+      // IDE chat display is local preference only.
+    }
+  }, [ideChatWidth]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem("cmc.ideChatTextStyle", ideChatTextStyle);
     } catch {
       // IDE chat display is local preference only.
@@ -8512,7 +8539,8 @@ function App() {
       `mobile-pane-${ideMobilePane}`,
       ideExplorerOpen ? "" : "without-explorer",
       ideEditorPaneOpen ? "" : "without-editor",
-      ideChatPanelOpen ? "with-chat" : ""
+      ideChatPanelOpen ? "with-chat" : "",
+      ideChatPanelOpen ? `chat-width-${ideChatWidth}` : ""
     ].filter(Boolean).join(" ");
   }
 
@@ -12211,6 +12239,24 @@ function App() {
               </button>
             ))}
             <div className="ide-menu-divider" />
+            <span className="ide-menu-title">Chat Width</span>
+            {IDE_CHAT_WIDTH_OPTIONS.map((option) => (
+              <button
+                className={ideChatWidth === option.value ? "ide-menu-item checked" : "ide-menu-item"}
+                key={option.value}
+                role="menuitemradio"
+                aria-checked={ideChatWidth === option.value}
+                type="button"
+                onClick={() => {
+                  setIdeChatWidth(option.value);
+                  setIdeMenuOpen("");
+                }}
+              >
+                <span className="ide-menu-check">{ideChatWidth === option.value && <Check size={14} />}</span>
+                <span>{option.label}</span>
+              </button>
+            ))}
+            <div className="ide-menu-divider" />
             <span className="ide-menu-title">Chat Text Style</span>
             {IDE_CHAT_TEXT_STYLE_OPTIONS.map((option) => (
               <button
@@ -12369,11 +12415,11 @@ function App() {
           </>
         ))}
         <span className="ide-menu-spacer" />
+        <span className="ide-menu-status project" title={selectedRepo?.name ?? editor.repoName}>{selectedRepo?.name ?? editor.repoName}</span>
         <button className="ide-menu-pill" type="button" onClick={() => setIdeChatPanelOpen((value) => !value)}>
           <MessageSquare size={13} />
           {ideChatPanelOpen ? "Chat on" : "Chat off"}
         </button>
-        <span className="ide-menu-status project" title={selectedRepo?.name ?? editor.repoName}>{selectedRepo?.name ?? editor.repoName}</span>
         <div className="file-editor-actions in-menubar">
           <button
             className="secondary compact"
@@ -12413,6 +12459,13 @@ function App() {
       { group: "View", label: ideExplorerOpen ? "Hide Explorer" : "Show Explorer", run: () => setIdeExplorerOpen((value) => !value) },
       { group: "View", label: ideEditorPaneOpen ? "Hide Code Editor" : "Show Code Editor", run: toggleIdeEditorPane },
       { group: "View", label: ideChatPanelOpen ? "Hide Chat" : "Show Chat", run: toggleIdeChatPanel },
+      ...IDE_CHAT_WIDTH_OPTIONS.map((option) => ({
+        group: "View",
+        label: `Chat width: ${option.label}`,
+        shortcut: undefined,
+        disabled: ideChatWidth === option.value,
+        run: () => setIdeChatWidth(option.value)
+      })),
       { group: "View", label: fileEditorFullscreen ? "Exit Full Screen" : "Full Screen", shortcut: "F11", run: () => setFileEditorFullscreen((value) => !value) },
       { group: "Run", label: "Build project", disabled: buildBusy || !selectedRepo, run: buildProject },
       { group: "Run", label: "Launch project", disabled: launchBusy || gitBusy || buildBusy || deployBusy || nginxBusy || sslBusy || !selectedRepo || !hasDeployConfig(selectedRepo), run: launchProject },
