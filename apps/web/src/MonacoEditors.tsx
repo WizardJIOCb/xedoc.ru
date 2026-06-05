@@ -670,7 +670,7 @@ export function MonacoCodeEditor({
   return <div className="monaco-editor-host" ref={containerRef} />;
 }
 
-export function MonacoReadOnlyCodeViewer({ value, path }: { value: string; path: string }) {
+export function MonacoReadOnlyCodeViewer({ value, path, fullHeight = false }: { value: string; path: string; fullHeight?: boolean }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
@@ -723,5 +723,11 @@ export function MonacoReadOnlyCodeViewer({ value, path }: { value: string; path:
     model.setValue(value);
   }, [value]);
 
-  return <div className="monaco-editor-host public-file-code-editor" ref={containerRef} style={{ height: `min(72vh, ${heightPx}px)` }} />;
+  return (
+    <div
+      className={fullHeight ? "monaco-editor-host public-file-code-editor full-height" : "monaco-editor-host public-file-code-editor"}
+      ref={containerRef}
+      style={fullHeight ? undefined : { height: `min(72vh, ${heightPx}px)` }}
+    />
+  );
 }

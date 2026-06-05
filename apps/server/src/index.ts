@@ -2429,6 +2429,8 @@ function serializePublicFileShare(row: PublicFileShareRow, request: { protocol: 
     url: publicFileShareUrl(request, row.token),
     path: row.path,
     project: {
+      agentId: row.agent_id,
+      id: row.repo_id,
       name: row.repo_name,
       domain: row.repo_domain
     },
@@ -3498,6 +3500,8 @@ async function createApp(): Promise<FastifyInstance> {
       return {
         ok: true,
         project: {
+          agentId: share.agent_id,
+          id: share.repo_id,
           name: share.repo_name,
           domain: share.repo_domain
         },

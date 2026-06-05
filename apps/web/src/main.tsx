@@ -436,6 +436,8 @@ type PublicFileShare = {
   url: string;
   path: string;
   project: {
+    id?: string;
+    agentId?: string;
     name: string;
     domain?: string | null;
   };
@@ -3127,7 +3129,9 @@ function registrationOpenFromLocation() {
 }
 
 function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
-  const [activePath, setActivePath] = useState(target.kind === "legacy" ? target.path : "");
+  const [activePath, setActivePath] = useState(() => (
+    target.kind === "legacy" ? target.path : new URLSearchParams(window.location.search).get("file")?.trim() ?? ""
+  ));
   const [entries, setEntries] = useState<ProjectFileEntry[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>(() => (
     target.kind === "legacy" ? expandedFolderRecord(fileFolderAncestors(target.path)) : {}
@@ -3137,6 +3141,15 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
   const [share, setShare] = useState<PublicFileShare | null>(null);
   const [notice, setNotice] = useState("Загружаю публичный файл...");
   const [filesNotice, setFilesNotice] = useState("Загружаю файлы...");
+  const [publicMenuOpen, setPublicMenuOpen] = useState("");
+  const [publicExplorerOpen, setPublicExplorerOpen] = useState(true);
+  const [publicChatOpen, setPublicChatOpen] = useState(true);
+  const [publicChats, setPublicChats] = useState<Chat[]>([]);
+  const [publicChatPayload, setPublicChatPayload] = useState<PublicChatPayload | null>(null);
+  const [selectedPublicChatId, setSelectedPublicChatId] = useState("");
+  const [publicChatNotice, setPublicChatNotice] = useState("");
+  const [publicActionNotice, setPublicActionNotice] = useState("");
+  const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
   const targetKey = target.kind === "share" ? `share:${target.token}` : `legacy:${target.agentId}:${target.repoId}`;
 
   useEffect(() => {
@@ -3238,10 +3251,13 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
   }, [targetKey, activePath]);
 
   useEffect(() => {
-    if (target.kind !== "legacy") return;
     const url = new URL(window.location.href);
-    url.searchParams.set("agent", target.agentId);
-    url.searchParams.set("repo", target.repoId);
+    if (target.kind === "legacy") {
+      url.searchParams.set("agent", target.agentId);
+      url.searchParams.set("repo", target.repoId);
+    } else if (!activePath) {
+      return;
+    }
     url.searchParams.set("file", activePath);
     url.searchParams.set("readonly", "1");
     window.history.replaceState(null, "", url);
@@ -3285,18 +3301,233 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
     return entries.filter((entry) => visiblePaths.has(entry.path));
   }, [entries, expandedFolders, fileTreeQuery]);
   const visibleFileEntries = entries.filter((entry) => entry.type === "file");
+  const publicProjectIdentity = useMemo(() => {
+    const agentId = file?.project.agentId ?? share?.project.agentId ?? (target.kind === "legacy" ? target.agentId : "");
+    const repoId = file?.project.id ?? share?.project.id ?? (target.kind === "legacy" ? target.repoId : "");
+    return agentId && repoId ? { agentId, repoId } : null;
+  }, [file?.project.agentId, file?.project.id, share?.project.agentId, share?.project.id, target]);
+  const publicProjectKey = publicProjectIdentity ? `${publicProjectIdentity.agentId}:${publicProjectIdentity.repoId}` : "";
+  const activeFileIndex = visibleFileEntries.findIndex((entry) => normalizeProjectFilePath(entry.path) === normalizeProjectFilePath(activePath));
+  const publicChatMessages = publicShareMessages(publicChatPayload?.messages ?? []);
+  const publicProjectName = file?.project.name ?? share?.project.name ?? (target.kind === "legacy" ? target.repoId : "Public project");
+
+  useEffect(() => {
+    if (!publicProjectIdentity) return;
+    let cancelled = false;
+    setPublicChatNotice("Загружаю публичные чаты...");
+    setPublicChats([]);
+    setPublicChatPayload(null);
+    api(`/api/public/projects/${encodeURIComponent(publicProjectIdentity.agentId)}/${encodeURIComponent(publicProjectIdentity.repoId)}/chats`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) {
+          setPublicChatNotice(data.error || "Не удалось загрузить публичные чаты.");
+          trackMetrikaGoal("public_file_chat_load", { status: "failed", error: data.error });
+          return;
+        }
+        const chats = Array.isArray(data.chats) ? data.chats as Chat[] : [];
+        setPublicChats(chats);
+        setSelectedPublicChatId((current) => chats.some((chat) => chat.id === current) ? current : chats[0]?.id ?? "");
+        setPublicChatNotice(chats.length ? "" : "Публичных чатов пока нет.");
+        trackMetrikaGoal("public_file_chat_load", { status: "success", chats_count: chats.length });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPublicChatNotice("Не удалось загрузить публичные чаты.");
+          trackMetrikaGoal("public_file_chat_load", { status: "failed", error: "client_error" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [publicProjectKey]);
+
+  useEffect(() => {
+    if (!selectedPublicChatId) {
+      setPublicChatPayload(null);
+      return;
+    }
+    let cancelled = false;
+    setPublicChatNotice("Загружаю чат...");
+    api(`/api/public/chats/${encodeURIComponent(selectedPublicChatId)}`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) {
+          setPublicChatNotice(data.error || "Не удалось загрузить чат.");
+          trackMetrikaGoal("public_file_chat_open", { status: "failed", error: data.error });
+          return;
+        }
+        setPublicChatPayload({ chat: data.chat, messages: data.messages ?? [], jobs: data.jobs ?? [] });
+        setPublicChatNotice("");
+        trackMetrikaGoal("public_file_chat_open", { status: "success" });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPublicChatNotice("Не удалось загрузить чат.");
+          trackMetrikaGoal("public_file_chat_open", { status: "failed", error: "client_error" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPublicChatId]);
+
   const toggleFolder = (path: string) => {
     setExpandedFolders((current) => ({ ...current, [path]: !current[path] }));
   };
 
+  const goToPublicFile = (delta: number) => {
+    if (!visibleFileEntries.length) return;
+    const currentIndex = activeFileIndex >= 0 ? activeFileIndex : 0;
+    const nextIndex = (currentIndex + delta + visibleFileEntries.length) % visibleFileEntries.length;
+    setActivePath(visibleFileEntries[nextIndex]?.path ?? activePath);
+  };
+
+  const copyPublicText = async (value: string, success: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setPublicActionNotice(success);
+      window.setTimeout(() => setPublicActionNotice(""), 1800);
+    } catch {
+      setPublicActionNotice("Не удалось скопировать.");
+      window.setTimeout(() => setPublicActionNotice(""), 2200);
+    }
+  };
+
+  const publicFileReferenceOptions = {
+    onFileReference: (path: string) => {
+      const normalized = normalizeProjectFilePath(path).toLowerCase();
+      const match = visibleFileEntries.find((entry) => normalizeProjectFilePath(entry.path).toLowerCase() === normalized);
+      if (match) setActivePath(match.path);
+    },
+    projectReferenceNames: [publicProjectName, target.kind === "legacy" ? target.repoId : undefined]
+  };
+
+  const renderPublicMenuItem = ({
+    icon,
+    label,
+    checked = false,
+    disabled = false,
+    onClick
+  }: {
+    icon: React.ReactNode;
+    label: string;
+    checked?: boolean;
+    disabled?: boolean;
+    onClick: () => void | Promise<void>;
+  }) => (
+    <button
+      className={checked ? "ide-menu-item checked" : "ide-menu-item"}
+      disabled={disabled}
+      role="menuitem"
+      type="button"
+      onClick={() => {
+        if (disabled) return;
+        setPublicMenuOpen("");
+        void onClick();
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+      {checked && <Check size={14} />}
+    </button>
+  );
+
+  const renderPublicMenuGroup = (id: string, label: string, children: React.ReactNode) => (
+    <div className="ide-menu" onMouseLeave={() => setPublicMenuOpen((current) => current === id ? "" : current)}>
+      <button
+        aria-expanded={publicMenuOpen === id}
+        className={`ide-menu-trigger${publicMenuOpen === id ? " active" : ""}`}
+        type="button"
+        onClick={() => setPublicMenuOpen((current) => current === id ? "" : id)}
+      >
+        {label}
+      </button>
+      {publicMenuOpen === id && (
+        <div className="ide-menu-dropdown" role="menu">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <main className="public-ide-page">
       <section className="file-editor-panel ide public-readonly-ide">
-        <nav className="file-editor-menubar" aria-label="Xedoc IDE public menu">
+        <nav className="file-editor-menubar public-ide-menubar" aria-label="Xedoc IDE public menu">
           <div className="ide-menu-brand">
             <img src="/favicon.svg" alt="" />
             <span>Xedoc IDE</span>
           </div>
+          {renderPublicMenuGroup("file", "File", (
+            <>
+              {renderPublicMenuItem({
+                icon: <Link2 size={14} />,
+                label: "Copy link",
+                onClick: () => copyPublicText(window.location.href, "Ссылка скопирована.")
+              })}
+              {renderPublicMenuItem({
+                icon: <FileText size={14} />,
+                label: "Copy file content",
+                disabled: !file || file.binary,
+                onClick: () => copyPublicText(file?.content ?? "", "Файл скопирован.")
+              })}
+              {projectLink && renderPublicMenuItem({
+                icon: <ExternalLink size={14} />,
+                label: "Open project site",
+                onClick: () => {
+                  window.open(projectLink, "_blank", "noopener,noreferrer");
+                }
+              })}
+            </>
+          ))}
+          {renderPublicMenuGroup("view", "View", (
+            <>
+              {renderPublicMenuItem({
+                icon: <FolderGit2 size={14} />,
+                label: "Explorer",
+                checked: publicExplorerOpen,
+                onClick: () => setPublicExplorerOpen((value) => !value)
+              })}
+              {renderPublicMenuItem({
+                icon: <MessageSquare size={14} />,
+                label: "Chat",
+                checked: publicChatOpen,
+                onClick: () => setPublicChatOpen((value) => !value)
+              })}
+            </>
+          ))}
+          {renderPublicMenuGroup("go", "Go", (
+            <>
+              {renderPublicMenuItem({
+                icon: <ArrowUp size={14} />,
+                label: "Previous file",
+                disabled: visibleFileEntries.length < 2,
+                onClick: () => goToPublicFile(-1)
+              })}
+              {renderPublicMenuItem({
+                icon: <ArrowDown size={14} />,
+                label: "Next file",
+                disabled: visibleFileEntries.length < 2,
+                onClick: () => goToPublicFile(1)
+              })}
+            </>
+          ))}
+          {renderPublicMenuGroup("help", "Help", (
+            <>
+              {renderPublicMenuItem({
+                icon: <ExternalLink size={14} />,
+                label: "Open xedoc.ru",
+                onClick: () => {
+                  window.open("https://xedoc.ru", "_blank", "noopener,noreferrer");
+                }
+              })}
+            </>
+          ))}
+          <span className="ide-menu-spacer" />
+          <span className="ide-menu-status project" title={publicProjectName}>{publicProjectName}</span>
           <span className="ide-menu-status project">Read-only public link</span>
           {projectLink && (
             <a className="ide-menu-pill" href={projectLink} target="_blank" rel="noreferrer">
@@ -3304,14 +3535,20 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
             </a>
           )}
         </nav>
+        {publicActionNotice && <div className="ide-toast public-ide-toast" role="status">{publicActionNotice}</div>}
         <div className="file-editor-tabs" role="tablist" aria-label="Open public file">
           <button className="file-editor-tab active" type="button">
             <FilePenLine size={14} />
             <span>{name}</span>
           </button>
         </div>
-        <div className="file-editor-workspace without-chat public-readonly-workspace">
-          <aside className="file-explorer" aria-label="Public project files">
+        <div className={[
+          "file-editor-workspace",
+          "public-readonly-workspace",
+          publicExplorerOpen ? "" : "without-explorer",
+          publicChatOpen ? "with-chat" : "without-chat"
+        ].filter(Boolean).join(" ")}>
+          {publicExplorerOpen && <aside className="file-explorer" aria-label="Public project files">
             <div className="file-explorer-head">
               <h2>Files</h2>
               <span className="public-readonly-badge">Read only</span>
@@ -3370,7 +3607,7 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
                 </div>
               ))}
             </div>
-          </aside>
+          </aside>}
           <section className="file-editor-main">
             {notice && <div className="empty">{notice}</div>}
             {!notice && file && imageSrc ? (
@@ -3386,20 +3623,62 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
             ) : !notice && file && isMarkdownPath(file.path) ? (
               <article className="markdown-preview-pane public-markdown-preview">
                 {renderRichText(file.content, "markdown-preview rich-text", {
-                  onFileReference: (path) => {
-                    const normalized = normalizeProjectFilePath(path).toLowerCase();
-                    const match = visibleFileEntries.find((entry) => normalizeProjectFilePath(entry.path).toLowerCase() === normalized);
-                    if (match) setActivePath(match.path);
-                  },
+                  ...publicFileReferenceOptions,
                   projectReferenceNames: [file.project.name, target.kind === "legacy" ? target.repoId : undefined]
                 })}
               </article>
             ) : !notice && file ? (
               <React.Suspense fallback={<pre className="public-file-code">{file.content}</pre>}>
-                <MonacoReadOnlyCodeViewer path={file.path} value={file.content} />
+                <MonacoReadOnlyCodeViewer fullHeight path={file.path} value={file.content} />
               </React.Suspense>
             ) : null}
           </section>
+          {publicChatOpen && (
+            <aside className="ide-chat-panel chat-size-normal chat-style-cards public-readonly-chat" aria-label="Public project chat">
+              <header>
+                <div>
+                  <strong>{publicChatPayload?.chat.title || publicChats[0]?.title || "Project chat"}</strong>
+                  <small>{publicProjectName}</small>
+                </div>
+                {publicChats.length > 1 && (
+                  <select
+                    aria-label="Public project chat"
+                    className="public-chat-select"
+                    value={selectedPublicChatId}
+                    onChange={(event) => setSelectedPublicChatId(event.target.value)}
+                  >
+                    {publicChats.map((chat) => (
+                      <option key={chat.id} value={chat.id}>{chat.title}</option>
+                    ))}
+                  </select>
+                )}
+              </header>
+              <div className="ide-chat-feed public-chat-feed">
+                {publicChatNotice && !publicChatPayload ? (
+                  <div className="ide-chat-empty">{publicChatNotice}</div>
+                ) : publicChatPayload ? (
+                  publicChatMessages.length ? publicChatMessages.map((message) => (
+                    <article className={`ide-chat-message ${message.role}`} key={message.id}>
+                      <div className="ide-chat-message-meta">
+                        <span className="ide-chat-message-author">{message.role === "user" ? "User" : message.role === "assistant" ? "Codex" : message.role}</span>
+                        <small>{formatDateTime(message.createdAt)}</small>
+                      </div>
+                      <MemoRichText
+                        className={`rich-text compact ide-chat-body${message.role === "system" ? " ide-chat-system-body" : ""}`}
+                        onFileReference={publicFileReferenceOptions.onFileReference}
+                        projectReferenceNames={publicFileReferenceOptions.projectReferenceNames}
+                        value={message.content}
+                      />
+                      {renderMessageAttachments(message.attachments, setImagePreview)}
+                    </article>
+                  )) : <div className="ide-chat-empty">В этом чате пока нет сообщений.</div>
+                ) : (
+                  <div className="ide-chat-empty">{publicProjectIdentity ? "Публичных чатов пока нет." : "Загружаю проект..."}</div>
+                )}
+              </div>
+              <div className="public-readonly-chat-footer">Read-only public chat</div>
+            </aside>
+          )}
         </div>
         <footer className="file-editor-status-bar ok">
           <span className="file-editor-status-message">{file?.project.name ?? share?.project.name ?? (target.kind === "legacy" ? target.repoId : "Public file")} · public read-only</span>
@@ -3409,6 +3688,20 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
           </span>
         </footer>
       </section>
+      {imagePreview && (
+        <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={imagePreview.name} onClick={() => setImagePreview(null)}>
+          <figure onClick={(event) => event.stopPropagation()}>
+            <button aria-label="Close image preview" type="button" onClick={() => setImagePreview(null)}>
+              <X size={20} />
+            </button>
+            <img alt={imagePreview.name} src={imagePreview.src} />
+            <figcaption>
+              <strong>{imagePreview.name}</strong>
+              <span>{imagePreview.mimeType} · {formatBytes(imagePreview.size)}</span>
+            </figcaption>
+          </figure>
+        </div>
+      )}
     </main>
   );
 }
