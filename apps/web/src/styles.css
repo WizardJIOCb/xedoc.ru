@@ -440,6 +440,23 @@ textarea:focus {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.file-editor-workspace.public-readonly-workspace.without-editor {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.file-editor-workspace.public-readonly-workspace.without-editor:not(.without-explorer):not(.with-chat) {
+  grid-template-columns: var(--public-explorer-column);
+}
+
+.file-editor-workspace.public-readonly-workspace.without-editor.with-chat:not(.without-explorer) {
+  grid-template-columns: var(--public-explorer-column) minmax(0, 1fr);
+}
+
+.file-editor-workspace.public-readonly-workspace.without-explorer.without-editor.with-chat,
+.file-editor-workspace.public-readonly-workspace.without-explorer.without-editor.without-chat {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .public-readonly-ide .file-editor-main {
   overflow: hidden;
 }
@@ -9063,7 +9080,11 @@ button:disabled {
   .public-readonly-workspace,
   .file-editor-workspace.public-readonly-workspace,
   .file-editor-workspace.public-readonly-workspace.with-chat,
+  .file-editor-workspace.public-readonly-workspace.without-editor,
+  .file-editor-workspace.public-readonly-workspace.without-editor.with-chat,
   .file-editor-workspace.public-readonly-workspace.without-explorer.with-chat,
+  .file-editor-workspace.public-readonly-workspace.without-explorer.without-editor.with-chat,
+  .file-editor-workspace.public-readonly-workspace.without-explorer.without-editor.without-chat,
   .file-editor-workspace.public-readonly-workspace.without-explorer.without-chat {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(120px, 28dvh) minmax(0, 1fr);
@@ -10033,16 +10054,24 @@ button:disabled {
   .file-editor-workspace.public-readonly-workspace.without-explorer.with-chat,
   .file-editor-workspace.public-readonly-workspace.without-explorer.with-chat.chat-width-small,
   .file-editor-workspace.public-readonly-workspace.without-explorer.with-chat.chat-width-large,
+  .file-editor-workspace.public-readonly-workspace.without-editor,
+  .file-editor-workspace.public-readonly-workspace.without-editor.with-chat,
+  .file-editor-workspace.public-readonly-workspace.without-editor.with-chat.chat-width-small,
+  .file-editor-workspace.public-readonly-workspace.without-editor.with-chat.chat-width-large,
+  .file-editor-workspace.public-readonly-workspace.without-explorer.without-editor,
+  .file-editor-workspace.public-readonly-workspace.without-explorer.without-editor.with-chat,
   .file-editor-workspace.public-readonly-workspace.without-explorer.without-chat {
     grid-template-columns: 1fr;
   }
 
   .file-editor-workspace.public-readonly-workspace.with-chat,
-  .file-editor-workspace.public-readonly-workspace.without-explorer.with-chat {
+  .file-editor-workspace.public-readonly-workspace.without-explorer.with-chat,
+  .file-editor-workspace.public-readonly-workspace.without-editor.with-chat {
     grid-template-rows: minmax(0, 1fr) minmax(150px, 34dvh);
   }
 
   .file-editor-workspace.public-readonly-workspace.without-chat,
+  .file-editor-workspace.public-readonly-workspace.without-editor.without-chat,
   .file-editor-workspace.public-readonly-workspace.without-explorer.without-chat {
     grid-template-rows: minmax(0, 1fr);
   }

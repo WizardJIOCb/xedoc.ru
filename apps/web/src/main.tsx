@@ -3143,6 +3143,13 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
   const [filesNotice, setFilesNotice] = useState("Загружаю файлы...");
   const [publicMenuOpen, setPublicMenuOpen] = useState("");
   const [publicExplorerOpen, setPublicExplorerOpen] = useState(true);
+  const [publicCodeOpen, setPublicCodeOpen] = useState(() => {
+    try {
+      return localStorage.getItem("cmc.publicIdeCodeOpen") !== "0";
+    } catch {
+      return true;
+    }
+  });
   const [publicChatOpen, setPublicChatOpen] = useState(true);
   const [publicExplorerWidth, setPublicExplorerWidth] = useState<IdeChatWidth>(() => {
     try {
@@ -3213,6 +3220,7 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
   useEffect(() => {
     try {
       localStorage.setItem("cmc.publicIdeExplorerWidth", publicExplorerWidth);
+      localStorage.setItem("cmc.publicIdeCodeOpen", publicCodeOpen ? "1" : "0");
       localStorage.setItem("cmc.publicIdeChatWidth", publicChatWidth);
       localStorage.setItem("cmc.publicIdeChatTextSize", publicChatTextSize);
       localStorage.setItem("cmc.publicIdeCodeTextSize", publicCodeTextSize);
@@ -3220,7 +3228,7 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
     } catch {
       // Public IDE display settings are local preferences only.
     }
-  }, [publicChatTextSize, publicChatTextStyle, publicChatWidth, publicCodeTextSize, publicExplorerWidth]);
+  }, [publicChatTextSize, publicChatTextStyle, publicChatWidth, publicCodeOpen, publicCodeTextSize, publicExplorerWidth]);
 
   useEffect(() => {
     if (target.kind !== "share") return;
@@ -3569,6 +3577,18 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
                 onClick: () => setPublicExplorerOpen((value) => !value)
               })}
               {renderPublicMenuItem({
+                icon: <FilePenLine size={14} />,
+                label: "Code Editor",
+                checked: publicCodeOpen,
+                onClick: () => {
+                  setPublicCodeOpen((value) => {
+                    const next = !value;
+                    if (!next && !publicExplorerOpen && !publicChatOpen) setPublicChatOpen(true);
+                    return next;
+                  });
+                }
+              })}
+              {renderPublicMenuItem({
                 icon: <MessageSquare size={14} />,
                 label: "Chat",
                 checked: publicChatOpen,
@@ -3714,6 +3734,7 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
           "public-readonly-workspace",
           publicExplorerOpen ? `explorer-width-${publicExplorerWidth}` : "",
           publicExplorerOpen ? "" : "without-explorer",
+          publicCodeOpen ? "" : "without-editor",
           publicChatOpen ? "with-chat" : "without-chat",
           publicChatOpen ? `chat-width-${publicChatWidth}` : ""
         ].filter(Boolean).join(" ")}>
@@ -3777,7 +3798,7 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
               ))}
             </div>
           </aside>}
-          <section className="file-editor-main">
+          {publicCodeOpen && <section className="file-editor-main">
             {notice && <div className="empty">{notice}</div>}
             {!notice && file && imageSrc ? (
               <div className="image-preview-pane">
@@ -3801,7 +3822,7 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
                 <MonacoReadOnlyCodeViewer fontSize={publicCodeFontSize} fullHeight path={file.path} value={file.content} />
               </React.Suspense>
             ) : null}
-          </section>
+          </section>}
           {publicChatOpen && (
             <aside className={`ide-chat-panel chat-size-${publicChatTextSize} chat-style-${publicChatTextStyle} public-readonly-chat`} aria-label="Public project chat">
               <header>
