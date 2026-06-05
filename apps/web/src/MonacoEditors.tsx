@@ -670,11 +670,22 @@ export function MonacoCodeEditor({
   return <div className="monaco-editor-host" ref={containerRef} />;
 }
 
-export function MonacoReadOnlyCodeViewer({ value, path, fullHeight = false }: { value: string; path: string; fullHeight?: boolean }) {
+export function MonacoReadOnlyCodeViewer({
+  value,
+  path,
+  fullHeight = false,
+  fontSize = 13
+}: {
+  value: string;
+  path: string;
+  fullHeight?: boolean;
+  fontSize?: number;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
-  const heightPx = Math.max(220, Math.min(780, value.split(/\r\n|\r|\n/).length * 20 + 34));
+  const lineHeight = Math.round(fontSize * 1.54);
+  const heightPx = Math.max(220, Math.min(780, value.split(/\r\n|\r|\n/).length * lineHeight + 34));
 
   useEffect(() => {
     const container = containerRef.current;
@@ -691,8 +702,8 @@ export function MonacoReadOnlyCodeViewer({ value, path, fullHeight = false }: { 
       automaticLayout: true,
       minimap: { enabled: true, maxColumn: 90, renderCharacters: false, scale: 0.72 },
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, Liberation Mono, monospace",
-      fontSize: 13,
-      lineHeight: 20,
+      fontSize,
+      lineHeight,
       scrollBeyondLastLine: false,
       wordWrap: "off",
       tabSize: 2,
@@ -715,7 +726,7 @@ export function MonacoReadOnlyCodeViewer({ value, path, fullHeight = false }: { 
       editorRef.current = null;
       modelRef.current = null;
     };
-  }, [path]);
+  }, [fontSize, lineHeight, path]);
 
   useEffect(() => {
     const model = modelRef.current;

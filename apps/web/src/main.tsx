@@ -3144,13 +3144,83 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
   const [publicMenuOpen, setPublicMenuOpen] = useState("");
   const [publicExplorerOpen, setPublicExplorerOpen] = useState(true);
   const [publicChatOpen, setPublicChatOpen] = useState(true);
+  const [publicExplorerWidth, setPublicExplorerWidth] = useState<IdeChatWidth>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.publicIdeExplorerWidth");
+      return isIdeChatWidth(stored) ? stored : "normal";
+    } catch {
+      return "normal";
+    }
+  });
+  const [publicChatWidth, setPublicChatWidth] = useState<IdeChatWidth>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.publicIdeChatWidth");
+      return isIdeChatWidth(stored) ? stored : "normal";
+    } catch {
+      return "normal";
+    }
+  });
+  const [publicChatTextSize, setPublicChatTextSize] = useState<IdeChatTextSize>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.publicIdeChatTextSize");
+      return isIdeChatTextSize(stored) ? stored : "normal";
+    } catch {
+      return "normal";
+    }
+  });
+  const [publicCodeTextSize, setPublicCodeTextSize] = useState<IdeChatTextSize>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.publicIdeCodeTextSize");
+      return isIdeChatTextSize(stored) ? stored : "normal";
+    } catch {
+      return "normal";
+    }
+  });
+  const [publicChatTextStyle, setPublicChatTextStyle] = useState<IdeChatTextStyle>(() => {
+    try {
+      const stored = localStorage.getItem("cmc.publicIdeChatTextStyle");
+      return isIdeChatTextStyle(stored) ? stored : "cards";
+    } catch {
+      return "cards";
+    }
+  });
   const [publicChats, setPublicChats] = useState<Chat[]>([]);
   const [publicChatPayload, setPublicChatPayload] = useState<PublicChatPayload | null>(null);
   const [selectedPublicChatId, setSelectedPublicChatId] = useState("");
   const [publicChatNotice, setPublicChatNotice] = useState("");
   const [publicActionNotice, setPublicActionNotice] = useState("");
   const [imagePreview, setImagePreview] = useState<ImagePreview | null>(null);
+  const publicMenuRef = useRef<HTMLElement | null>(null);
   const targetKey = target.kind === "share" ? `share:${target.token}` : `legacy:${target.agentId}:${target.repoId}`;
+
+  useEffect(() => {
+    if (!publicMenuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (publicMenuRef.current?.contains(event.target as Node)) return;
+      setPublicMenuOpen("");
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPublicMenuOpen("");
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [publicMenuOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cmc.publicIdeExplorerWidth", publicExplorerWidth);
+      localStorage.setItem("cmc.publicIdeChatWidth", publicChatWidth);
+      localStorage.setItem("cmc.publicIdeChatTextSize", publicChatTextSize);
+      localStorage.setItem("cmc.publicIdeCodeTextSize", publicCodeTextSize);
+      localStorage.setItem("cmc.publicIdeChatTextStyle", publicChatTextStyle);
+    } catch {
+      // Public IDE display settings are local preferences only.
+    }
+  }, [publicChatTextSize, publicChatTextStyle, publicChatWidth, publicCodeTextSize, publicExplorerWidth]);
 
   useEffect(() => {
     if (target.kind !== "share") return;
@@ -3310,6 +3380,7 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
   const activeFileIndex = visibleFileEntries.findIndex((entry) => normalizeProjectFilePath(entry.path) === normalizeProjectFilePath(activePath));
   const publicChatMessages = publicShareMessages(publicChatPayload?.messages ?? []);
   const publicProjectName = file?.project.name ?? share?.project.name ?? (target.kind === "legacy" ? target.repoId : "Public project");
+  const publicCodeFontSize = publicCodeTextSize === "small" ? 12 : publicCodeTextSize === "large" ? 16 : 14;
 
   useEffect(() => {
     if (!publicProjectIdentity) return;
@@ -3436,11 +3507,17 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
   );
 
   const renderPublicMenuGroup = (id: string, label: string, children: React.ReactNode) => (
-    <div className="ide-menu" onMouseLeave={() => setPublicMenuOpen((current) => current === id ? "" : current)}>
+    <div className="ide-menu">
       <button
         aria-expanded={publicMenuOpen === id}
         className={`ide-menu-trigger${publicMenuOpen === id ? " active" : ""}`}
         type="button"
+        onFocus={() => {
+          if (publicMenuOpen) setPublicMenuOpen(id);
+        }}
+        onMouseEnter={() => {
+          if (publicMenuOpen) setPublicMenuOpen(id);
+        }}
         onClick={() => setPublicMenuOpen((current) => current === id ? "" : id)}
       >
         {label}
@@ -3456,7 +3533,7 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
   return (
     <main className="public-ide-page">
       <section className="file-editor-panel ide public-readonly-ide">
-        <nav className="file-editor-menubar public-ide-menubar" aria-label="Xedoc IDE public menu">
+        <nav className="file-editor-menubar public-ide-menubar" ref={publicMenuRef} aria-label="Xedoc IDE public menu">
           <div className="ide-menu-brand">
             <img src="/favicon.svg" alt="" />
             <span>Xedoc IDE</span>
@@ -3497,6 +3574,96 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
                 checked: publicChatOpen,
                 onClick: () => setPublicChatOpen((value) => !value)
               })}
+              <div className="ide-menu-divider" />
+              <span className="ide-menu-title">Explorer Width</span>
+              {IDE_CHAT_WIDTH_OPTIONS.map((option) => (
+                <button
+                  aria-checked={publicExplorerWidth === option.value}
+                  className={publicExplorerWidth === option.value ? "ide-menu-item checked" : "ide-menu-item"}
+                  key={`explorer-${option.value}`}
+                  role="menuitemradio"
+                  type="button"
+                  onClick={() => {
+                    setPublicExplorerWidth(option.value);
+                    setPublicMenuOpen("");
+                  }}
+                >
+                  <span className="ide-menu-check">{publicExplorerWidth === option.value && <Check size={14} />}</span>
+                  <span>{option.label}</span>
+                </button>
+              ))}
+              <div className="ide-menu-divider" />
+              <span className="ide-menu-title">Chat Width</span>
+              {IDE_CHAT_WIDTH_OPTIONS.map((option) => (
+                <button
+                  aria-checked={publicChatWidth === option.value}
+                  className={publicChatWidth === option.value ? "ide-menu-item checked" : "ide-menu-item"}
+                  key={`chat-width-${option.value}`}
+                  role="menuitemradio"
+                  type="button"
+                  onClick={() => {
+                    setPublicChatWidth(option.value);
+                    setPublicMenuOpen("");
+                  }}
+                >
+                  <span className="ide-menu-check">{publicChatWidth === option.value && <Check size={14} />}</span>
+                  <span>{option.label}</span>
+                </button>
+              ))}
+              <div className="ide-menu-divider" />
+              <span className="ide-menu-title">Chat Text Size</span>
+              {IDE_CHAT_TEXT_SIZE_OPTIONS.map((option) => (
+                <button
+                  aria-checked={publicChatTextSize === option.value}
+                  className={publicChatTextSize === option.value ? "ide-menu-item checked" : "ide-menu-item"}
+                  key={`chat-text-${option.value}`}
+                  role="menuitemradio"
+                  type="button"
+                  onClick={() => {
+                    setPublicChatTextSize(option.value);
+                    setPublicMenuOpen("");
+                  }}
+                >
+                  <span className="ide-menu-check">{publicChatTextSize === option.value && <Check size={14} />}</span>
+                  <span>{option.label}</span>
+                </button>
+              ))}
+              <div className="ide-menu-divider" />
+              <span className="ide-menu-title">Editor Font Size</span>
+              {IDE_CHAT_TEXT_SIZE_OPTIONS.map((option) => (
+                <button
+                  aria-checked={publicCodeTextSize === option.value}
+                  className={publicCodeTextSize === option.value ? "ide-menu-item checked" : "ide-menu-item"}
+                  key={`code-text-${option.value}`}
+                  role="menuitemradio"
+                  type="button"
+                  onClick={() => {
+                    setPublicCodeTextSize(option.value);
+                    setPublicMenuOpen("");
+                  }}
+                >
+                  <span className="ide-menu-check">{publicCodeTextSize === option.value && <Check size={14} />}</span>
+                  <span>{option.label}</span>
+                </button>
+              ))}
+              <div className="ide-menu-divider" />
+              <span className="ide-menu-title">Chat Text Style</span>
+              {IDE_CHAT_TEXT_STYLE_OPTIONS.map((option) => (
+                <button
+                  aria-checked={publicChatTextStyle === option.value}
+                  className={publicChatTextStyle === option.value ? "ide-menu-item checked" : "ide-menu-item"}
+                  key={`chat-style-${option.value}`}
+                  role="menuitemradio"
+                  type="button"
+                  onClick={() => {
+                    setPublicChatTextStyle(option.value);
+                    setPublicMenuOpen("");
+                  }}
+                >
+                  <span className="ide-menu-check">{publicChatTextStyle === option.value && <Check size={14} />}</span>
+                  <span>{option.label}</span>
+                </button>
+              ))}
             </>
           ))}
           {renderPublicMenuGroup("go", "Go", (
@@ -3545,8 +3712,10 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
         <div className={[
           "file-editor-workspace",
           "public-readonly-workspace",
+          publicExplorerOpen ? `explorer-width-${publicExplorerWidth}` : "",
           publicExplorerOpen ? "" : "without-explorer",
-          publicChatOpen ? "with-chat" : "without-chat"
+          publicChatOpen ? "with-chat" : "without-chat",
+          publicChatOpen ? `chat-width-${publicChatWidth}` : ""
         ].filter(Boolean).join(" ")}>
           {publicExplorerOpen && <aside className="file-explorer" aria-label="Public project files">
             <div className="file-explorer-head">
@@ -3629,12 +3798,12 @@ function PublicProjectFilePage({ target }: { target: PublicFileTarget }) {
               </article>
             ) : !notice && file ? (
               <React.Suspense fallback={<pre className="public-file-code">{file.content}</pre>}>
-                <MonacoReadOnlyCodeViewer fullHeight path={file.path} value={file.content} />
+                <MonacoReadOnlyCodeViewer fontSize={publicCodeFontSize} fullHeight path={file.path} value={file.content} />
               </React.Suspense>
             ) : null}
           </section>
           {publicChatOpen && (
-            <aside className="ide-chat-panel chat-size-normal chat-style-cards public-readonly-chat" aria-label="Public project chat">
+            <aside className={`ide-chat-panel chat-size-${publicChatTextSize} chat-style-${publicChatTextStyle} public-readonly-chat`} aria-label="Public project chat">
               <header>
                 <div>
                   <strong>{publicChatPayload?.chat.title || publicChats[0]?.title || "Project chat"}</strong>
