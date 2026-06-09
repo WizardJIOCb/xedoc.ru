@@ -1656,7 +1656,7 @@ function connect() {
         } else {
           if (message.patch.path) {
             const projectPath = normalizeIncomingProjectPath(message.repoId, message.patch.path);
-            await prepareProjectFolder(projectPath, "githubUrl" in message.patch ? optionalText(message.patch.githubUrl) : repo.githubUrl);
+            await prepareProjectFolder(projectPath);
             repo.path = projectPath;
           }
           if (message.patch.name) repo.name = message.patch.name;

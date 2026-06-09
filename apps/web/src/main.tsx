@@ -5133,17 +5133,8 @@ function App() {
         : true;
   const projectSettingsNeedsAgent = useMemo(() => {
     if (projectPanel !== "settings" || !selectedRepo) return false;
-    const normalizedDomain = normalizeProjectDomain(projectDomain);
-    return (
-      projectName.trim() !== selectedRepo.name
-      || projectPath.trim() !== originalProjectPath
-      || projectTargetAgentChanged
-      || projectGithubUrl.trim() !== (selectedRepo.githubUrl ?? "")
-      || effectiveProjectServerPath !== (selectedRepo.serverPath ?? "")
-      || normalizedDomain !== (selectedRepo.domain ?? "")
-      || sandbox !== selectedRepo.defaultSandbox
-    );
-  }, [effectiveProjectServerPath, originalProjectPath, projectDomain, projectGithubUrl, projectName, projectPanel, projectPath, projectTargetAgentChanged, sandbox, selectedRepo]);
+    return projectTargetAgentChanged;
+  }, [projectPanel, projectTargetAgentChanged, selectedRepo]);
   const projectSaveAgentOnline = projectPanel === "new"
     ? projectFormAgent?.status === "online"
     : projectTargetAgentChanged
@@ -7823,10 +7814,10 @@ function App() {
     if (!isNew && (!selectedRepo || !repoCanManage(selectedRepo))) return;
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const shouldRunPrompt = submitter?.value === "run-prompt" && Boolean(projectStartPrompt.trim());
-    if ((isNew || projectSettingsNeedsAgent) && !projectSaveAgentOnline) {
+    if ((isNew || projectTargetAgentChanged) && !projectSaveAgentOnline) {
       setProjectNotice(isNew
         ? "Выбранный агент offline. Новый проект можно сохранить после подключения агента."
-        : "Агент проекта offline. Имя, путь, GitHub, домен и sandbox можно сохранить после подключения агента; Public/Private, Deploy и Data сохраняются прямо сейчас.");
+        : "Выбранный агент offline. Перенос проекта на другого агента можно сохранить после подключения агента.");
       return;
     }
     setBusy(true);
@@ -7890,7 +7881,7 @@ function App() {
       const errorMessage = data.error === "agent_local_busy"
         ? "Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web."
         : data.error === "agent_offline"
-          ? "Выбранный агент offline. Перенос проекта и локальные поля можно сохранить после подключения агента."
+          ? "Агент отключился во время синхронизации. Сохрани ещё раз: если агент offline, Xedoc запомнит настройки и применит их перед следующим действием проекта."
           : data.error === "target_project_exists"
             ? "На выбранном агенте уже есть проект с таким ID."
             : data.error === "project_has_running_job"
@@ -10942,8 +10933,8 @@ function App() {
             {projectPanel === "settings" && !projectSaveAgentOnline && (
               <div className="notice">
                 {projectSettingsNeedsAgent
-                  ? "Выбранный агент offline: перенос проекта, имя, путь, GitHub, домен и sandbox сохранятся после подключения агента. Public/Private, Deploy и Data можно сохранить сейчас."
-                  : "Агент проекта offline: Public/Private, Deploy и Data можно сохранить прямо сейчас."}
+                  ? "Выбранный агент offline: перенос проекта можно сохранить после подключения агента."
+                  : "Агент проекта offline: настройки сохранятся в Xedoc сейчас и будут применены на агенте перед следующим действием проекта."}
               </div>
             )}
           </section>

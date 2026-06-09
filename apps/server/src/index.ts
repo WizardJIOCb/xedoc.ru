@@ -39,6 +39,7 @@ import {
   type ProjectVisibility,
   type ProjectWriteAccess,
   type RepoInfo,
+  type Sandbox,
   type ServerToAgent,
   type UiEvent
 } from "@cmc/protocol";
@@ -1060,20 +1061,13 @@ async function syncAgentProjectConfig(agentId: string, row: RepoRow): Promise<vo
 function upsertRepos(agentId: string, repos: RepoInfo[]): void {
   const stamp = nowIso();
   const agentOwner = db.prepare("SELECT user_id FROM agents WHERE id = ?").get(agentId) as { user_id: string | null } | undefined;
-  // Deploy/data are controller-owned after first insert, so offline UI edits survive stale agent heartbeats.
+  // Project settings are controller-owned after first insert, so offline UI edits survive stale agent heartbeats.
   const upsert = db.prepare(`
     INSERT INTO repos (id,user_id,agent_id,name,path_masked,github_url,server_path,domain,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(agent_id,id) DO UPDATE SET
-      name=excluded.name,
-      path_masked=excluded.path_masked,
-      github_url=excluded.github_url,
-      server_path=excluded.server_path,
-      domain=excluded.domain,
       current_branch=excluded.current_branch,
       dirty=excluded.dirty,
-      default_sandbox=excluded.default_sandbox,
-      allowed_sandboxes=excluded.allowed_sandboxes,
       test_commands=excluded.test_commands,
       updated_at=excluded.updated_at
   `);
@@ -1205,16 +1199,43 @@ function updateControllerProjectSettings(
   agentId: string,
   repoId: string,
   patch: {
+    name?: string;
+    path?: string;
+    githubUrl?: string;
+    serverPath?: string;
+    domain?: string;
     visibility?: ProjectVisibility;
     writeAccess?: ProjectWriteAccess;
     writeUsers?: string[];
     deploy?: DeployConfig | null;
     data?: ProjectDataConfig | null;
+    defaultSandbox?: Sandbox;
+    allowedSandboxes?: Sandbox[];
   },
   fields: { deploy: boolean; data: boolean }
 ): boolean {
   const assignments: string[] = [];
   const values: Array<string | null> = [];
+  if (patch.name !== undefined) {
+    assignments.push("name = ?");
+    values.push(patch.name);
+  }
+  if (patch.path !== undefined) {
+    assignments.push("path_masked = ?");
+    values.push(patch.path);
+  }
+  if (patch.githubUrl !== undefined) {
+    assignments.push("github_url = ?");
+    values.push(nullableText(patch.githubUrl));
+  }
+  if (patch.serverPath !== undefined) {
+    assignments.push("server_path = ?");
+    values.push(nullableText(patch.serverPath));
+  }
+  if (patch.domain !== undefined) {
+    assignments.push("domain = ?");
+    values.push(nullableText(patch.domain));
+  }
   if (patch.visibility) {
     assignments.push("visibility = ?");
     values.push(patch.visibility);
@@ -1234,6 +1255,14 @@ function updateControllerProjectSettings(
   if (fields.data) {
     assignments.push("data_json = ?");
     values.push(patch.data ? JSON.stringify(patch.data) : null);
+  }
+  if (patch.defaultSandbox !== undefined) {
+    assignments.push("default_sandbox = ?");
+    values.push(patch.defaultSandbox);
+  }
+  if (patch.allowedSandboxes !== undefined) {
+    assignments.push("allowed_sandboxes = ?");
+    values.push(JSON.stringify(patch.allowedSandboxes));
   }
   if (!assignments.length) return false;
   assignments.push("updated_at = ?");
@@ -4254,7 +4283,8 @@ async function createApp(): Promise<FastifyInstance> {
         broadcast({ type: "chats.updated", agentId: nextAgentId, repoId: params.repoId });
         return { ok: true, agentId: nextAgentId, repoId: params.repoId };
       }
-      if (agentPatchKeys.length) {
+      let agentSynced = false;
+      if (agentPatchKeys.length && agents.has(params.agentId)) {
         const result = await requestAgentProject(params.agentId, {
           type: "project.update",
           requestId: id("req"),
@@ -4267,8 +4297,10 @@ async function createApp(): Promise<FastifyInstance> {
         });
         if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_update_failed" });
         if (result.repos) upsertRepos(params.agentId, result.repos);
+        agentSynced = true;
       }
       const controllerSettingsUpdated = updateControllerProjectSettings(params.agentId, params.repoId, {
+        ...agentPatch,
         visibility: storedVisibility,
         writeAccess,
         writeUsers,
@@ -4278,7 +4310,8 @@ async function createApp(): Promise<FastifyInstance> {
       if (controllerSettingsUpdated) {
         broadcast({ type: "repos.updated", agentId: params.agentId, repos: repoInfosForAgent(params.agentId) });
       }
-      if (!agentPatchKeys.length && controllerSettingsUpdated && (deployProvided || dataProvided) && agents.has(params.agentId)) {
+      const shouldSyncAgentConfig = agentPatchKeys.length > 0 || deployProvided || dataProvided;
+      if (!agentSynced && controllerSettingsUpdated && shouldSyncAgentConfig && agents.has(params.agentId)) {
         const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
           .get(params.agentId, params.repoId) as RepoRow | undefined;
         if (repo) {
