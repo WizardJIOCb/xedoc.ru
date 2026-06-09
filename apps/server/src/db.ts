@@ -243,6 +243,12 @@ export function openDb(path: string): DatabaseSync {
       last_seen_at TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS agent_links (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, agent_id)
+    );
     CREATE TABLE IF NOT EXISTS repos (
       id TEXT NOT NULL,
       user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
@@ -430,6 +436,7 @@ export function openDb(path: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS idx_chat_shares_chat ON chat_shares(chat_id);
     CREATE INDEX IF NOT EXISTS idx_chat_shares_agent ON chat_shares(agent_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_file_shares_project ON file_shares(agent_id, repo_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_links_agent ON agent_links(agent_id);
     CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at);
     CREATE INDEX IF NOT EXISTS idx_user_activity_day ON user_activity_days(day);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_provider_user ON oauth_connections(provider, provider_user_id) WHERE provider_user_id IS NOT NULL;
@@ -578,6 +585,7 @@ export function openDb(path: string): DatabaseSync {
   db.exec("CREATE INDEX IF NOT EXISTS idx_chat_shares_chat ON chat_shares(chat_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_chat_shares_agent ON chat_shares(agent_id, updated_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_file_shares_project ON file_shares(agent_id, repo_id, updated_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_agent_links_agent ON agent_links(agent_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_repo_links_project ON repo_links(agent_id, repo_id)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_external ON chats(agent_id, source, external_id) WHERE external_id IS NOT NULL");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_external ON chat_messages(chat_id, source, external_id) WHERE external_id IS NOT NULL");

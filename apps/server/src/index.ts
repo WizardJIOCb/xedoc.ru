@@ -223,6 +223,17 @@ function agentAccessArgs(user: AuthUser): string[] {
 
 function canAccessAgent(user: AuthUser, agentId: string): boolean {
   if (isAdmin(user)) return true;
+  const row = db.prepare(`
+    SELECT 1
+    FROM agents a
+    LEFT JOIN agent_links al ON al.agent_id = a.id AND al.user_id = ?
+    WHERE a.id = ? AND (a.user_id = ? OR al.user_id IS NOT NULL)
+  `).get(user.id, agentId, user.id) as { 1: number } | undefined;
+  return Boolean(row);
+}
+
+function canManageAgent(user: AuthUser, agentId: string): boolean {
+  if (isAdmin(user)) return true;
   const row = db.prepare("SELECT 1 FROM agents WHERE id = ? AND user_id = ?").get(agentId, user.id) as { 1: number } | undefined;
   return Boolean(row);
 }
@@ -527,6 +538,8 @@ function visibleAgentIds(user: AuthUser): string[] {
   }
   const ownedRows = db.prepare("SELECT id FROM agents WHERE user_id = ?").all(user.id) as Array<{ id: string }>;
   const ids = new Set(ownedRows.map((row) => row.id));
+  const linkedRows = db.prepare("SELECT agent_id AS id FROM agent_links WHERE user_id = ?").all(user.id) as Array<{ id: string }>;
+  for (const row of linkedRows) ids.add(row.id);
   const repoRows = db.prepare(`
     SELECT r.agent_id, r.id
     FROM repos r
@@ -4107,7 +4120,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const agentId = (request.params as { agentId: string }).agentId;
-    if (!canAccessAgent(auth.user, agentId)) return reply.code(404).send({ error: "not_found" });
+    if (!canManageAgent(auth.user, agentId)) return reply.code(404).send({ error: "not_found" });
     if (agents.has(agentId)) return reply.code(409).send({ error: "agent_online" });
     const agent = db.prepare("SELECT id FROM agents WHERE id = ?").get(agentId) as { id: string } | undefined;
     if (!agent) return reply.code(404).send({ error: "not_found" });
@@ -4122,7 +4135,7 @@ async function createApp(): Promise<FastifyInstance> {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
     const agentId = (request.params as { agentId: string }).agentId;
-    if (!canAccessAgent(auth.user, agentId)) return reply.code(404).send({ error: "not_found" });
+    if (!canManageAgent(auth.user, agentId)) return reply.code(404).send({ error: "not_found" });
     if (agents.has(agentId)) return reply.code(409).send({ error: "agent_online" });
     const agent = db.prepare("SELECT id FROM agents WHERE id = ?").get(agentId) as { id: string } | undefined;
     if (!agent) return reply.code(404).send({ error: "not_found" });
