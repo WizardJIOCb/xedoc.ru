@@ -1108,6 +1108,11 @@ function defaultProjectValues(name: string, agent?: Agent | null, user?: Pick<Us
   };
 }
 
+function existingProjectPathForAgent(defaults: ReturnType<typeof defaultProjectValues>, agent?: Agent | null, currentServerPath?: string | null) {
+  if (!isLinuxAgent(agent)) return defaults.path;
+  return currentServerPath?.trim() || defaults.serverPath || defaults.path;
+}
+
 function projectUrl(domain?: string) {
   const normalized = normalizeProjectDomain(domain ?? "");
   return normalized ? `https://${normalized}` : "";
@@ -6057,6 +6062,8 @@ function App() {
     }
     const defaults = defaultProjectValues(selectedRepo.name, agent, currentUser);
     const deployMode = defaultDeployModeForAgent(agent);
+    const targetPath = existingProjectPathForAgent(defaults, agent, selectedRepo.serverPath);
+    const targetServerPath = isLinuxAgent(agent) ? targetPath : defaults.serverPath;
     const sourceDir = selectedRepo.deploy?.sourceDir ?? defaultDeploySourceDirForAgent(agent, deployMode);
     const deployConfig = buildDeployConfig(
       deployMode,
@@ -6075,12 +6082,12 @@ function App() {
         headers: { "x-csrf-token": csrf },
         body: JSON.stringify({
           targetAgentId: agent.id,
-          path: defaults.path,
-          serverPath: defaults.serverPath,
+          path: targetPath,
+          serverPath: targetServerPath,
           deploy: deployConfig,
           data: selectedRepo.data ?? {
             location: isLinuxAgent(agent) ? "server" : "local",
-            path: defaultProjectDataPath(isLinuxAgent(agent) ? "server" : "local", defaults.path, defaults.serverPath)
+            path: defaultProjectDataPath(isLinuxAgent(agent) ? "server" : "local", targetPath, targetServerPath)
           }
         })
       });
@@ -6523,12 +6530,15 @@ function App() {
       setProjectGithubUrl(defaults.githubUrl);
       setProjectDomain(defaults.domain);
     } else {
-      setProjectPath(defaults.path);
-      if (isUnifiedProjectFolderMode(agent, defaultMode)) setProjectServerPath(defaults.path);
+      const nextProjectPath = existingProjectPathForAgent(defaults, agent, projectServerPath);
+      setProjectPath(nextProjectPath);
+      if (isLinuxAgent(agent) || isUnifiedProjectFolderMode(agent, defaultMode)) setProjectServerPath(nextProjectPath);
     }
     const nextDataLocation = isLinuxAgent(agent) ? "server" : "local";
+    const nextProjectPath = projectPanel === "new" ? defaults.path : existingProjectPathForAgent(defaults, agent, projectServerPath);
+    const nextServerPath = isLinuxAgent(agent) || isUnifiedProjectFolderMode(agent, defaultMode) ? nextProjectPath : projectPanel === "new" ? defaults.serverPath : projectServerPath;
     setProjectDataLocation(nextDataLocation);
-    setProjectDataPath(defaultProjectDataPath(nextDataLocation, defaults.path, isUnifiedProjectFolderMode(agent, defaultMode) || projectPanel === "new" ? defaults.serverPath : projectServerPath));
+    setProjectDataPath(defaultProjectDataPath(nextDataLocation, nextProjectPath, nextServerPath));
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
     const nextDefaultSourceDir = defaultDeploySourceDirForAgent(agent, defaultMode);

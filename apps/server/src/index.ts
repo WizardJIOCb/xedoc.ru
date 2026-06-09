@@ -1114,6 +1114,23 @@ function nullableText(value: string | undefined | null): string | null {
   return trimmed ? trimmed : null;
 }
 
+function isLinuxAgentId(agentId: string): boolean {
+  const row = db.prepare("SELECT os FROM agents WHERE id = ?").get(agentId) as Pick<AgentRow, "os"> | undefined;
+  return (row?.os ?? "").toLowerCase().includes("linux");
+}
+
+function targetProjectPathForAgent(
+  agentId: string,
+  patch: Extract<ServerToAgent, { type: "project.update" }>["patch"]
+): string | undefined {
+  const projectPath = nullableText(patch.path) ?? undefined;
+  const serverPath = nullableText(patch.serverPath) ?? undefined;
+  if (serverPath && isLinuxAgentId(agentId) && patch.deploy?.sourceDir?.trim() === ".") {
+    return serverPath;
+  }
+  return projectPath;
+}
+
 function activeProjectJob(agentId: string, repoId: string): JobRow | undefined {
   return db.prepare("SELECT * FROM jobs WHERE agent_id = ? AND repo_id = ? AND status IN ('queued','assigned','running') LIMIT 1")
     .get(agentId, repoId) as JobRow | undefined;
@@ -4272,6 +4289,8 @@ async function createApp(): Promise<FastifyInstance> {
           ...(deployProvided ? { deploy } : {}),
           ...(dataProvided ? { data } : {})
         };
+        const targetProjectPath = targetProjectPathForAgent(nextAgentId, migrationPatch);
+        if (targetProjectPath) migrationPatch.path = targetProjectPath;
         const result = await requestAgentProject(nextAgentId, {
           type: "project.update",
           requestId: id("req"),
