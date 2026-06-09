@@ -114,11 +114,15 @@ function logProgress(message: string): void {
   console.log(`[progress] ${message}`);
 }
 
+function gitArgsForPath(path: string, args: string[]): string[] {
+  return ["-c", `safe.directory=${resolve(path)}`, "-C", path, ...args];
+}
+
 async function ensureGitRepo(path: string): Promise<void> {
   mkdirSync(path, { recursive: true });
-  const probe = await runCapture("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], undefined, 15000);
+  const probe = await runCapture("git", gitArgsForPath(path, ["rev-parse", "--is-inside-work-tree"]), undefined, 15000);
   if (probe.exitCode !== 0 || probe.stdout.trim() !== "true") {
-    const init = await runCapture("git", ["-C", path, "init"], undefined, 30000);
+    const init = await runCapture("git", gitArgsForPath(path, ["init"]), undefined, 30000);
     if (init.exitCode !== 0) throw new Error(init.stderr || "git init failed");
   }
 }
@@ -133,7 +137,7 @@ async function prepareProjectFolder(path: string, githubUrl?: string): Promise<v
   if (existsSync(targetPath)) {
     const stat = statSync(targetPath);
     if (!stat.isDirectory()) throw new Error("Project path exists and is not a directory.");
-    const gitProbe = await runCapture("git", ["-C", targetPath, "rev-parse", "--is-inside-work-tree"], undefined, 15000);
+    const gitProbe = await runCapture("git", gitArgsForPath(targetPath, ["rev-parse", "--is-inside-work-tree"]), undefined, 15000);
     if (gitProbe.exitCode === 0 && gitProbe.stdout.trim() === "true") return;
     if (readdirSync(targetPath).length > 0) {
       throw new Error("Project folder is not empty. Use an empty folder or an existing Git repository for clone.");
@@ -662,7 +666,7 @@ async function gitSync(
 
   const output: string[] = [];
   const runGit = async (args: string[], timeoutMs = 60000, allowExitCodes = [0]) => {
-    const result = await runCapture("git", ["-C", repo.path, ...args], undefined, timeoutMs);
+    const result = await runCapture("git", gitArgsForPath(repo.path, args), undefined, timeoutMs);
     const text = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
     output.push(`$ git ${args.join(" ")}`);
     if (text) output.push(text);
@@ -768,9 +772,9 @@ async function buildProject(repoId: string): Promise<string> {
 async function gitStatusProject(repoId: string): Promise<string> {
   const repo = config.repos.find((item) => item.id === repoId);
   if (!repo) throw new Error("Project not found in agent config.");
-  const status = await runCapture("git", ["status", "--short", "--branch"], repo.path, 15000);
-  const staged = await runCapture("git", ["diff", "--cached", "--stat"], repo.path, 15000);
-  const unstaged = await runCapture("git", ["diff", "--stat"], repo.path, 15000);
+  const status = await runCapture("git", gitArgsForPath(repo.path, ["status", "--short", "--branch"]), undefined, 15000);
+  const staged = await runCapture("git", gitArgsForPath(repo.path, ["diff", "--cached", "--stat"]), undefined, 15000);
+  const unstaged = await runCapture("git", gitArgsForPath(repo.path, ["diff", "--stat"]), undefined, 15000);
   const sections = [
     "$ git status --short --branch",
     status.stdout.trim() || status.stderr.trim() || "No status output.",
