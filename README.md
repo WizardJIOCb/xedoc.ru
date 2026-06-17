@@ -1,3 +1,8 @@
+<img width="1675" height="1398" alt="Снимок экрана 2026-06-17 153456" src="https://github.com/user-attachments/assets/096443d3-7026-4d62-9798-0a496c4e0371" />
+<img width="1671" height="1398" alt="Снимок экрана 2026-06-17 153412" src="https://github.com/user-attachments/assets/97032f6e-c50f-4b71-b40e-ecb4c0a2c474" />
+<img width="1675" height="1401" alt="Снимок экрана 2026-06-17 153307" src="https://github.com/user-attachments/assets/b39adf74-d0e1-4209-9922-bf1e6d95bcf6" />
+
+
 # xedoc.ru
 
 `xedoc.ru` is a private web workbench for running Codex-driven development from a browser. The production site, GitHub repository, local workspace, and server folder now all use the `xedoc.ru` name.
