@@ -27,6 +27,8 @@ const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024;
 const MAX_SYNC_MESSAGES = 160;
 const MAX_ACTION_OUTPUT_CHARS = 300;
 const MAX_ACTIONS_PER_MESSAGE = 8;
+const MAX_TOOL_OUTPUT_CHARS = 120000;
+const MAX_TOOL_INPUT_CHARS = 20000;
 const MAX_SYNC_DIFF_CHARS = 2500;
 const MAX_CHAT_SYNC_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const CODEX_CONTEXT_TAGS = [
@@ -61,10 +63,13 @@ type LocalChat = {
 
 type SyncedCodexAction = {
   id: string;
+  name: string;
   command: string;
+  input?: string;
   status: string;
   output: string;
   at: string;
+  completedAt?: string;
 };
 
 export async function syncLocalChats(
@@ -277,30 +282,27 @@ function readCodexRollout(path: string): ChatMessage[] {
     if (row.type === "response_item" && row.payload?.type === "message" && row.payload?.role === "user") {
       currentRunStartedAt = createdAt;
     }
-    if (
-      (row.type === "response_item" && row.payload?.type === "function_call")
-      || row.type === "custom_tool_call"
-    ) {
-      const action = actionFromFunctionCall(row.payload, createdAt, index);
+    if (isToolCallRow(row)) {
+      const action = actionFromFunctionCall(toolPayload(row), createdAt, index);
       if (action) {
         actionsById.set(action.id, action);
         pendingActions.push(action);
       }
     }
-    if (
-      (row.type === "response_item" && row.payload?.type === "function_call_output")
-      || row.type === "custom_tool_call_output"
-    ) {
-      const actionId = typeof row.payload.call_id === "string" ? row.payload.call_id : "";
+    if (isToolOutputRow(row)) {
+      const payload = toolPayload(row);
+      const actionId = toolOutputCallId(payload) ?? "";
       const action = actionId ? actionsById.get(actionId) : undefined;
       if (action) {
-        action.output = cleanActionOutput(row.payload.output);
-        action.status = action.output.match(/^Exit code:\s*0\b/im) || /Success\./i.test(action.output) ? "completed" : "failed";
+        action.output = cleanActionOutput(payload?.output ?? payload?.content ?? payload?.result, MAX_TOOL_OUTPUT_CHARS);
+        action.status = actionStatusFromOutput(action.output);
         action.at = createdAt;
+        action.completedAt = createdAt;
+        messages.push(toolMessageFromAction(action, path, index));
       }
-      const changeStat = extractChangeStat(row.payload.output);
+      const changeStat = extractChangeStat(payload?.output);
       if (changeStat) lastChangeStat = changeStat;
-      const changeDiff = extractChangeDiff(row.payload.output);
+      const changeDiff = extractChangeDiff(payload?.output);
       if (changeDiff) lastChangeDiff = changeDiff;
     }
     if (row.type === "response_item" && row.payload?.type === "message") {
@@ -351,39 +353,147 @@ function compactAction(action: SyncedCodexAction): SyncedCodexAction {
   };
 }
 
+function toolPayload(row: any): any {
+  return row?.payload && typeof row.payload === "object" ? row.payload : row;
+}
+
+function isToolCallRow(row: any): boolean {
+  if (row?.type === "custom_tool_call") return true;
+  return row?.type === "response_item" && [
+    "function_call",
+    "custom_tool_call",
+    "command_execution"
+  ].includes(row.payload?.type);
+}
+
+function isToolOutputRow(row: any): boolean {
+  if (row?.type === "custom_tool_call_output") return true;
+  return row?.type === "response_item" && [
+    "function_call_output",
+    "custom_tool_call_output",
+    "command_execution_output"
+  ].includes(row.payload?.type);
+}
+
 function actionFromFunctionCall(payload: any, at: string, fallbackIndex: number): SyncedCodexAction | null {
-  const name = typeof payload.name === "string" ? payload.name : "tool";
-  if (!["shell_command", "apply_patch"].includes(name)) return null;
-  const id = typeof payload.call_id === "string" ? payload.call_id : `${name}:${fallbackIndex}`;
-  const command = name === "shell_command"
-    ? commandFromFunctionArguments(payload.arguments)
-    : "apply_patch";
+  if (!payload || typeof payload !== "object") return null;
+  const name = typeof payload.name === "string"
+    ? payload.name
+    : typeof payload.tool_name === "string"
+      ? payload.tool_name
+      : payload.type === "command_execution"
+        ? "command_execution"
+        : "tool";
+  const id = typeof payload.call_id === "string"
+    ? payload.call_id
+    : typeof payload.id === "string"
+      ? payload.id
+      : `${name}:${fallbackIndex}`;
+  const input = toolInputText(payload);
+  const command = commandFromToolPayload(name, payload, input);
   return {
     id,
-    command: command.slice(0, 500),
+    name,
+    command: truncateText(command || name, 1000),
+    input: input ? truncateText(input, MAX_TOOL_INPUT_CHARS) : undefined,
     status: "running",
     output: "",
     at
   };
 }
 
-function commandFromFunctionArguments(value: unknown): string {
-  if (typeof value !== "string") return "command";
-  try {
-    const parsed = JSON.parse(value) as { command?: unknown };
-    if (typeof parsed.command === "string" && parsed.command.trim()) return parsed.command.trim();
-  } catch {
-    // Fall through to a short raw representation.
-  }
-  return value.replace(/\s+/g, " ").trim() || "command";
+function toolOutputCallId(payload: any): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  return typeof payload.call_id === "string"
+    ? payload.call_id
+    : typeof payload.id === "string"
+      ? payload.id
+      : undefined;
 }
 
-function cleanActionOutput(value: unknown): string {
-  if (typeof value !== "string") return "";
-  return value
+function toolInputText(payload: any): string {
+  const value = payload.arguments ?? payload.input ?? payload.command ?? payload.code;
+  if (typeof value === "string") return value.trim();
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function commandFromToolPayload(name: string, payload: any, input: string): string {
+  if (typeof payload.command === "string" && payload.command.trim()) return payload.command.trim();
+  if (input) {
+    try {
+      const parsed = JSON.parse(input) as Record<string, unknown>;
+      if (typeof parsed.cmd === "string" && parsed.cmd.trim()) return parsed.cmd.trim();
+      if (typeof parsed.command === "string" && parsed.command.trim()) return parsed.command.trim();
+      if (typeof parsed.shell_command === "string" && parsed.shell_command.trim()) return parsed.shell_command.trim();
+      if (name === "write_stdin" && parsed.session_id !== undefined) return `write_stdin session ${String(parsed.session_id)}`;
+      if (name === "apply_patch" || name.endsWith(".apply_patch")) return "apply_patch";
+      if (Array.isArray(parsed.tool_uses)) {
+        return parsed.tool_uses
+          .map((item: any) => typeof item?.recipient_name === "string" ? item.recipient_name : "tool")
+          .join(", ");
+      }
+    } catch {
+      if (name === "apply_patch" || name.endsWith(".apply_patch")) return "apply_patch";
+      return input.replace(/\s+/g, " ").trim();
+    }
+  }
+  return name;
+}
+
+function cleanActionOutput(value: unknown, limit = MAX_ACTION_OUTPUT_CHARS): string {
+  const text = typeof value === "string" ? value : value === undefined ? "" : stringifyUnknown(value);
+  return truncateText(text
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
-    .slice(0, MAX_ACTION_OUTPUT_CHARS);
+    .trim(), limit);
+}
+
+function stringifyUnknown(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function actionStatusFromOutput(output: string): "completed" | "failed" {
+  if (/Process exited with code\s+0\b|Exit code:\s*0\b|\bstatus:\s*success\b/i.test(output)) return "completed";
+  if (/Process exited with code\s+[1-9]\d*\b|Exit code:\s*[1-9]\d*\b|\b(error|failed|exception)\b/i.test(output)) return "failed";
+  return "completed";
+}
+
+function toolMessageFromAction(action: SyncedCodexAction, path: string, index: number): ChatMessage {
+  const output = action.output.trim();
+  const content = [
+    "Command",
+    "~~~text",
+    action.command,
+    "~~~",
+    output ? "Output" : "Output not captured yet.",
+    ...(output ? ["~~~text", output, "~~~"] : [])
+  ].join("\n");
+  const metadata: Record<string, unknown> = {
+    localPath: path,
+    toolName: action.name,
+    command: action.command,
+    status: action.status,
+    startedAt: action.at
+  };
+  if (action.completedAt) metadata.completedAt = action.completedAt;
+  if (action.input && action.input !== action.command) metadata.input = action.input;
+  return {
+    role: "tool",
+    content,
+    source: "codex",
+    externalId: `${basename(path)}:tool:${index}:${action.id}`,
+    createdAt: action.completedAt ?? action.at,
+    metadata
+  };
 }
 
 function truncateText(value: string, limit: number): string {

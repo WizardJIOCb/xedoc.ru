@@ -2641,11 +2641,46 @@ function upsertChatShareFromChat(chat: ChatRow): ChatShareRow {
   return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(token) as ChatShareRow;
 }
 
+function withPreservedToolMessages<T extends { role: string; externalId?: string | null; createdAt: string }>(
+  existing: ChatShareRow | undefined,
+  messages: T[]
+): T[] {
+  if (!existing || messages.some((message) => message.role === "tool")) return messages;
+  let snapshot: { messages?: unknown };
+  try {
+    snapshot = JSON.parse(existing.snapshot_json) as { messages?: unknown };
+  } catch {
+    return messages;
+  }
+  if (!Array.isArray(snapshot.messages)) return messages;
+  const knownExternalIds = new Set(messages.flatMap((message) => typeof message.externalId === "string" ? [message.externalId] : []));
+  const preserved = snapshot.messages.filter((message: any): message is T => (
+    message
+    && typeof message === "object"
+    && message.role === "tool"
+    && typeof message.content === "string"
+    && typeof message.createdAt === "string"
+    && (typeof message.externalId !== "string" || !knownExternalIds.has(message.externalId))
+  ));
+  if (!preserved.length) return messages;
+  return [...messages, ...preserved].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function isMojibakeQuestionTitle(value: string): boolean {
+  const compact = value.replace(/\s+/g, "");
+  return compact.length >= 6 && /^\?+$/.test(compact);
+}
+
+function preservedShareTitle(existing: ChatShareRow | undefined, nextTitle: string): string {
+  if (!existing || !isMojibakeQuestionTitle(nextTitle) || isMojibakeQuestionTitle(existing.title)) return nextTitle;
+  return existing.title;
+}
+
 function upsertChatShareFromLocalSync(agent: AgentRow, sync: Omit<Extract<AgentToServer, { type: "chat.sync" }>, "type">): ChatShareRow {
   const stamp = nowIso();
   const syncedMessages = sanitizeSyncedMessages(sync.messages);
   const syncTitle = syncedChatTitle(sync, syncedMessages).slice(0, 300);
-  const messages = stripPrivateAttachmentUrls(syncedMessages.map((message, index) => ({
+  const mappedMessages = stripPrivateAttachmentUrls(syncedMessages.map((message, index) => ({
     id: message.id ?? `local_${sync.source}_${sync.externalId}_${index}`,
     chatId: `local:${sync.externalId}`,
     role: message.role,
@@ -2663,13 +2698,17 @@ function upsertChatShareFromLocalSync(agent: AgentRow, sync: Omit<Extract<AgentT
       createdAt: message.createdAt
     }))
   })));
+  const existing = db.prepare("SELECT * FROM chat_shares WHERE agent_id = ? AND source = ? AND external_id = ? AND chat_id IS NULL")
+    .get(agent.id, sync.source, sync.externalId) as ChatShareRow | undefined;
+  const messages = withPreservedToolMessages(existing, mappedMessages);
+  const title = preservedShareTitle(existing, syncTitle);
   const snapshot = {
     exportedAt: stamp,
     chat: {
       id: `local:${sync.externalId}`,
       agentId: agent.id,
       repoId: sync.repoId,
-      title: syncTitle,
+      title,
       source: sync.source,
       externalId: sync.externalId,
       cwd: sync.cwd,
@@ -2682,21 +2721,19 @@ function upsertChatShareFromLocalSync(agent: AgentRow, sync: Omit<Extract<AgentT
     finalAnswer: latestAssistantContent(messages)
   };
   const snapshotJson = JSON.stringify(snapshot);
-  const existing = db.prepare("SELECT * FROM chat_shares WHERE agent_id = ? AND source = ? AND external_id = ? AND chat_id IS NULL")
-    .get(agent.id, sync.source, sync.externalId) as ChatShareRow | undefined;
   if (existing) {
     db.prepare(`
       UPDATE chat_shares
       SET repo_id=?, title=?, final_content=?, snapshot_json=?, updated_at=?
       WHERE token=?
-    `).run(sync.repoId, syncTitle, snapshot.finalAnswer, snapshotJson, stamp, existing.token);
+    `).run(sync.repoId, title, snapshot.finalAnswer, snapshotJson, stamp, existing.token);
     return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(existing.token) as ChatShareRow;
   }
   const token = randomToken("share");
   db.prepare(`
     INSERT INTO chat_shares (token,chat_id,agent_id,repo_id,title,source,external_id,final_content,snapshot_json,created_at,updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)
-  `).run(token, null, agent.id, sync.repoId, syncTitle, sync.source, sync.externalId, snapshot.finalAnswer, snapshotJson, stamp, stamp);
+  `).run(token, null, agent.id, sync.repoId, title, sync.source, sync.externalId, snapshot.finalAnswer, snapshotJson, stamp, stamp);
   return db.prepare("SELECT * FROM chat_shares WHERE token = ?").get(token) as ChatShareRow;
 }
 

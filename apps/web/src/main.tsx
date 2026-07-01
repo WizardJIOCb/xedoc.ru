@@ -1409,6 +1409,98 @@ function chatSourceLabel(source?: string | null) {
   return "Web";
 }
 
+function chatMessageAuthorLabel(message: Pick<ChatMessage, "role" | "source">) {
+  if (message.role === "user") return "User";
+  if (message.role === "tool") return "Command";
+  return chatSourceLabel(message.source);
+}
+
+function parsedToolMessage(message: ChatMessage) {
+  const commandFromMetadata = typeof message.metadata?.command === "string" ? message.metadata.command.trim() : "";
+  const normalized = message.content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  const commandMatch = normalized.match(/^Command\n~~~(?:text|shell|bash|powershell|pwsh)?\n([\s\S]*?)\n~~~/i);
+  const outputMatch = normalized.match(/\nOutput\n~~~(?:text|shell|bash|powershell|pwsh)?\n([\s\S]*?)\n~~~\s*$/i);
+  const command = commandFromMetadata || commandMatch?.[1]?.trim() || "command";
+  const output = outputMatch?.[1]?.trim() || "";
+  const status = typeof message.metadata?.status === "string" ? message.metadata.status : "";
+  const consoleOutput = parsedConsoleOutput(output);
+  const resolvedStatus = status === "failed" || (consoleOutput.exitCode !== undefined && consoleOutput.exitCode !== 0)
+    ? "Failed"
+    : status === "running"
+      ? "Running"
+      : "Success";
+  return {
+    command,
+    output,
+    status: resolvedStatus,
+    consoleOutput
+  };
+}
+
+function parsedConsoleOutput(output: string) {
+  const normalized = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  const lines = normalized ? normalized.split("\n") : [];
+  let bodyStart = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index]?.trim() === "Output:") {
+      bodyStart = index + 1;
+      break;
+    }
+  }
+  const headerLines = bodyStart >= 0 ? lines.slice(0, bodyStart - 1) : [];
+  const body = (bodyStart >= 0 ? lines.slice(bodyStart).join("\n") : normalized).trim();
+  const chunkId = headerLines.join("\n").match(/^Chunk ID:\s*(.+)$/m)?.[1]?.trim();
+  const wallTime = headerLines.join("\n").match(/^Wall time:\s*(.+)$/m)?.[1]?.trim();
+  const exitCodeText = headerLines.join("\n").match(/^Process exited with code\s+(-?\d+)/m)?.[1];
+  const tokenCount = headerLines.join("\n").match(/^Original token count:\s*(\d+)/m)?.[1];
+  const exitCode = exitCodeText === undefined ? undefined : Number(exitCodeText);
+  return {
+    body,
+    chunkId,
+    wallTime,
+    exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
+    tokenCount
+  };
+}
+
+function renderSharedToolMessage(message: ChatMessage) {
+  const tool = parsedToolMessage(message);
+  if (!tool.command && !tool.output) return renderRichText(message.content, "rich-text message-body");
+  const outputLineCount = tool.consoleOutput.body ? tool.consoleOutput.body.split("\n").length : 0;
+  const outputBytes = tool.consoleOutput.body ? new Blob([tool.consoleOutput.body]).size : 0;
+  const outputSize = outputBytes ? formatBytes(outputBytes) : "";
+  const outputDefaultOpen = outputLineCount <= 8 && outputBytes <= 1200;
+  return (
+    <div className="share-command-card">
+      <div className="share-command-head">
+        <span className="share-command-shell"><Terminal size={14} /> Shell</span>
+        <span className={`share-command-status ${tool.status.toLowerCase()}`}>
+          {tool.status === "Success" ? <CheckCircle2 size={14} /> : tool.status === "Failed" ? <X size={14} /> : <Clock3 size={14} />}
+          {tool.status}
+        </span>
+      </div>
+      <pre className="share-command-code"><code><span>$</span> {tool.command}</code></pre>
+      <div className="share-command-facts">
+        {tool.consoleOutput.exitCode !== undefined && <span>exit {tool.consoleOutput.exitCode}</span>}
+        {tool.consoleOutput.wallTime && <span>{tool.consoleOutput.wallTime}</span>}
+        {tool.consoleOutput.chunkId && <span>{tool.consoleOutput.chunkId}</span>}
+        {tool.consoleOutput.tokenCount && <span>{tool.consoleOutput.tokenCount} tokens</span>}
+      </div>
+      {tool.consoleOutput.body && (
+        <details className="share-command-output-details" open={outputDefaultOpen}>
+          <summary>
+            <span className="show-label">Показать вывод</span>
+            <span className="hide-label">Скрыть вывод</span>
+            <small>{outputLineCount} строк{outputSize ? ` · ${outputSize}` : ""}</small>
+            <ChevronDown size={15} />
+          </summary>
+          <pre className="share-command-output"><code>{tool.consoleOutput.body}</code></pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function modelOptionsForKind(kind?: string | null) {
   if (kind === "gemini-cli") return GEMINI_CLI_MODEL_OPTIONS;
   if (kind === "gemini") return GEMINI_MODEL_OPTIONS;
@@ -3974,11 +4066,11 @@ function SharedChatPage({ token }: { token: string }) {
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-meta">
                   <div className="message-author-stack">
-                    <span>{message.role === "user" ? "User" : chatSourceLabel(message.source)}</span>
+                    <span>{chatMessageAuthorLabel(message)}</span>
                     <small>{formatDateTime(message.createdAt)}</small>
                   </div>
                 </div>
-                {message.role === "system" ? (
+                {message.role === "tool" ? renderSharedToolMessage(message) : message.role === "system" ? (
                   <div className="system-message-body" title={normalizeDisplayText(message.content).trim()}>
                     {normalizeDisplayText(message.content).trim()}
                   </div>

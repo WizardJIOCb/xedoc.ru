@@ -6585,6 +6585,205 @@ h2 > strong {
   background: var(--panel-2);
 }
 
+.share-command-card {
+  display: grid;
+  gap: 10px;
+  max-width: 100%;
+  margin-top: 6px;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: #0f1117;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.share-command-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.share-command-shell,
+.share-command-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.share-command-shell {
+  min-width: 0;
+  color: #cbd5e1;
+}
+
+.share-command-code {
+  max-width: 100%;
+  margin: 0;
+  padding: 10px 11px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 7px;
+  background: #07090d;
+  color: #f8fafc;
+  font-size: 12.5px;
+  font-weight: 750;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.share-command-code span {
+  color: #34d399;
+}
+
+.share-command-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.share-command-facts span {
+  padding: 3px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.share-command-output-details {
+  overflow: hidden;
+  border: 1px solid rgba(59, 130, 246, 0.26);
+  border-radius: 8px;
+  background: #080b12;
+}
+
+.share-command-output-details summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #dbeafe;
+  background:
+    linear-gradient(180deg, rgba(37, 99, 235, 0.24), rgba(37, 99, 235, 0.1)),
+    #0b1020;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.share-command-output-details summary:hover {
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.3), rgba(37, 99, 235, 0.13)),
+    #0d1426;
+}
+
+.share-command-output-details[open] summary {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px 8px 0 0;
+  background: #090d17;
+}
+
+.share-command-output-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.share-command-output-details summary small {
+  margin-left: auto;
+  color: #93c5fd;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.share-command-output-details summary svg {
+  flex: 0 0 auto;
+  color: #93c5fd;
+  transition: transform 0.16s ease;
+}
+
+.share-command-output-details[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.share-command-output-details .hide-label {
+  display: none;
+}
+
+.share-command-output-details[open] .show-label {
+  display: none;
+}
+
+.share-command-output-details[open] .hide-label {
+  display: inline;
+}
+
+.share-command-output {
+  max-width: 100%;
+  max-height: min(46vh, 520px);
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  color: #d1d5db;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.025) 50%, transparent 50%) 0 0 / 100% 3.1em,
+    #05070a;
+  font-size: 12px;
+  line-height: 1.55;
+  scrollbar-color: #475569 #111827;
+  scrollbar-width: thin;
+  white-space: pre;
+}
+
+.share-command-code::-webkit-scrollbar,
+.share-command-output::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.share-command-code::-webkit-scrollbar-track,
+.share-command-output::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: #111827;
+}
+
+.share-command-code::-webkit-scrollbar-thumb,
+.share-command-output::-webkit-scrollbar-thumb {
+  border: 2px solid #111827;
+  border-radius: 999px;
+  background: #475569;
+}
+
+.share-command-code::-webkit-scrollbar-thumb:hover,
+.share-command-output::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+.share-command-status {
+  justify-self: end;
+  flex: 0 0 auto;
+  color: #94a3b8;
+}
+
+.share-command-status.success {
+  color: #34d399;
+}
+
+.share-command-status.failed {
+  color: #fb7185;
+}
+
+.share-command-status.running {
+  color: #fbbf24;
+}
+
 .message.system .message-author-stack {
   display: flex;
   align-items: center;

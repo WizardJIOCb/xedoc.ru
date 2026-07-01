@@ -65,6 +65,21 @@ const CODEX_CONTEXT_TAGS = [
   "skills_instructions",
   "plugins_instructions"
 ];
+const MAX_EXPORTED_MESSAGE_CHARS = 200000;
+const MAX_EXPORTED_THREAD_MESSAGES = 1000;
+const MAX_TOOL_OUTPUT_CHARS = 120000;
+const MAX_TOOL_INPUT_CHARS = 20000;
+
+type ExportedToolAction = {
+  id: string;
+  name: string;
+  command: string;
+  input?: string;
+  output: string;
+  status: "running" | "completed" | "failed";
+  createdAt: string;
+  completedAt?: string;
+};
 
 function pipePath(): string {
   const configured = process.env.CMC_VSCODE_BRIDGE_PIPE?.trim();
@@ -293,12 +308,32 @@ function rolloutPathForThread(threadId: string): string | undefined {
 function readCodexThreadMessages(path: string): ExportedChatMessage[] {
   const messages: ExportedChatMessage[] = [];
   const text = readFileSync(path, "utf8");
+  const actionsById = new Map<string, ExportedToolAction>();
   for (const [index, line] of text.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     let row: any;
     try {
       row = JSON.parse(line);
     } catch {
+      continue;
+    }
+    const createdAt = typeof row.timestamp === "string" ? row.timestamp : new Date().toISOString();
+    if (isToolCallRow(row)) {
+      const action = toolActionFromCall(toolPayload(row), createdAt, index);
+      if (action) actionsById.set(action.id, action);
+      continue;
+    }
+    if (isToolOutputRow(row)) {
+      const payload = toolPayload(row);
+      const callId = toolOutputCallId(payload);
+      const action = callId ? actionsById.get(callId) : undefined;
+      if (action && callId) {
+        action.output = cleanToolOutput(payload?.output ?? payload?.content ?? payload?.result);
+        action.status = toolStatusFromOutput(action.output);
+        action.completedAt = createdAt;
+        messages.push(toolMessageFromAction(action, path, index));
+        actionsById.delete(callId);
+      }
       continue;
     }
     if (row.type !== "response_item" || row.payload?.type !== "message") continue;
@@ -308,13 +343,160 @@ function readCodexThreadMessages(path: string): ExportedChatMessage[] {
     if (!content || isCodexContextMessage(content)) continue;
     messages.push({
       role,
-      content: content.slice(0, 200000),
+      content: content.slice(0, MAX_EXPORTED_MESSAGE_CHARS),
       source: "codex",
       externalId: `${basename(path)}:${index}`,
-      createdAt: typeof row.timestamp === "string" ? row.timestamp : new Date().toISOString()
+      createdAt
     });
   }
-  return messages;
+  for (const action of actionsById.values()) {
+    messages.push(toolMessageFromAction(action, path, messages.length));
+  }
+  return messages.slice(-MAX_EXPORTED_THREAD_MESSAGES);
+}
+
+function toolPayload(row: any): any {
+  return row?.payload && typeof row.payload === "object" ? row.payload : row;
+}
+
+function isToolCallRow(row: any): boolean {
+  if (row?.type === "custom_tool_call") return true;
+  return row?.type === "response_item" && [
+    "function_call",
+    "custom_tool_call",
+    "command_execution"
+  ].includes(row.payload?.type);
+}
+
+function isToolOutputRow(row: any): boolean {
+  if (row?.type === "custom_tool_call_output") return true;
+  return row?.type === "response_item" && [
+    "function_call_output",
+    "custom_tool_call_output",
+    "command_execution_output"
+  ].includes(row.payload?.type);
+}
+
+function toolActionFromCall(payload: any, createdAt: string, fallbackIndex: number): ExportedToolAction | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const name = typeof payload.name === "string"
+    ? payload.name
+    : typeof payload.tool_name === "string"
+      ? payload.tool_name
+      : payload.type === "command_execution"
+        ? "command_execution"
+        : "tool";
+  const id = typeof payload.call_id === "string"
+    ? payload.call_id
+    : typeof payload.id === "string"
+      ? payload.id
+      : `${name}:${fallbackIndex}`;
+  const input = toolInputText(payload);
+  const command = commandFromToolPayload(name, payload, input);
+  return {
+    id,
+    name,
+    command: truncate(command || name, 1000),
+    input: input ? truncate(input, MAX_TOOL_INPUT_CHARS) : undefined,
+    output: "",
+    status: "running",
+    createdAt
+  };
+}
+
+function toolOutputCallId(payload: any): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  return typeof payload.call_id === "string"
+    ? payload.call_id
+    : typeof payload.id === "string"
+      ? payload.id
+      : undefined;
+}
+
+function toolInputText(payload: any): string {
+  const value = payload.arguments ?? payload.input ?? payload.command ?? payload.code;
+  if (typeof value === "string") return value.trim();
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function commandFromToolPayload(name: string, payload: any, input: string): string {
+  if (typeof payload.command === "string" && payload.command.trim()) return payload.command.trim();
+  if (input) {
+    try {
+      const parsed = JSON.parse(input) as Record<string, unknown>;
+      if (typeof parsed.cmd === "string" && parsed.cmd.trim()) return parsed.cmd.trim();
+      if (typeof parsed.command === "string" && parsed.command.trim()) return parsed.command.trim();
+      if (typeof parsed.shell_command === "string" && parsed.shell_command.trim()) return parsed.shell_command.trim();
+      if (name === "write_stdin" && parsed.session_id !== undefined) return `write_stdin session ${String(parsed.session_id)}`;
+      if (name === "apply_patch" || name.endsWith(".apply_patch")) return "apply_patch";
+      if (Array.isArray(parsed.tool_uses)) {
+        return parsed.tool_uses
+          .map((item: any) => typeof item?.recipient_name === "string" ? item.recipient_name : "tool")
+          .join(", ");
+      }
+    } catch {
+      if (name === "apply_patch" || name.endsWith(".apply_patch")) return "apply_patch";
+      return input.replace(/\s+/g, " ").trim();
+    }
+  }
+  return name;
+}
+
+function cleanToolOutput(value: unknown): string {
+  const text = typeof value === "string" ? value : value === undefined ? "" : stringifyUnknown(value);
+  return truncate(text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim(), MAX_TOOL_OUTPUT_CHARS);
+}
+
+function stringifyUnknown(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function toolStatusFromOutput(output: string): "completed" | "failed" {
+  if (/Process exited with code\s+0\b|Exit code:\s*0\b|\bstatus:\s*success\b/i.test(output)) return "completed";
+  if (/Process exited with code\s+[1-9]\d*\b|Exit code:\s*[1-9]\d*\b|\b(error|failed|exception)\b/i.test(output)) return "failed";
+  return "completed";
+}
+
+function toolMessageFromAction(action: ExportedToolAction, path: string, index: number): ExportedChatMessage {
+  const output = action.output.trim();
+  const content = [
+    "Command",
+    "~~~text",
+    action.command,
+    "~~~",
+    output ? "Output" : "Output not captured yet.",
+    ...(output ? ["~~~text", output, "~~~"] : [])
+  ].join("\n");
+  const metadata: Record<string, unknown> = {
+    toolName: action.name,
+    command: action.command,
+    status: action.status,
+    startedAt: action.createdAt
+  };
+  if (action.completedAt) metadata.completedAt = action.completedAt;
+  if (action.input && action.input !== action.command) metadata.input = action.input;
+  return {
+    role: "tool",
+    content: content.slice(0, MAX_EXPORTED_MESSAGE_CHARS),
+    source: "codex",
+    externalId: `${basename(path)}:tool:${index}:${action.id}`,
+    createdAt: action.completedAt ?? action.createdAt,
+    metadata
+  };
+}
+
+function truncate(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}\n\n[truncated ${value.length - limit} chars]`;
 }
 
 function readAgentConfig(): AgentConfig {
