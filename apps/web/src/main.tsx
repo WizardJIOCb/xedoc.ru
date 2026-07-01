@@ -1596,7 +1596,8 @@ function parsedConsoleOutput(output: string) {
 function renderSharedToolMessage(message: ChatMessage) {
   const tool = parsedToolMessage(message);
   if (!tool.command && !tool.output) return renderRichText(message.content, "rich-text message-body");
-  const outputLineCount = tool.consoleOutput.body ? tool.consoleOutput.body.split("\n").length : 0;
+  const outputLines = tool.consoleOutput.body ? tool.consoleOutput.body.split("\n") : [];
+  const outputLineCount = outputLines.length;
   const outputBytes = tool.consoleOutput.body ? new Blob([tool.consoleOutput.body]).size : 0;
   const outputSize = outputBytes ? formatBytes(outputBytes) : "";
   const outputDefaultOpen = outputLineCount <= 8 && outputBytes <= 1200;
@@ -1624,7 +1625,22 @@ function renderSharedToolMessage(message: ChatMessage) {
             <small>{outputLineCount} строк{outputSize ? ` · ${outputSize}` : ""}</small>
             <ChevronDown size={15} />
           </summary>
-          <pre className="share-command-output"><code>{tool.consoleOutput.body}</code></pre>
+          <div className="share-command-output-shell">
+            <label className="share-command-line-toggle">
+              <input type="checkbox" defaultChecked />
+              <span>Номера строк</span>
+            </label>
+            <pre className="share-command-output">
+              <code>
+                {outputLines.map((line, index) => (
+                  <span className="share-command-output-line" key={index}>
+                    <span className="share-command-line-number">{index + 1}</span>
+                    <span className="share-command-line-text">{line || " "}</span>
+                  </span>
+                ))}
+              </code>
+            </pre>
+          </div>
         </details>
       )}
     </div>
