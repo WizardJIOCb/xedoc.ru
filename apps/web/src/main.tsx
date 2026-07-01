@@ -554,6 +554,29 @@ function publicShareMessages(messages: ChatMessage[]) {
   });
 }
 
+function publicShareMessagesForShare(share: SharedChat | null) {
+  if (!share) return [];
+  const messages = publicShareMessages(share.snapshot.messages ?? []);
+  const finalAnswer = normalizeDisplayText(share.snapshot.finalAnswer || share.finalContent || "").trim();
+  if (!finalAnswer) return messages;
+  const alreadyInTimeline = messages.some((message) => (
+    message.role === "assistant" && normalizeDisplayText(message.content).trim() === finalAnswer
+  ));
+  if (alreadyInTimeline) return messages;
+  return [
+    ...messages,
+    {
+      id: `${share.token}:final-answer`,
+      chatId: share.snapshot.chat.id,
+      role: "assistant",
+      content: finalAnswer,
+      source: share.source,
+      externalId: "share:final-answer",
+      createdAt: share.updatedAt
+    } satisfies ChatMessage
+  ];
+}
+
 type ProjectFileEditor = {
   agentId: string;
   repoId: string;
@@ -1413,6 +1436,90 @@ function chatMessageAuthorLabel(message: Pick<ChatMessage, "role" | "source">) {
   if (message.role === "user") return "User";
   if (message.role === "tool") return "Command";
   return chatSourceLabel(message.source);
+}
+
+type ParsedIdePrompt = {
+  activeFile: string;
+  openTabs: Array<{ label: string; path: string }>;
+  request: string;
+};
+
+function fileNameFromPath(value: string) {
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) || value;
+}
+
+function markdownSection(value: string, heading: string) {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = value.match(new RegExp(`^##\\s+${escaped}:\\s*\\n?([\\s\\S]*?)(?=\\n##\\s+|\\n#\\s+|$)`, "im"));
+  return match?.[1]?.trim() ?? "";
+}
+
+function parsedIdePrompt(value: string): ParsedIdePrompt | null {
+  const normalized = normalizeDisplayText(value).trim();
+  if (!/^#\s*Context from my IDE setup:/i.test(normalized)) return null;
+  const activeFile = markdownSection(normalized, "Active file");
+  const openTabs = markdownSection(normalized, "Open tabs")
+    .split("\n")
+    .map((line) => line.trim().replace(/^[-*]\s+/, "").trim())
+    .filter(Boolean)
+    .map((line) => {
+      const tab = line.match(/^([^:]+):\s*(.+)$/);
+      const path = (tab?.[2] ?? line).trim();
+      return {
+        label: (tab?.[1] ?? fileNameFromPath(path)).trim(),
+        path
+      };
+    })
+    .filter((tab, index, tabs) => tabs.findIndex((candidate) => candidate.label === tab.label && candidate.path === tab.path) === index);
+  const request = markdownSection(normalized, "My request for Codex") || normalized
+    .replace(/^#\s*Context from my IDE setup:\s*/i, "")
+    .replace(/^##\s+Active file:\s*\n?[\s\S]*?(?=\n##\s+|\n#\s+|$)/im, "")
+    .replace(/^##\s+Open tabs:\s*\n?[\s\S]*?(?=\n##\s+|\n#\s+|$)/im, "")
+    .trim();
+  if (!activeFile && !openTabs.length && !request) return null;
+  return { activeFile, openTabs, request };
+}
+
+function renderSharedUserMessage(message: ChatMessage) {
+  const idePrompt = parsedIdePrompt(message.content);
+  if (!idePrompt) return renderRichText(message.content, "rich-text message-body");
+  const visibleTabs = idePrompt.openTabs.slice(0, 6);
+  const hiddenTabs = Math.max(0, idePrompt.openTabs.length - visibleTabs.length);
+  return (
+    <div className="share-ide-prompt">
+      {(idePrompt.activeFile || idePrompt.openTabs.length > 0) && (
+        <div className="share-ide-context">
+          {idePrompt.activeFile && (
+            <span className="share-ide-chip active-file" title={idePrompt.activeFile}>
+              <FileCode2 size={14} />
+              <small>Active</small>
+              <strong>{fileNameFromPath(idePrompt.activeFile)}</strong>
+              <em>{idePrompt.activeFile}</em>
+            </span>
+          )}
+          {visibleTabs.length > 0 && (
+            <div className="share-ide-tabs" aria-label="Open tabs">
+              <span className="share-ide-tabs-label"><PanelLeftOpen size={13} /> Tabs</span>
+              {visibleTabs.map((tab) => (
+                <span className="share-ide-tab" key={`${tab.label}:${tab.path}`} title={tab.path}>
+                  <FileText size={13} />
+                  <strong>{tab.label}</strong>
+                  {tab.path !== tab.label && <em>{tab.path}</em>}
+                </span>
+              ))}
+              {hiddenTabs > 0 && <span className="share-ide-tab more-tabs">+{hiddenTabs}</span>}
+            </div>
+          )}
+        </div>
+      )}
+      {idePrompt.request && (
+        <div className="share-ide-request">
+          {renderRichText(idePrompt.request, "rich-text compact message-body")}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function parsedToolMessage(message: ChatMessage) {
@@ -4024,8 +4131,7 @@ function SharedChatPage({ token }: { token: string }) {
     };
   }, [token]);
 
-  const finalAnswer = share?.snapshot.finalAnswer || share?.finalContent || "";
-  const messages = publicShareMessages(share?.snapshot.messages ?? []);
+  const messages = publicShareMessagesForShare(share);
   const projectLink = share?.project?.url || projectUrl(share?.project?.domain ?? "");
 
   return (
@@ -4054,13 +4160,6 @@ function SharedChatPage({ token }: { token: string }) {
 
       {share && (
         <>
-          {finalAnswer && (
-            <section className="share-card final-answer">
-              <span>Final answer</span>
-              {renderRichText(finalAnswer, "rich-text message-body")}
-            </section>
-          )}
-
           <section className="share-chat">
             {messages.map((message) => (
               <article className={`message ${message.role}`} key={message.id}>
@@ -4070,7 +4169,9 @@ function SharedChatPage({ token }: { token: string }) {
                     <small>{formatDateTime(message.createdAt)}</small>
                   </div>
                 </div>
-                {message.role === "tool" ? renderSharedToolMessage(message) : message.role === "system" ? (
+                {message.role === "tool" ? renderSharedToolMessage(message) : message.role === "user" ? (
+                  renderSharedUserMessage(message)
+                ) : message.role === "system" ? (
                   <div className="system-message-body" title={normalizeDisplayText(message.content).trim()}>
                     {normalizeDisplayText(message.content).trim()}
                   </div>
