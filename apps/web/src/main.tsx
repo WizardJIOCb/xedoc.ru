@@ -1481,37 +1481,60 @@ function parsedIdePrompt(value: string): ParsedIdePrompt | null {
   return { activeFile, openTabs, request };
 }
 
+function formatOpenTabsCount(count: number) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  const word = mod10 === 1 && mod100 !== 11
+    ? "вкладка"
+    : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)
+      ? "вкладки"
+      : "вкладок";
+  return `${count} ${word}`;
+}
+
 function renderSharedUserMessage(message: ChatMessage) {
   const idePrompt = parsedIdePrompt(message.content);
   if (!idePrompt) return renderRichText(message.content, "rich-text message-body");
   const visibleTabs = idePrompt.openTabs.slice(0, 6);
   const hiddenTabs = Math.max(0, idePrompt.openTabs.length - visibleTabs.length);
+  const contextFacts = [
+    idePrompt.activeFile ? "активный файл" : "",
+    idePrompt.openTabs.length ? formatOpenTabsCount(idePrompt.openTabs.length) : ""
+  ].filter(Boolean).join(" · ");
   return (
     <div className="share-ide-prompt">
       {(idePrompt.activeFile || idePrompt.openTabs.length > 0) && (
-        <div className="share-ide-context">
-          {idePrompt.activeFile && (
-            <span className="share-ide-chip active-file" title={idePrompt.activeFile}>
-              <FileCode2 size={14} />
-              <small>Active</small>
-              <strong>{fileNameFromPath(idePrompt.activeFile)}</strong>
-              <em>{idePrompt.activeFile}</em>
-            </span>
-          )}
-          {visibleTabs.length > 0 && (
-            <div className="share-ide-tabs" aria-label="Open tabs">
-              <span className="share-ide-tabs-label"><PanelLeftOpen size={13} /> Tabs</span>
-              {visibleTabs.map((tab) => (
-                <span className="share-ide-tab" key={`${tab.label}:${tab.path}`} title={tab.path}>
-                  <FileText size={13} />
-                  <strong>{tab.label}</strong>
-                  {tab.path !== tab.label && <em>{tab.path}</em>}
-                </span>
-              ))}
-              {hiddenTabs > 0 && <span className="share-ide-tab more-tabs">+{hiddenTabs}</span>}
-            </div>
-          )}
-        </div>
+        <details className="share-ide-panel">
+          <summary>
+            <span className="show-label"><PanelLeftOpen size={14} /> Показать контекст IDE</span>
+            <span className="hide-label"><PanelLeftOpen size={14} /> Скрыть контекст IDE</span>
+            {contextFacts && <small>{contextFacts}</small>}
+            <ChevronDown size={15} />
+          </summary>
+          <div className="share-ide-panel-body">
+            {idePrompt.activeFile && (
+              <span className="share-ide-chip active-file" title={idePrompt.activeFile}>
+                <FileCode2 size={14} />
+                <small>Active</small>
+                <strong>{fileNameFromPath(idePrompt.activeFile)}</strong>
+                <em>{idePrompt.activeFile}</em>
+              </span>
+            )}
+            {visibleTabs.length > 0 && (
+              <div className="share-ide-tabs" aria-label="Open tabs">
+                <span className="share-ide-tabs-label"><PanelLeftOpen size={13} /> Tabs</span>
+                {visibleTabs.map((tab) => (
+                  <span className="share-ide-tab" key={`${tab.label}:${tab.path}`} title={tab.path}>
+                    <FileText size={13} />
+                    <strong>{tab.label}</strong>
+                    {tab.path !== tab.label && <em>{tab.path}</em>}
+                  </span>
+                ))}
+                {hiddenTabs > 0 && <span className="share-ide-tab more-tabs">+{hiddenTabs}</span>}
+              </div>
+            )}
+          </div>
+        </details>
       )}
       {idePrompt.request && (
         <div className="share-ide-request">

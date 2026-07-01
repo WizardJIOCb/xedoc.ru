@@ -6541,6 +6541,80 @@ h2 > strong {
   min-width: 0;
 }
 
+.share-ide-panel {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.share-ide-panel summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.share-ide-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.share-ide-panel summary > span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.share-ide-panel summary small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.share-ide-panel summary svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 0.16s ease;
+}
+
+.share-ide-panel[open] summary {
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.share-ide-panel[open] summary > svg {
+  transform: rotate(180deg);
+}
+
+.share-ide-panel .hide-label {
+  display: none;
+}
+
+.share-ide-panel[open] .show-label {
+  display: none;
+}
+
+.share-ide-panel[open] .hide-label {
+  display: inline-flex;
+}
+
+.share-ide-panel-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px 10px;
+}
+
 .share-ide-chip,
 .share-ide-tab,
 .share-ide-tabs-label {
