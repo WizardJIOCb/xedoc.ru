@@ -11728,7 +11728,7 @@ function App() {
                   const modelOptions = modelOptionsForRole(role.kind);
                   const modelListId = `project-role-models-${index}`;
                   return (
-                    <article className="project-agent-role-card" key={`${role.alias}-${index}`}>
+                    <article className="project-agent-role-card" key={index}>
                       <header>
                         <div>
                           <span>@{role.alias || "alias"}</span>

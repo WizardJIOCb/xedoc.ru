@@ -4269,6 +4269,8 @@ button.message-attachment.image:hover {
 }
 
 .project-settings-form {
+  width: 100%;
+  max-width: none;
   min-height: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
