@@ -6288,6 +6288,114 @@ button.message-attachment.image:hover {
   font-size: 13px;
 }
 
+.mention-input-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.mention-input-wrap > textarea {
+  display: block;
+}
+
+.mention-menu {
+  position: absolute;
+  z-index: 140;
+  width: min(340px, calc(100% - 12px));
+  max-height: min(310px, 45dvh);
+  overflow: auto;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 14px 34px rgba(31, 35, 40, 0.18);
+  overscroll-behavior: contain;
+}
+
+.mention-menu-option {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 6px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+}
+
+.mention-menu-option.active,
+.mention-menu-option:hover {
+  background: color-mix(in srgb, var(--accent-2) 11%, var(--panel-2));
+}
+
+.mention-menu-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 28%, var(--line));
+  border-radius: 7px;
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 7%, var(--panel));
+}
+
+.mention-menu-copy,
+.mention-menu-copy > span {
+  min-width: 0;
+}
+
+.mention-menu-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.mention-menu-copy > span {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.mention-menu-copy strong,
+.mention-menu-copy em,
+.mention-menu-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-menu-copy strong {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.mention-menu-copy em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.mention-menu-copy small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.mention-menu-option kbd {
+  min-width: 22px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  background: var(--field);
+  font: inherit;
+  font-size: 10px;
+  text-align: center;
+}
+
 .ide-chat-send-control {
   position: relative;
   min-width: 0;
@@ -10522,7 +10630,7 @@ button:disabled {
   background: color-mix(in srgb, var(--accent-2) 6%, var(--panel));
 }
 
-.notes-composer-hint + textarea {
+.notes-composer-hint + .mention-input-wrap textarea {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }

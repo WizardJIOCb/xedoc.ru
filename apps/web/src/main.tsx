@@ -1866,6 +1866,272 @@ function parseMentionedAgentJobs(
   return jobs.length ? jobs : mentionsOnly ? [] : [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
 }
 
+type AgentMentionSuggestion = {
+  alias: string;
+  label: string;
+  detail: string;
+  projectRole: boolean;
+};
+
+type ActiveAgentMention = {
+  start: number;
+  end: number;
+  query: string;
+};
+
+type MentionMenuAnchor = {
+  left: number;
+  top: number;
+};
+
+type AgentMentionTextareaProps = Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "onChange"> & {
+  value: string;
+  suggestions: AgentMentionSuggestion[];
+  onValueChange: (value: string) => void;
+};
+
+function agentMentionSuggestions(roles: ProjectAgentRole[]): AgentMentionSuggestion[] {
+  const projectRoles = roles
+    .slice()
+    .sort((left, right) => left.alias.localeCompare(right.alias))
+    .map((role) => {
+      const runnerLabel = RUNNER_OPTIONS.find((option) => option.value === role.kind)?.label ?? role.kind;
+      const modelLabel = modelLabelForKind(role.kind, role.model);
+      const reasoningLabel = REASONING_OPTIONS.find((option) => option.value === role.reasoningEffort)?.label ?? role.reasoningEffort;
+      const speedLabel = role.kind === "codex" && role.speed === "fast" ? "Fast" : "";
+      return {
+        alias: role.alias,
+        label: role.label?.trim() || runnerLabel,
+        detail: [runnerLabel, modelLabel, reasoningLabel, speedLabel].filter(Boolean).join(" · "),
+        projectRole: true
+      };
+    });
+  return [
+    ...projectRoles,
+    { alias: "gpt", label: "Codex", detail: "Системный тег · текущие настройки Codex", projectRole: false },
+    { alias: "codex", label: "Codex", detail: "Системный тег · текущие настройки Codex", projectRole: false },
+    { alias: "grok", label: "Grok", detail: "Системный тег · текущие настройки Grok", projectRole: false },
+    { alias: "gemini", label: "Gemini", detail: "Системный тег · текущие настройки Gemini", projectRole: false }
+  ];
+}
+
+function activeAgentMention(value: string, caret: number): ActiveAgentMention | null {
+  const beforeCaret = value.slice(0, caret);
+  const match = beforeCaret.match(/(^|[\s,;:()"'\[\]{}])@([a-z0-9_-]*)$/i);
+  if (!match) return null;
+  const query = match[2] ?? "";
+  const trailingToken = value.slice(caret).match(/^[a-z0-9_-]*/i)?.[0] ?? "";
+  return {
+    start: caret - query.length - 1,
+    end: caret + trailingToken.length,
+    query: query.toLowerCase()
+  };
+}
+
+function mentionMenuAnchor(textarea: HTMLTextAreaElement, caret: number): MentionMenuAnchor {
+  const computed = window.getComputedStyle(textarea);
+  const mirror = document.createElement("div");
+  Object.assign(mirror.style, {
+    position: "fixed",
+    left: "-10000px",
+    top: "0",
+    visibility: "hidden",
+    overflow: "hidden",
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+    boxSizing: computed.boxSizing,
+    width: `${textarea.offsetWidth}px`,
+    padding: computed.padding,
+    borderStyle: "solid",
+    borderWidth: computed.borderWidth,
+    fontFamily: computed.fontFamily,
+    fontSize: computed.fontSize,
+    fontStyle: computed.fontStyle,
+    fontWeight: computed.fontWeight,
+    letterSpacing: computed.letterSpacing,
+    lineHeight: computed.lineHeight,
+    textIndent: computed.textIndent,
+    textTransform: computed.textTransform,
+    wordSpacing: computed.wordSpacing
+  });
+  mirror.textContent = textarea.value.slice(0, caret);
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const mirrorRect = mirror.getBoundingClientRect();
+  const markerRect = marker.getBoundingClientRect();
+  const lineHeight = Number.parseFloat(computed.lineHeight) || Number.parseFloat(computed.fontSize) * 1.45 || 20;
+  const menuWidth = Math.min(340, Math.max(220, textarea.clientWidth - 12));
+  const rawLeft = markerRect.left - mirrorRect.left - textarea.scrollLeft;
+  const left = Math.max(6, Math.min(rawLeft, textarea.clientWidth - menuWidth - 6));
+  const top = Math.max(6, markerRect.top - mirrorRect.top - textarea.scrollTop + lineHeight + 2);
+  mirror.remove();
+  return { left, top };
+}
+
+function AgentMentionTextarea({
+  value,
+  suggestions,
+  onValueChange,
+  onKeyDown,
+  onBlur,
+  onFocus,
+  onSelect,
+  onScroll,
+  ...textareaProps
+}: AgentMentionTextareaProps) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastInputValueRef = useRef(value);
+  const menuId = React.useId().replace(/:/g, "");
+  const [mention, setMention] = useState<ActiveAgentMention | null>(null);
+  const [anchor, setAnchor] = useState<MentionMenuAnchor>({ left: 6, top: 34 });
+  const [activeIndex, setActiveIndex] = useState(0);
+  const filteredSuggestions = useMemo(() => {
+    if (!mention) return [];
+    const query = mention.query;
+    return suggestions.filter((suggestion) => {
+      if (!query) return true;
+      return suggestion.alias.toLowerCase().includes(query)
+        || suggestion.label.toLowerCase().includes(query)
+        || suggestion.detail.toLowerCase().includes(query);
+    });
+  }, [mention, suggestions]);
+
+  useEffect(() => {
+    if (value === lastInputValueRef.current) return;
+    lastInputValueRef.current = value;
+    setMention(null);
+  }, [value]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [mention?.query, suggestions]);
+
+  useEffect(() => {
+    if (!mention || !filteredSuggestions.length) return;
+    document.getElementById(`${menuId}-option-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, filteredSuggestions.length, mention, menuId]);
+
+  const syncMention = useCallback((textarea: HTMLTextAreaElement) => {
+    const caret = textarea.selectionStart ?? textarea.value.length;
+    const nextMention = activeAgentMention(textarea.value, caret);
+    setMention(nextMention);
+    if (nextMention) setAnchor(mentionMenuAnchor(textarea, caret));
+  }, []);
+
+  const selectSuggestion = useCallback((suggestion: AgentMentionSuggestion) => {
+    if (!mention) return;
+    const trailing = value.slice(mention.end);
+    const separator = trailing && /^\s/.test(trailing) ? "" : " ";
+    const inserted = `@${suggestion.alias}${separator}`;
+    const nextValue = `${value.slice(0, mention.start)}${inserted}${trailing}`;
+    const nextCaret = mention.start + inserted.length;
+    lastInputValueRef.current = nextValue;
+    onValueChange(nextValue);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(nextCaret, nextCaret);
+    });
+  }, [mention, onValueChange, value]);
+
+  const menuOpen = Boolean(mention && filteredSuggestions.length);
+  const activeOptionId = menuOpen ? `${menuId}-option-${Math.min(activeIndex, filteredSuggestions.length - 1)}` : undefined;
+
+  return (
+    <div className="mention-input-wrap">
+      <textarea
+        {...textareaProps}
+        aria-activedescendant={activeOptionId}
+        aria-autocomplete="list"
+        aria-controls={menuOpen ? `${menuId}-listbox` : undefined}
+        aria-expanded={menuOpen}
+        ref={textareaRef}
+        value={value}
+        onBlur={(event) => {
+          setMention(null);
+          onBlur?.(event);
+        }}
+        onChange={(event) => {
+          lastInputValueRef.current = event.currentTarget.value;
+          onValueChange(event.currentTarget.value);
+          syncMention(event.currentTarget);
+        }}
+        onFocus={(event) => {
+          syncMention(event.currentTarget);
+          onFocus?.(event);
+        }}
+        onKeyDown={(event) => {
+          if (!event.nativeEvent.isComposing && menuOpen) {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              event.stopPropagation();
+              const direction = event.key === "ArrowDown" ? 1 : -1;
+              setActiveIndex((current) => (current + direction + filteredSuggestions.length) % filteredSuggestions.length);
+              return;
+            }
+            if (event.key === "Enter" || event.key === "Tab") {
+              event.preventDefault();
+              event.stopPropagation();
+              selectSuggestion(filteredSuggestions[Math.min(activeIndex, filteredSuggestions.length - 1)]!);
+              return;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              setMention(null);
+              return;
+            }
+          }
+          onKeyDown?.(event);
+        }}
+        onScroll={(event) => {
+          if (mention) syncMention(event.currentTarget);
+          onScroll?.(event);
+        }}
+        onSelect={(event) => {
+          syncMention(event.currentTarget);
+          onSelect?.(event);
+        }}
+      />
+      {menuOpen && (
+        <div
+          className="mention-menu"
+          id={`${menuId}-listbox`}
+          role="listbox"
+          style={{ left: anchor.left, top: anchor.top }}
+        >
+          {filteredSuggestions.map((suggestion, index) => (
+            <button
+              aria-selected={index === activeIndex}
+              className={`mention-menu-option ${index === activeIndex ? "active" : ""}`}
+              id={`${menuId}-option-${index}`}
+              key={suggestion.alias}
+              role="option"
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                selectSuggestion(suggestion);
+              }}
+              onMouseEnter={() => setActiveIndex(index)}
+            >
+              <span className="mention-menu-icon"><Bot size={15} /></span>
+              <span className="mention-menu-copy">
+                <span><strong>@{suggestion.alias}</strong><em>{suggestion.label}</em></span>
+                <small>{suggestion.projectRole ? "Проектная роль" : "Встроенный агент"} · {suggestion.detail}</small>
+              </span>
+              {index === activeIndex && <kbd>↵</kbd>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function runnerSettingsSummary(kind: JobKind, modelLabel: string, reasoningLabel: string, speedLabel: string) {
   if (kind === "grok") return [modelLabel, reasoningLabel].filter(Boolean).join(" · ");
   if (kind === "gemini-cli") return ["Gemini CLI", modelLabel, reasoningLabel].filter(Boolean).join(" · ");
@@ -5394,6 +5660,7 @@ function App() {
   });
 
   const selectedRepo = useMemo(() => repos.find((repo) => `${repo.agentId}:${repo.id}` === repoKey), [repoKey, repos]);
+  const mentionSuggestions = useMemo(() => agentMentionSuggestions(selectedRepo?.agentRoles ?? []), [selectedRepo?.agentRoles]);
   const selectedProjectUrl = useMemo(() => projectUrl(selectedRepo?.domain), [selectedRepo?.domain]);
   const recentProjectChats = useMemo(() => chats.filter((chat) => chat.source !== "notes").sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 5), [chats]);
   const agentNameById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents]);
@@ -13083,11 +13350,12 @@ function App() {
             <span>Без тега это личная заметка. Для ответа напиши <code>@gpt</code>, <code>@grok</code>, <code>@gemini</code> или проектную <code>@роль</code>.</span>
           </div>
         )}
-        <textarea
+        <AgentMentionTextarea
           placeholder={notesMode ? "Запиши мысль, решение или контекст проекта…" : canWriteProject ? "Опишите задачу, что вы хотите сделать сегодня?" : "Public-проект открыт только для просмотра"}
           value={prompt}
+          suggestions={mentionSuggestions}
           disabled={!canWriteProject}
-          onChange={(event) => setPrompt(event.target.value)}
+          onValueChange={setPrompt}
           onKeyDown={handleComposerKeyDown}
           onPaste={handleComposerPaste}
         />
@@ -15324,13 +15592,12 @@ function App() {
                     {renderPendingAttachments("attachment-list ide-chat-attachment-list")}
                     {attachmentNotice && <div className="notice danger ide-chat-attachment-notice">{attachmentNotice}</div>}
                     {activeChatIsNotes && <div className="ide-notes-hint">Личная заметка · AI отвечает только по <code>@gpt</code>, <code>@grok</code>, <code>@gemini</code> или проектной <code>@роли</code></div>}
-                    <textarea
+                    <AgentMentionTextarea
                       disabled={!activeChatIsNotes && !repoCanWrite(selectedRepo)}
                       placeholder={activeChatIsNotes ? "Записать заметку…" : repoCanWrite(selectedRepo) ? (activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту") : "Public-проект открыт только для просмотра"}
                       value={ideChatPrompt}
-                      onChange={(event) => {
-                        setIdeChatPrompt(event.target.value);
-                      }}
+                      suggestions={mentionSuggestions}
+                      onValueChange={setIdeChatPrompt}
                       onPaste={handleComposerPaste}
                       onKeyDown={(event) => {
                         if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
