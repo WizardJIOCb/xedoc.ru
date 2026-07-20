@@ -221,6 +221,26 @@ export class Runner {
       geminiCliEnvironmentPrompt(repo, context.job.reasoningEffort),
       userPrompt
     ].join("\n\n");
+    const antigravityCommand = antigravityExecutable();
+    if (antigravityCommand) {
+      const model = antigravityModel(context.job.model, context.job.reasoningEffort);
+      const args = [
+        "--add-dir",
+        repo.path,
+        "--mode",
+        context.job.sandbox === "read-only" ? "plan" : "accept-edits",
+        "--sandbox",
+        ...(model ? ["--model", model] : []),
+        "--print-timeout",
+        `${Math.max(30, Math.ceil(context.config.maxJobDurationMs / 1000))}s`,
+        "--print",
+        prompt
+      ];
+      return this.spawnAndCollect(context, repo, antigravityCommand, args, context.config.maxJobDurationMs, undefined, {
+        toolName: "Gemini",
+        handleJsonLine: createAntigravityLineHandler()
+      });
+    }
     const geminiCommand = geminiExecutable();
     const approvalMode = await geminiApprovalMode(geminiCommand);
     const args = [
@@ -518,6 +538,24 @@ function geminiExecutable(): { command: string; prefixArgs: string[] } {
   return { command: process.platform === "win32" ? "gemini.cmd" : "gemini", prefixArgs: [] };
 }
 
+function antigravityExecutable(): string | null {
+  if (process.env.CMC_ANTIGRAVITY_BIN?.trim()) return process.env.CMC_ANTIGRAVITY_BIN.trim();
+  if (process.platform === "win32") return null;
+  const candidate = process.env.HOME ? join(process.env.HOME, ".local", "bin", "agy") : "";
+  return candidate && existsSync(candidate) ? candidate : null;
+}
+
+function antigravityModel(model: string | undefined, reasoningEffort: ReasoningEffort | undefined): string {
+  const requested = model?.trim() ?? "";
+  if (/^(Gemini|Claude|GPT-OSS)\s/i.test(requested)) return requested;
+  const intelligence = reasoningEffort === "low" || reasoningEffort === "medium" ? "Low" : "High";
+  if (/flash/i.test(requested)) {
+    const flashIntelligence = reasoningEffort === "low" ? "Low" : reasoningEffort === "high" || reasoningEffort === "xhigh" || reasoningEffort === "max" || reasoningEffort === "ultra" ? "High" : "Medium";
+    return `Gemini 3.5 Flash (${flashIntelligence})`;
+  }
+  return `Gemini 3.1 Pro (${intelligence})`;
+}
+
 async function geminiApprovalMode(command: { command: string; prefixArgs: string[] }): Promise<string> {
   const result = await runCapture(command.command, [...command.prefixArgs, "--help"], undefined, 15000);
   return /\bautoedit\b/.test(result.stdout) ? "autoedit" : "auto_edit";
@@ -640,9 +678,9 @@ function geminiEnvironmentPrompt(repo: RepoConfig): string {
 
 function geminiCliEnvironmentPrompt(repo: RepoConfig, reasoningEffort?: ReasoningEffort): string {
   return [
-    "Gemini CLI web agent environment:",
+    "Gemini / Antigravity CLI web agent environment:",
     `- Project: ${repo.name} at ${repo.path}.`,
-    "- You are running through xedoc.ru's local Windows/Linux agent using Gemini CLI authenticated with the user's Google account.",
+    "- You are running through xedoc.ru's local Windows/Linux agent using a Google-account-authenticated CLI.",
     "- Answer in the user's language. If the user writes in Russian, answer in Russian.",
     reasoningEffort ? `- Requested intelligence level: ${reasoningEffort}. Adjust depth and verification effort accordingly.` : "",
     "- You may inspect and edit files in the working directory when the user asks for code work.",
@@ -996,6 +1034,18 @@ function createGeminiCliJsonLineHandler(): JsonLineHandler {
     }
 
     return { handled: true, messageText };
+  };
+}
+
+function createAntigravityLineHandler(): JsonLineHandler {
+  let messageText = "";
+  return (context, line) => {
+    const text = line.trimEnd();
+    if (!text) return { handled: true, messageText: messageText.trim() };
+    messageText = `${messageText}${messageText ? "\n" : ""}${text}`.slice(-8000);
+    context.sendProgress(progress(context.job.id, "message", messageText.slice(-500)));
+    context.sendLog(log(context.job.id, "stdout", text));
+    return { handled: true, messageText: messageText.trim() };
   };
 }
 

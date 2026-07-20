@@ -1,0 +1,13 @@
+{
+  "toolPermission": "proceed-in-sandbox",
+  "artifactReviewPolicy": "always-proceed",
+  "enableTerminalSandbox": true,
+  "allowNonWorkspaceAccess": false,
+  "permissions": {
+    "allow": [
+      "write_file(*)"
+    ]
+  },
+  "notifications": false,
+  "showFeedbackSurvey": false
+}

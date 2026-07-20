@@ -165,6 +165,11 @@ const GROK_MODEL_OPTIONS = [
   { value: "grok-build-latest", label: "Grok Build Latest" }
 ];
 const GEMINI_CLI_MODEL_OPTIONS = [
+  { value: "Gemini 3.1 Pro (High)", label: "Gemini 3.1 Pro · High" },
+  { value: "Gemini 3.1 Pro (Low)", label: "Gemini 3.1 Pro · Low" },
+  { value: "Gemini 3.5 Flash (High)", label: "Gemini 3.5 Flash · High" },
+  { value: "Gemini 3.5 Flash (Medium)", label: "Gemini 3.5 Flash · Medium" },
+  { value: "Gemini 3.5 Flash (Low)", label: "Gemini 3.5 Flash · Low" },
   { value: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview" },
   { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
   { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
