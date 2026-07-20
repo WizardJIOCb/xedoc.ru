@@ -578,6 +578,7 @@ export function openDb(path: string): DatabaseSync {
   db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_chat_created ON jobs(chat_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_repos_user_agent_updated ON repos(user_id, agent_id, updated_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_chats_user_repo_updated ON chats(user_id, agent_id, repo_id, updated_at)");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_project_notes ON chats(user_id, agent_id, repo_id) WHERE source = 'notes' AND user_id IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_at ON chat_messages(chat_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_attachments_job ON job_attachments(job_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_attachments_message ON job_attachments(chat_message_id)");

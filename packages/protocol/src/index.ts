@@ -542,6 +542,18 @@ export const CreateChatSchema = z.object({
 });
 export type CreateChat = z.infer<typeof CreateChatSchema>;
 
+export const EnsureProjectNotesSchema = z.object({
+  agentId: z.string().min(1).max(80),
+  repoId: z.string().min(1).max(80)
+});
+export type EnsureProjectNotes = z.infer<typeof EnsureProjectNotesSchema>;
+
+export const CreateNoteMessageSchema = z.object({
+  content: z.string().trim().min(1).max(16000),
+  attachments: z.array(JobAttachmentSchema).max(8).default([])
+});
+export type CreateNoteMessage = z.infer<typeof CreateNoteMessageSchema>;
+
 export const UpdateChatSchema = z.object({
   title: z.string().trim().min(1).max(160).optional(),
   linkedChatId: z.string().min(1).optional()

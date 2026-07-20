@@ -1425,6 +1425,7 @@ function publicProjectInitials(name: string) {
 }
 
 function chatSourceLabel(source?: string | null) {
+  if (source === "notes") return "Заметки";
   if (source === "codex") return "Codex";
   if (source === "grok") return "Grok";
   if (source === "gemini") return "Gemini";
@@ -1697,7 +1698,7 @@ type MentionedAgentJob = {
 
 function kindForMention(mention: string, currentKind: JobKind): JobKind {
   const normalized = mention.toLowerCase();
-  if (normalized === "codex") return "codex";
+  if (normalized === "gpt" || normalized === "codex") return "codex";
   if (normalized === "grok") return "grok";
   if (normalized === "gemini") return currentKind === "gemini" || currentKind === "gemini-cli" ? currentKind : "gemini-cli";
   return currentKind;
@@ -1710,15 +1711,15 @@ function cleanMentionPrompt(value: string) {
     .trim();
 }
 
-function parseMentionedAgentJobs(value: string, currentKind: JobKind): MentionedAgentJob[] {
+function parseMentionedAgentJobs(value: string, currentKind: JobKind, mentionsOnly = false): MentionedAgentJob[] {
   const trimmed = value.trim();
   if (!trimmed) return [];
-  const matches = [...trimmed.matchAll(/(^|[\s,;:()"'[\]{}])@(codex|grok|gemini)\b/gi)]
+  const matches = [...trimmed.matchAll(/(^|[\s,;:()"'[\]{}])@(gpt|codex|grok|gemini)\b/gi)]
     .map((match) => ({
       start: (match.index ?? 0) + (match[1]?.length ?? 0),
       mention: match[2] ?? ""
     }));
-  if (!matches.length) return [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
+  if (!matches.length) return mentionsOnly ? [] : [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
   const intro = cleanMentionPrompt(trimmed.slice(0, matches[0]!.start));
   const jobs = matches.flatMap((match, index) => {
     const next = matches[index + 1]?.start ?? trimmed.length;
@@ -1732,7 +1733,7 @@ function parseMentionedAgentJobs(value: string, currentKind: JobKind): Mentioned
       displayPrompt: intro ? `${intro}\n\n${displayPrompt}` : displayPrompt
     }];
   });
-  return jobs.length ? jobs : [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
+  return jobs.length ? jobs : mentionsOnly ? [] : [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
 }
 
 function runnerSettingsSummary(kind: JobKind, modelLabel: string, reasoningLabel: string, speedLabel: string) {
@@ -1748,8 +1749,16 @@ function shortChatExternalId(chat?: Pick<Chat, "externalId"> | null) {
 
 function chatIdentityText(chat?: Pick<Chat, "source" | "externalId"> | null) {
   if (!chat) return "";
+  if (chat.source === "notes") return "Личные заметки";
   const id = shortChatExternalId(chat);
   return id ? `${chatSourceLabel(chat.source)} · ${id}` : chatSourceLabel(chat.source);
+}
+
+function sortProjectChats(items: Chat[]) {
+  return items.slice().sort((left, right) => {
+    const notesOrder = Number(right.source === "notes") - Number(left.source === "notes");
+    return notesOrder || Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+  });
 }
 
 function isPreviewableImage(mimeType: string) {
@@ -5241,7 +5250,7 @@ function App() {
 
   const selectedRepo = useMemo(() => repos.find((repo) => `${repo.agentId}:${repo.id}` === repoKey), [repoKey, repos]);
   const selectedProjectUrl = useMemo(() => projectUrl(selectedRepo?.domain), [selectedRepo?.domain]);
-  const recentProjectChats = useMemo(() => chats.slice().sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 5), [chats]);
+  const recentProjectChats = useMemo(() => chats.filter((chat) => chat.source !== "notes").sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 5), [chats]);
   const agentNameById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents]);
   const syncRepo = useMemo(() => (
     repos.find((repo) => `${repo.agentId}:${repo.id}` === syncRepoKey)
@@ -5249,6 +5258,8 @@ function App() {
     ?? repos[0]
   ), [repos, selectedRepo, syncRepoKey]);
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId), [activeChatId, chats]);
+  const activeChatIsNotes = activeChat?.source === "notes";
+  const ideNoteRequestsAgent = activeChatIsNotes && parseMentionedAgentJobs(ideChatPrompt, jobKind, true).length > 0;
   const generatedGitMessage = useMemo(
     () => autoCommitMessage(selectedRepo, activeChat, messages, gitMessageTemplate, gitStatusContext),
     [activeChat, gitMessageTemplate, gitStatusContext, messages, selectedRepo]
@@ -6182,6 +6193,14 @@ function App() {
       setChats([]);
     }
     try {
+      if (csrf) {
+        await api("/api/project-notes", {
+          method: "POST",
+          headers: { "x-csrf-token": csrf },
+          body: JSON.stringify({ agentId: repo.agentId, repoId: repo.id })
+        }).catch(() => undefined);
+      }
+      if (loadChatsAbortRef.current !== controller) return;
       const response = await api(`/api/chats?agentId=${encodeURIComponent(repo.agentId)}&repoId=${encodeURIComponent(repo.id)}`);
       if (loadChatsAbortRef.current !== controller) return;
       if (!response.ok) {
@@ -6189,7 +6208,7 @@ function App() {
         if (options.showLoading) setChats([]);
         return;
       }
-      const nextChats = (await response.json()).chats as Chat[];
+      const nextChats = sortProjectChats((await response.json()).chats as Chat[]);
       if (loadChatsAbortRef.current !== controller) return;
       loadChatsAbortRef.current = null;
       const activeId = activeChatIdRef.current;
@@ -6446,7 +6465,7 @@ function App() {
       loadChatAbortRef.current = null;
       setChats((current) => {
         const withoutLoaded = current.filter((chat) => chat.id !== data.chat.id);
-        return [data.chat, ...withoutLoaded].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+        return sortProjectChats([data.chat, ...withoutLoaded]);
       });
       setActiveChatId(chatId);
       const repo = selectedRepoRef.current;
@@ -8205,19 +8224,27 @@ function App() {
   async function createJob(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedRepo || (!prompt.trim() && !attachments.length) || !csrf) return;
-    if (!repoCanWrite(selectedRepo)) {
+    const notesMode = activeChat?.source === "notes";
+    const promptText = prompt.trim() || "Посмотри вложенные файлы.";
+    const requestedJobs = parseMentionedAgentJobs(promptText, jobKind, notesMode);
+    if (!notesMode && !repoCanWrite(selectedRepo)) {
       setChatNoticeOk(false);
       setChatNotice("Этот public-проект добавлен в режиме просмотра. Запуск задач доступен только владельцу или пользователям с правом записи.");
       return;
     }
-    if (localCodexBusy) {
+    if (notesMode && requestedJobs.length && !repoCanWrite(selectedRepo)) {
       setChatNoticeOk(false);
-      setChatNotice("Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web.");
+      setChatNotice("Заметку сохранить можно, но вызвать AI в проекте без права записи нельзя.");
+      return;
+    }
+    if (requestedJobs.length && (localCodexBusy || activeRunBusy)) {
+      setChatNoticeOk(false);
+      setChatNotice(activeRunBusy
+        ? "В этом проекте уже выполняется задача. Заметки можно сохранять, а агента вызвать после её завершения."
+        : "Локальный Codex сейчас занят в VS Code или другом локальном чате. Дождись завершения, потом можно запускать задачу из web.");
       return;
     }
     let targetChatId = activeChatId;
-    const promptText = prompt.trim() || "Посмотри вложенные файлы.";
-    const requestedJobs = parseMentionedAgentJobs(promptText, jobKind);
     const jobAttachments = attachments.map((attachment) => ({
       name: attachment.name,
       mimeType: attachment.mimeType,
@@ -8243,6 +8270,29 @@ function App() {
       targetChatId = (await chatResponse.json()).chatId;
       setActiveChatId(targetChatId);
     }
+    if (notesMode && !requestedJobs.length) {
+      const response = await api(`/api/chats/${encodeURIComponent(targetChatId)}/notes`, {
+        method: "POST",
+        headers: { "x-csrf-token": csrf },
+        body: JSON.stringify({ content: promptText, attachments: jobAttachments })
+      });
+      const data = await response.json().catch(() => ({}));
+      setBusy(false);
+      if (!response.ok) {
+        trackMetrikaGoal("project_note_create", { status: "failed", error: data.error, attachments_count: jobAttachments.length });
+        setChatNoticeOk(false);
+        setChatNotice(data.error || "Не удалось сохранить заметку.");
+        return;
+      }
+      setPrompt("");
+      setAttachments([]);
+      setAttachmentNotice("");
+      setVscodeNotice("");
+      setChatNotice("");
+      trackMetrikaGoal("project_note_create", { status: "success", attachments_count: jobAttachments.length });
+      await loadChat(targetChatId);
+      return;
+    }
     const jobIds: string[] = [];
     for (const requested of requestedJobs) {
       const response = await api("/api/jobs", {
@@ -8254,7 +8304,7 @@ function App() {
           chatId: targetChatId,
           prompt: requested.prompt,
           displayPrompt: requested.displayPrompt,
-          sandbox,
+          sandbox: notesMode ? "read-only" : sandbox,
           branchMode: "current",
           kind: requested.kind,
           model: modelValueForKind(requested.kind, codexModel, grokModel, geminiCliModel, geminiModel),
@@ -8488,7 +8538,9 @@ function App() {
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || !event.ctrlKey || event.repeat || event.nativeEvent.isComposing) return;
     const canSubmit = Boolean(prompt.trim() || attachments.length);
-    if (busy || !canSubmit || localCodexBusy || activeRunBusy) return;
+    const notesMode = activeChat?.source === "notes";
+    const noteRequestsAgent = notesMode && parseMentionedAgentJobs(prompt, jobKind, true).length > 0;
+    if (busy || !canSubmit || ((!notesMode || noteRequestsAgent) && (localCodexBusy || activeRunBusy))) return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
   }
@@ -8877,16 +8929,22 @@ function App() {
   async function submitIdeChat(event: React.FormEvent) {
     event.preventDefault();
     if (!selectedRepo || !csrf || (!ideChatPrompt.trim() && !attachments.length) || ideChatSending) return;
-    if (!repoCanWrite(selectedRepo)) {
+    const notesMode = activeChat?.source === "notes";
+    const promptText = ideChatPrompt.trim() || "Посмотри вложенные файлы.";
+    const requestedJobs = parseMentionedAgentJobs(promptText, jobKind, notesMode);
+    if (!notesMode && !repoCanWrite(selectedRepo)) {
       setIdeChatNotice("Этот public-проект добавлен в режиме просмотра. Запуск задач доступен только владельцу или пользователям с правом записи.");
       return;
     }
-    if (localCodexBusy || activeRunBusy) {
+    if (notesMode && requestedJobs.length && !repoCanWrite(selectedRepo)) {
+      setIdeChatNotice("Заметку сохранить можно, но вызвать AI в проекте без права записи нельзя.");
+      return;
+    }
+    if (requestedJobs.length && (localCodexBusy || activeRunBusy)) {
       setIdeChatNotice("Codex сейчас занят. Новую задачу можно отправить после завершения текущей.");
       return;
     }
     let targetChatId = activeChatId;
-    const promptText = ideChatPrompt.trim() || "Посмотри вложенные файлы.";
     const jobAttachments = attachments.map((attachment) => ({
       name: attachment.name,
       mimeType: attachment.mimeType,
@@ -8915,35 +8973,61 @@ function App() {
         targetChatId = chatData.chatId as string;
         setActiveChatId(targetChatId);
       }
-      const response = await api("/api/jobs", {
-        method: "POST",
-        headers: { "x-csrf-token": csrf },
-        body: JSON.stringify({
-          agentId: selectedRepo.agentId,
-          repoId: selectedRepo.id,
-          chatId: targetChatId,
-          prompt: promptText,
-          sandbox,
-          branchMode: "current",
-          kind: jobKind,
-          model: modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel),
-          reasoningEffort: reasoningValueForKind(jobKind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
-          speed: jobKind === "codex" ? codexSpeed : undefined,
-          attachments: jobAttachments
-        })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        trackMetrikaGoal("ide_job_create", { status: "failed", step: "job_create", error: data.error, job_kind: jobKind, attachments_count: jobAttachments.length });
-        setIdeChatNotice(data.error || "Не получилось отправить задачу из IDE.");
+      if (notesMode && !requestedJobs.length) {
+        const response = await api(`/api/chats/${encodeURIComponent(targetChatId)}/notes`, {
+          method: "POST",
+          headers: { "x-csrf-token": csrf },
+          body: JSON.stringify({ content: promptText, attachments: jobAttachments })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          trackMetrikaGoal("project_note_create", { status: "failed", source: "ide", error: data.error, attachments_count: jobAttachments.length });
+          setIdeChatNotice(data.error || "Не удалось сохранить заметку.");
+          return;
+        }
+        setIdeChatPrompt("");
+        setAttachments([]);
+        setAttachmentNotice("");
+        setIdeChatNotice("Заметка сохранена.");
+        trackMetrikaGoal("project_note_create", { status: "success", source: "ide", attachments_count: jobAttachments.length });
+        await loadChat(targetChatId);
         return;
+      }
+      const jobIds: string[] = [];
+      for (const requested of requestedJobs) {
+        const response = await api("/api/jobs", {
+          method: "POST",
+          headers: { "x-csrf-token": csrf },
+          body: JSON.stringify({
+            agentId: selectedRepo.agentId,
+            repoId: selectedRepo.id,
+            chatId: targetChatId,
+            prompt: requested.prompt,
+            displayPrompt: requested.displayPrompt,
+            sandbox: notesMode ? "read-only" : sandbox,
+            branchMode: "current",
+            kind: requested.kind,
+            model: modelValueForKind(requested.kind, codexModel, grokModel, geminiCliModel, geminiModel),
+            reasoningEffort: reasoningValueForKind(requested.kind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
+            speed: requested.kind === "codex" ? codexSpeed : undefined,
+            attachments: jobAttachments
+          })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          trackMetrikaGoal("ide_job_create", { status: "failed", step: "job_create", error: data.error, job_kind: requested.kind, attachments_count: jobAttachments.length });
+          setIdeChatNotice(data.error || "Не получилось отправить задачу из IDE.");
+          if (jobIds.length) await loadChat(targetChatId, jobIds[0]);
+          return;
+        }
+        jobIds.push(data.jobId as string);
       }
       setIdeChatPrompt("");
       setAttachments([]);
       setAttachmentNotice("");
       setIdeChatNotice("Задача отправлена.");
-      trackMetrikaGoal("ide_job_create", { status: "success", job_kind: jobKind, sandbox, attachments_count: jobAttachments.length });
-      await loadChat(targetChatId, data.jobId);
+      trackMetrikaGoal("ide_job_create", { status: "success", jobs_count: jobIds.length, sandbox, attachments_count: jobAttachments.length });
+      await loadChat(targetChatId, jobIds[0]);
     } finally {
       setIdeChatSending(false);
     }
@@ -12400,9 +12484,12 @@ function App() {
 
   function renderComposer() {
     if (!selectedRepo) return null;
-    const canWriteProject = repoCanWrite(selectedRepo);
+    const notesMode = activeChatIsNotes;
+    const canWriteProject = notesMode || repoCanWrite(selectedRepo);
     const canSubmit = Boolean(prompt.trim() || attachments.length);
-    const runDisabled = busy || !canWriteProject || !canSubmit || localCodexBusy || activeRunBusy;
+    const noteRequestsAgent = notesMode && parseMentionedAgentJobs(prompt, jobKind, true).length > 0;
+    const agentRunBlocked = (!notesMode || noteRequestsAgent) && (localCodexBusy || activeRunBusy);
+    const runDisabled = busy || !canWriteProject || !canSubmit || agentRunBlocked || (notesMode && noteRequestsAgent && !repoCanWrite(selectedRepo));
     const currentModelOptions = modelOptionsForKind(jobKind);
     const selectedModel = modelValueForKind(jobKind, codexModel, grokModel, geminiCliModel, geminiModel);
     const selectedModelLabel = currentModelOptions.find((option) => option.value === selectedModel)?.label ?? selectedModel;
@@ -12413,7 +12500,7 @@ function App() {
     const selectedReasoningLabel = REASONING_OPTIONS.find((option) => option.value === selectedReasoning)?.label ?? selectedReasoning;
     const selectedSpeedLabel = SPEED_OPTIONS.find((option) => option.value === codexSpeed)?.label ?? codexSpeed;
     const currentModeSummary = runnerSettingsSummary(jobKind, selectedModelLabel, selectedReasoningLabel, selectedSpeedLabel);
-    const showCodexBusy = localCodexBusy || activeRunBusy;
+    const showCodexBusy = agentRunBlocked;
     const activeRunnerLabel = jobRunnerLabel(activeJob);
     const busyLabel = activeRunBusy ? `${activeRunnerLabel} занят` : "Codex занят";
     const runnerKindForMenuAgent = (agent: RunnerAgent) => defaultKindForAgent(agent, jobKind);
@@ -12531,11 +12618,17 @@ function App() {
       );
     };
     return (
-      <form className="composer" ref={composerRef} onSubmit={createJob}>
+      <form className={`composer ${notesMode ? "notes-composer" : ""}`} ref={composerRef} onSubmit={createJob}>
         {renderPendingAttachments()}
         {attachmentNotice && <div className="notice danger">{attachmentNotice}</div>}
+        {notesMode && (
+          <div className="notes-composer-hint">
+            <FileText size={15} />
+            <span>Без тега это личная заметка. Для ответа напиши <code>@gpt</code>, <code>@grok</code> или <code>@gemini</code>.</span>
+          </div>
+        )}
         <textarea
-          placeholder={canWriteProject ? "Опишите задачу, что вы хотите сделать сегодня?" : "Public-проект открыт только для просмотра"}
+          placeholder={notesMode ? "Запиши мысль, решение или контекст проекта…" : canWriteProject ? "Опишите задачу, что вы хотите сделать сегодня?" : "Public-проект открыт только для просмотра"}
           value={prompt}
           disabled={!canWriteProject}
           onChange={(event) => setPrompt(event.target.value)}
@@ -12554,8 +12647,12 @@ function App() {
             }}
           />
           <button className="run-button" disabled={runDisabled} type="submit">
-            {showCodexBusy ? <RefreshCw className="spin" size={18} /> : <Play size={18} />}
-            {showCodexBusy ? `${activeRunBusy ? jobProgressLabel(activeProgress, "Выполняется", activeRunnerLabel) : busyLabel} ${formatDuration(thinkingSeconds)}` : "Отправить"}
+            {showCodexBusy ? <RefreshCw className="spin" size={18} /> : notesMode && !noteRequestsAgent ? <Save size={18} /> : <Play size={18} />}
+            {showCodexBusy
+              ? `${activeRunBusy ? jobProgressLabel(activeProgress, "Выполняется", activeRunnerLabel) : busyLabel} ${formatDuration(thinkingSeconds)}`
+              : notesMode
+                ? noteRequestsAgent ? "Спросить агента" : "Записать"
+                : "Отправить"}
           </button>
           <label className="attachment-picker" htmlFor="composer-attachment-input" title="Attach files">
             <Paperclip size={18} />
@@ -13831,8 +13928,8 @@ function App() {
                             <span>Загружаю чаты</span>
                           </div>
                         ) : chats.map((chat) => (
-                          <div className={activeChatId === chat.id ? "nav-chat-row active" : "nav-chat-row"} key={chat.id}>
-                            {renamingChatId === chat.id ? (
+                          <div className={`nav-chat-row${activeChatId === chat.id ? " active" : ""}${chat.source === "notes" ? " notes" : ""}`} key={chat.id}>
+                            {chat.source !== "notes" && renamingChatId === chat.id ? (
                               <form className="nav-chat-rename" onSubmit={(event) => renameChat(event, chat)}>
                                 <input
                                   autoFocus
@@ -13869,29 +13966,34 @@ function App() {
                                     >
                                       <span className="nav-chat-title">
                                         {chatIsBusy && <RefreshCw className="spin" size={13} />}
+                                        {chat.source === "notes" && <FileText size={13} />}
                                         <span>{chat.title}</span>
                                       </span>
-                                      <small>{chatIdentityText(chat)} · {formatDateTime(chat.updatedAt)}</small>
+                                      <small>{chat.source === "notes" ? "Лично · AI только по @тегу" : `${chatIdentityText(chat)} · ${formatDateTime(chat.updatedAt)}`}</small>
                                     </button>
                                   );
                                 })()}
-                                <button className="nav-menu-trigger" disabled={busy} type="button" onClick={() => setChatMenuId((value) => value === chat.id ? "" : chat.id)} title="Chat menu">
-                                  <MoreHorizontal size={15} />
-                                </button>
-                                {chatMenuId === chat.id && (
-                                  <div className="nav-chat-menu">
-                                    <button type="button" onClick={() => openProjectIde(chat)}>Открыть IDE</button>
-                                    <button type="button" onClick={() => startRenameChat(chat)}>Переименовать</button>
-                                    <button type="button" onClick={() => openChatProperties(chat)}>Свойства</button>
-                                    <button type="button" disabled={shareBusy} onClick={() => shareChat(chat)}>Ссылка</button>
-                                    <button
-                                      type="button"
-                                      disabled={activeJob?.chatId === chat.id && ["queued", "assigned", "running"].includes(activeJob.status)}
-                                      onClick={() => hideChat(chat)}
-                                    >
-                                      Скрыть
+                                {chat.source !== "notes" && (
+                                  <>
+                                    <button className="nav-menu-trigger" disabled={busy} type="button" onClick={() => setChatMenuId((value) => value === chat.id ? "" : chat.id)} title="Chat menu">
+                                      <MoreHorizontal size={15} />
                                     </button>
-                                  </div>
+                                    {chatMenuId === chat.id && (
+                                      <div className="nav-chat-menu">
+                                        <button type="button" onClick={() => openProjectIde(chat)}>Открыть IDE</button>
+                                        <button type="button" onClick={() => startRenameChat(chat)}>Переименовать</button>
+                                        <button type="button" onClick={() => openChatProperties(chat)}>Свойства</button>
+                                        <button type="button" disabled={shareBusy} onClick={() => shareChat(chat)}>Ссылка</button>
+                                        <button
+                                          type="button"
+                                          disabled={activeJob?.chatId === chat.id && ["queued", "assigned", "running"].includes(activeJob.status)}
+                                          onClick={() => hideChat(chat)}
+                                        >
+                                          Скрыть
+                                        </button>
+                                      </div>
+                                    )}
+                                  </>
                                 )}
                               </>
                             )}
@@ -14078,8 +14180,8 @@ function App() {
           <section className="chat-work">
             <div className="section-head">
               <div className="chat-heading">
-                <h2><MessageSquare size={18} /> <span>{activeChat?.title ?? "Обзор проекта"}</span></h2>
-                {activeChat && (
+                <h2>{activeChatIsNotes ? <FileText size={18} /> : <MessageSquare size={18} />} <span>{activeChat?.title ?? "Обзор проекта"}</span></h2>
+                {activeChat && !activeChatIsNotes && (
                   <small title={activeChat.externalId || undefined}>
                     {chatIdentityText(activeChat)}
                   </small>
@@ -14095,7 +14197,7 @@ function App() {
                 >
                   <FilePenLine size={16} />
                 </button>
-                {activeChat && (
+                {activeChat && !activeChatIsNotes && (
                   <button
                     aria-label="Скопировать ссылку на чат"
                     className="icon tiny"
@@ -14115,6 +14217,12 @@ function App() {
               {selectedRepo.domain && <> · {selectedRepo.domain}</>}
               {selectedRepo.serverPath && selectedRepo.serverPath !== selectedRepo.pathMasked && <> · {selectedRepo.serverPath}</>}
             </div>
+            {activeChatIsNotes && (
+              <div className="notes-mode-banner">
+                <FileText size={16} />
+                <span>Это приватный блокнот проекта. Сообщения остаются без ответа, пока ты явно не позовёшь <code>@gpt</code>, <code>@grok</code> или <code>@gemini</code>.</span>
+              </div>
+            )}
             {selectedRepoAgent && selectedRepoAgent.status !== "online" && (
               <div className="notice warning agent-bind-notice">
                 <p>
@@ -14378,7 +14486,7 @@ function App() {
                               </article>
                             );
                           }) : (
-                            <div className="empty">Начни этот чат или дождись синхронизации истории из локального Codex/VS Code.</div>
+                            <div className="empty">{activeChatIsNotes ? "Здесь пока пусто. Запиши первую заметку — AI не будет отвечать без @тега." : "Начни этот чат или дождись синхронизации истории из локального Codex/VS Code."}</div>
                           )}
                           {renderChatThinkingIndicator()}
                           {renderActiveRun()}
@@ -14746,12 +14854,13 @@ function App() {
                       {ideChatScrollDirection === "up" ? <ArrowUp size={15} /> : <ArrowDown size={15} />}
                     </button>
                   )}
-                  <form className="ide-chat-composer" onSubmit={submitIdeChat}>
+                  <form className={`ide-chat-composer ${activeChatIsNotes ? "notes" : ""}`} onSubmit={submitIdeChat}>
                     {renderPendingAttachments("attachment-list ide-chat-attachment-list")}
                     {attachmentNotice && <div className="notice danger ide-chat-attachment-notice">{attachmentNotice}</div>}
+                    {activeChatIsNotes && <div className="ide-notes-hint">Личная заметка · AI отвечает только по <code>@gpt</code>, <code>@grok</code> или <code>@gemini</code></div>}
                     <textarea
-                      disabled={!repoCanWrite(selectedRepo)}
-                      placeholder={repoCanWrite(selectedRepo) ? (activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту") : "Public-проект открыт только для просмотра"}
+                      disabled={!activeChatIsNotes && !repoCanWrite(selectedRepo)}
+                      placeholder={activeChatIsNotes ? "Записать заметку…" : repoCanWrite(selectedRepo) ? (activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту") : "Public-проект открыт только для просмотра"}
                       value={ideChatPrompt}
                       onChange={(event) => {
                         setIdeChatPrompt(event.target.value);
@@ -14780,26 +14889,32 @@ function App() {
                       </label>
                       <button
                         className="ide-chat-submit-button"
-                        disabled={!repoCanWrite(selectedRepo) || (!ideChatPrompt.trim() && !attachments.length) || ideChatSending || localCodexBusy || activeRunBusy}
-                        title={ideChatRunnerSummary()}
+                        disabled={(!activeChatIsNotes && !repoCanWrite(selectedRepo))
+                          || (ideNoteRequestsAgent && !repoCanWrite(selectedRepo))
+                          || (!ideChatPrompt.trim() && !attachments.length)
+                          || ideChatSending
+                          || ((!activeChatIsNotes || ideNoteRequestsAgent) && (localCodexBusy || activeRunBusy))}
+                        title={activeChatIsNotes ? "Сохранить заметку или вызвать агента через @тег" : ideChatRunnerSummary()}
                         type="submit"
                       >
-                        {ideChatSending || localCodexBusy || activeRunBusy ? <RefreshCw className="spin" size={15} /> : <Rocket size={15} />}
-                        <span>Send</span>
-                        <small>{ideChatRunnerSummary()}</small>
+                        {ideChatSending || ((!activeChatIsNotes || ideNoteRequestsAgent) && (localCodexBusy || activeRunBusy)) ? <RefreshCw className="spin" size={15} /> : activeChatIsNotes ? <Save size={15} /> : <Rocket size={15} />}
+                        <span>{activeChatIsNotes ? ideNoteRequestsAgent ? "Ask" : "Save" : "Send"}</span>
+                        <small>{activeChatIsNotes ? "AI only by @tag" : ideChatRunnerSummary()}</small>
                       </button>
-                      <button
-                        aria-expanded={ideChatRunnerSettingsOpen}
-                        aria-label="Model settings"
-                        className="ide-chat-settings-toggle"
-                        title="Model settings"
-                        type="button"
-                        onClick={() => setIdeChatRunnerSettingsOpen((value) => !value)}
-                      >
-                        <ChevronDown className={ideChatRunnerSettingsOpen ? "open" : ""} size={16} />
-                      </button>
+                      {!activeChatIsNotes && (
+                        <button
+                          aria-expanded={ideChatRunnerSettingsOpen}
+                          aria-label="Model settings"
+                          className="ide-chat-settings-toggle"
+                          title="Model settings"
+                          type="button"
+                          onClick={() => setIdeChatRunnerSettingsOpen((value) => !value)}
+                        >
+                          <ChevronDown className={ideChatRunnerSettingsOpen ? "open" : ""} size={16} />
+                        </button>
+                      )}
                     </div>
-                    {ideChatRunnerSettingsOpen && renderIdeChatRunnerSelector()}
+                    {!activeChatIsNotes && ideChatRunnerSettingsOpen && renderIdeChatRunnerSelector()}
                   </form>
                 </aside>
               )}

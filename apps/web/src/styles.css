@@ -6529,6 +6529,15 @@ h2 > strong {
   background: var(--panel-2);
 }
 
+.nav-chat-row.notes {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nav-chat-row.notes .nav-leaf.chat-child {
+  border-color: color-mix(in srgb, var(--accent-2) 28%, var(--line));
+  background: color-mix(in srgb, var(--accent-2) 7%, var(--panel));
+}
+
 .share-ide-prompt {
   display: grid;
   gap: 10px;
@@ -10263,6 +10272,70 @@ button:disabled {
   .live-command-row small {
     display: none;
   }
+}
+
+.notes-composer-hint,
+.notes-mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ide-notes-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.ide-notes-hint code {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.ide-chat-composer.notes .ide-chat-send-control {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.notes-composer-hint {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 28%, var(--line));
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--accent-2) 6%, var(--panel));
+}
+
+.notes-composer-hint + textarea {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.notes-composer-hint svg,
+.notes-mode-banner svg {
+  flex: 0 0 auto;
+  color: var(--accent-2);
+}
+
+.notes-composer-hint code,
+.notes-mode-banner code {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.notes-mode-banner {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 28%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent-2) 6%, var(--panel));
+}
+
+.composer.notes-composer .sandbox-control,
+.composer.notes-composer .action-control {
+  display: none;
 }
 
 @media (max-width: 480px) {

@@ -13,7 +13,9 @@ import {
   ChatMessageSchema,
   CreateAgentSchema,
   CreateChatSchema,
+  CreateNoteMessageSchema,
   DeploySchema,
+  EnsureProjectNotesSchema,
   GitSyncSchema,
   CreateJobSchema,
   CreateProjectSchema,
@@ -452,7 +454,7 @@ function serializePublicProfile(user: UserRow, request: { protocol: string; host
 function publicChatSummaries(agentId: string, repoId: string, ownerUserId?: string | null, limit = 5) {
   const rows = db.prepare(`
     SELECT * FROM chats
-    WHERE agent_id = ? AND repo_id = ? AND hidden_at IS NULL
+    WHERE agent_id = ? AND repo_id = ? AND hidden_at IS NULL AND source != 'notes'
       ${ownerUserId ? "AND (user_id IS NULL OR user_id = ?)" : ""}
     ORDER BY updated_at DESC
     LIMIT ?
@@ -696,6 +698,7 @@ function canReadChat(user: AuthUser, chatId: string): boolean {
       c.repo_id,
       c.user_id AS chat_user_id,
       c.hidden_at,
+      c.source,
       r.user_id AS repo_user_id,
       r.visibility,
       u.blocked_at AS owner_blocked_at
@@ -708,12 +711,14 @@ function canReadChat(user: AuthUser, chatId: string): boolean {
     repo_id: string;
     chat_user_id: string | null;
     hidden_at: string | null;
+    source: string;
     repo_user_id: string | null;
     visibility: ProjectVisibility;
     owner_blocked_at: string | null;
   } | undefined;
   if (!row || !row.repo_user_id) return false;
   return row.visibility === "public"
+    && row.source !== "notes"
     && row.hidden_at === null
     && row.owner_blocked_at === null
     && row.chat_user_id === row.repo_user_id
@@ -728,6 +733,7 @@ function canAccessPublicChat(chatId: string): boolean {
     JOIN users u ON u.id = r.user_id
     WHERE c.id = ?
       AND c.hidden_at IS NULL
+      AND c.source != 'notes'
       AND r.visibility = 'public'
       AND u.blocked_at IS NULL
       AND (c.user_id IS NULL OR c.user_id = r.user_id)
@@ -1354,6 +1360,47 @@ function appendChatMessage(message: Omit<ChatMessageRow, "id"> & { id?: string }
   broadcast({ type: "chats.updated", agentId: chatAgentId(message.chat_id), repoId: chatRepoId(message.chat_id), chatId: message.chat_id });
 }
 
+function projectNotesExternalId(userId: string, repoId: string): string {
+  return `project-notes:${userId}:${repoId}`.slice(0, 300);
+}
+
+function ensureProjectNotesChat(user: AuthUser, agentId: string, repoId: string): ChatRow {
+  const existing = db.prepare(`
+    SELECT * FROM chats
+    WHERE user_id = ? AND agent_id = ? AND repo_id = ? AND source = 'notes'
+    LIMIT 1
+  `).get(user.id, agentId, repoId) as ChatRow | undefined;
+  if (existing) return existing;
+
+  const chatId = id("chat");
+  const stamp = nowIso();
+  try {
+    db.prepare(`
+      INSERT INTO chats (id,user_id,agent_id,repo_id,title,source,external_id,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `).run(chatId, user.id, agentId, repoId, "Заметки", "notes", projectNotesExternalId(user.id, repoId), stamp, stamp);
+  } catch (error) {
+    const raced = db.prepare(`
+      SELECT * FROM chats
+      WHERE user_id = ? AND agent_id = ? AND repo_id = ? AND source = 'notes'
+      LIMIT 1
+    `).get(user.id, agentId, repoId) as ChatRow | undefined;
+    if (raced) return raced;
+    throw error;
+  }
+  broadcast({ type: "chats.updated", agentId, repoId, chatId });
+  return db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow;
+}
+
+function noteMessageMentionsKind(value: string, kind: JobRow["kind"]): boolean {
+  const mentions = [...value.matchAll(/(^|[\s,;:()"'[\]{}])@(gpt|codex|grok|gemini)\b/gi)]
+    .map((match) => (match[2] ?? "").toLowerCase());
+  if (kind === "codex") return mentions.includes("gpt") || mentions.includes("codex");
+  if (kind === "grok") return mentions.includes("grok");
+  if (kind === "gemini" || kind === "gemini-cli") return mentions.includes("gemini");
+  return false;
+}
+
 type ProjectOperationKind = "git-sync" | "build" | "deploy" | "nginx" | "ssl";
 type ProjectOperationStatus = "running" | "completed" | "failed";
 
@@ -1668,6 +1715,30 @@ function storeJobAttachments(
     insert.run(
       id("att"),
       jobId,
+      messageId,
+      attachment.name,
+      attachment.mimeType,
+      attachment.size,
+      attachment.dataBase64,
+      createdAt
+    );
+  }
+}
+
+function storeChatMessageAttachments(
+  messageId: string,
+  attachments: Array<{ name: string; mimeType: string; size: number; dataBase64: string }>,
+  createdAt: string
+): void {
+  const totalSize = attachments.reduce((sum, attachment) => sum + attachment.size, 0);
+  if (totalSize > 12 * 1024 * 1024) throw new Error("attachments_too_large");
+  const insert = db.prepare(`
+    INSERT INTO chat_attachments (id,chat_message_id,name,mime_type,size,data_base64,created_at)
+    VALUES (?,?,?,?,?,?,?)
+  `);
+  for (const attachment of attachments) {
+    insert.run(
+      id("att"),
       messageId,
       attachment.name,
       attachment.mimeType,
@@ -3629,7 +3700,7 @@ async function createApp(): Promise<FastifyInstance> {
         u.avatar_data_url AS author_avatar_data_url,
         u.bio AS author_bio,
         u.created_at AS author_created_at,
-        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL AND (c.user_id IS NULL OR c.user_id = r.user_id)) AS chat_count
+        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL AND c.source != 'notes' AND (c.user_id IS NULL OR c.user_id = r.user_id)) AS chat_count
       FROM repos r
       JOIN agents a ON a.id = r.agent_id
       JOIN users u ON u.id = r.user_id
@@ -3681,7 +3752,7 @@ async function createApp(): Promise<FastifyInstance> {
         u.avatar_data_url AS author_avatar_data_url,
         u.bio AS author_bio,
         u.created_at AS author_created_at,
-        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL AND (c.user_id IS NULL OR c.user_id = r.user_id)) AS chat_count
+        (SELECT COUNT(*) FROM chats c WHERE c.agent_id = r.agent_id AND c.repo_id = r.id AND c.hidden_at IS NULL AND c.source != 'notes' AND (c.user_id IS NULL OR c.user_id = r.user_id)) AS chat_count
       FROM repos r
       JOIN agents a ON a.id = r.agent_id
       JOIN users u ON u.id = r.user_id
@@ -3810,7 +3881,7 @@ async function createApp(): Promise<FastifyInstance> {
       JOIN repos r ON r.agent_id = c.agent_id AND r.id = c.repo_id
       JOIN agents a ON a.id = c.agent_id
       JOIN users u ON u.id = r.user_id
-      WHERE c.id = ? AND c.hidden_at IS NULL AND r.visibility = 'public' AND u.blocked_at IS NULL
+      WHERE c.id = ? AND c.hidden_at IS NULL AND c.source != 'notes' AND r.visibility = 'public' AND u.blocked_at IS NULL
         AND (c.user_id IS NULL OR c.user_id = r.user_id)
     `).get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
@@ -4290,7 +4361,8 @@ async function createApp(): Promise<FastifyInstance> {
       const storedVisibility = parsed.data.writeAccess === "readonly" ? "public" : parsed.data.visibility;
       db.prepare("UPDATE repos SET user_id = ?, visibility = ?, write_access = ?, write_users_json = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
         .run(auth.user.id, storedVisibility, parsed.data.writeAccess, JSON.stringify(parsed.data.writeUsers), nowIso(), parsed.data.agentId, repoId);
-      return reply.code(201).send({ repoId, githubUrl });
+      const notesChat = ensureProjectNotesChat(auth.user, parsed.data.agentId, repoId);
+      return reply.code(201).send({ repoId, githubUrl, notesChatId: notesChat.id });
     } catch (error) {
       return reply.code(503).send({ error: error instanceof Error ? error.message : "agent_error" });
     }
@@ -5038,11 +5110,23 @@ async function createApp(): Promise<FastifyInstance> {
       args.push(repo.user_id);
     }
     const filters = ["agent_id = ?", "repo_id = ?", `(${userFilters.join(" OR ")})`];
+    filters.push("(source != 'notes' OR user_id = ?)");
+    args.push(auth.user.id);
     if (query.includeHidden !== "1") filters.push("hidden_at IS NULL");
     if (query.localOnly === "1") filters.push("source IN ('codex','vscode')");
-    const rows = db.prepare(`SELECT * FROM chats WHERE ${filters.join(" AND ")} ORDER BY updated_at DESC`)
+    const rows = db.prepare(`SELECT * FROM chats WHERE ${filters.join(" AND ")} ORDER BY CASE WHEN source = 'notes' THEN 0 ELSE 1 END, updated_at DESC`)
       .all(...args) as ChatRow[];
     return { chats: rows.map(serializeChat) };
+  });
+
+  app.post("/api/project-notes", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const parsed = EnsureProjectNotesSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_project_notes", details: parsed.error.flatten() });
+    if (!canAccessRepo(auth.user, parsed.data.agentId, parsed.data.repoId)) return reply.code(404).send({ error: "repo_not_found" });
+    const chat = ensureProjectNotesChat(auth.user, parsed.data.agentId, parsed.data.repoId);
+    return { chat: serializeChat(chat) };
   });
 
   app.post("/api/chats", async (request, reply) => {
@@ -5091,6 +5175,35 @@ async function createApp(): Promise<FastifyInstance> {
     };
   });
 
+  app.post("/api/chats/:id/notes", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const chatId = (request.params as { id: string }).id;
+    const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
+    if (!chat || chat.source !== "notes" || chat.user_id !== auth.user.id || !canAccessRepo(auth.user, chat.agent_id, chat.repo_id)) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    const parsed = CreateNoteMessageSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_note", details: parsed.error.flatten() });
+    const attachmentTotal = parsed.data.attachments.reduce((sum, attachment) => sum + attachment.size, 0);
+    if (attachmentTotal > 12 * 1024 * 1024) return reply.code(400).send({ error: "attachments_too_large" });
+    const messageId = id("msg");
+    const createdAt = nowIso();
+    appendChatMessage({
+      id: messageId,
+      chat_id: chat.id,
+      role: "user",
+      content: parsed.data.content,
+      source: "web",
+      external_id: `note:${messageId}`,
+      metadata_json: JSON.stringify({ kind: "note" }),
+      created_at: createdAt
+    });
+    storeChatMessageAttachments(messageId, parsed.data.attachments, createdAt);
+    const message = db.prepare("SELECT * FROM chat_messages WHERE id = ?").get(messageId) as ChatMessageRow;
+    return reply.code(201).send({ message: serializeMessage(message, { includeChatData: true }) });
+  });
+
   app.post("/api/chats/:id/share", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth || !requireCsrf(db, request, reply)) return;
@@ -5098,6 +5211,7 @@ async function createApp(): Promise<FastifyInstance> {
     if (!canAccessChat(auth.user, chatId)) return reply.code(404).send({ error: "not_found" });
     const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
+    if (chat.source === "notes") return reply.code(409).send({ error: "notes_private" });
     const share = upsertChatShareFromChat(chat);
     return reply.code(201).send({ ok: true, share: serializeShare(share, request), url: publicShareUrl(request, share.token) });
   });
@@ -5153,6 +5267,7 @@ async function createApp(): Promise<FastifyInstance> {
     const body = parsed.data;
     const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
+    if (chat.source === "notes") return reply.code(409).send({ error: "notes_fixed" });
     const stamp = nowIso();
     if (body.linkedChatId) {
       const linked = db.prepare(`
@@ -5188,6 +5303,7 @@ async function createApp(): Promise<FastifyInstance> {
     if (running) return reply.code(409).send({ error: "chat_has_running_job" });
     const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
+    if (chat.source === "notes") return reply.code(409).send({ error: "notes_fixed" });
     db.prepare("UPDATE chats SET hidden_at = COALESCE(hidden_at, ?), updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), chatId);
     broadcast({ type: "chats.updated", agentId: chat.agent_id, repoId: chat.repo_id });
     return { ok: true };
@@ -5200,6 +5316,7 @@ async function createApp(): Promise<FastifyInstance> {
     if (!canAccessChat(auth.user, chatId)) return reply.code(404).send({ error: "not_found" });
     const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
+    if (chat.source === "notes") return reply.code(409).send({ error: "notes_fixed" });
     db.prepare("UPDATE chats SET hidden_at = NULL, updated_at = ? WHERE id = ?").run(nowIso(), chatId);
     broadcast({ type: "chats.updated", agentId: chat.agent_id, repoId: chat.repo_id });
     return { chat: serializeChat({ ...chat, hidden_at: null, updated_at: nowIso() }) };
@@ -5212,6 +5329,7 @@ async function createApp(): Promise<FastifyInstance> {
     if (!canAccessChat(auth.user, chatId)) return reply.code(404).send({ error: "not_found" });
     const chat = db.prepare("SELECT * FROM chats WHERE id = ?").get(chatId) as ChatRow | undefined;
     if (!chat) return reply.code(404).send({ error: "not_found" });
+    if (chat.source === "notes") return reply.code(409).send({ error: "notes_fixed" });
     const active = db.prepare("SELECT id FROM jobs WHERE chat_id = ? AND status IN ('queued','assigned','running') LIMIT 1")
       .get(chatId) as { id: string } | undefined;
     if (active) return reply.code(409).send({ error: "chat_has_running_job" });
@@ -5275,10 +5393,11 @@ async function createApp(): Promise<FastifyInstance> {
     const attachmentTotal = parsed.data.attachments.reduce((sum, attachment) => sum + attachment.size, 0);
     if (attachmentTotal > 12 * 1024 * 1024) return reply.code(400).send({ error: "attachments_too_large" });
     let chatId = parsed.data.chatId;
+    let targetChat: ChatRow | undefined;
     if (chatId) {
-      const chat = db.prepare("SELECT * FROM chats WHERE id = ? AND agent_id = ? AND repo_id = ?")
+      targetChat = db.prepare("SELECT * FROM chats WHERE id = ? AND agent_id = ? AND repo_id = ?")
         .get(chatId, parsed.data.agentId, parsed.data.repoId) as ChatRow | undefined;
-      if (!chat || !canAccessChat(auth.user, chat.id)) return reply.code(404).send({ error: "chat_not_found" });
+      if (!targetChat || !canAccessChat(auth.user, targetChat.id)) return reply.code(404).send({ error: "chat_not_found" });
     } else {
       chatId = id("chat");
       const stamp = nowIso();
@@ -5290,6 +5409,12 @@ async function createApp(): Promise<FastifyInstance> {
     const createdAt = nowIso();
     const promptMessageId = id("msg");
     const displayPrompt = parsed.data.displayPrompt?.trim() || parsed.data.prompt;
+    if (targetChat?.source === "notes" && !noteMessageMentionsKind(displayPrompt, parsed.data.kind)) {
+      return reply.code(400).send({ error: "note_agent_mention_required" });
+    }
+    if (targetChat?.source === "notes" && parsed.data.sandbox !== "read-only") {
+      return reply.code(400).send({ error: "note_read_only_required" });
+    }
     db.prepare(`
       INSERT INTO jobs (id,chat_id,agent_id,repo_id,prompt,sandbox,branch_mode,model,reasoning_effort,speed,kind,status,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
