@@ -432,6 +432,19 @@ codex login --device-auth
 systemctl restart codex-agent-linux.service
 ```
 
+### Re-authenticate Codex from xedoc.ru
+
+For an online agent, open **Settings -> Agents** (or the Codex status card in a
+project) and choose **Codex login**. The agent starts `codex login --device-auth`
+with fixed arguments, xedoc.ru shows the one-time code, and the user confirms it
+only at `https://auth.openai.com/codex/device`.
+
+The device code is kept only in controller memory, is never written to the
+database or agent logs, and disappears when the flow completes, is cancelled,
+or expires. A revoked or invalid ChatGPT refresh token still requires this one
+human confirmation; the controller never stores a ChatGPT password and never
+silently switches to API-key billing.
+
 ### Job fails with ChatGPT websocket `403`
 
 Check the tunnel first. If `auth` and `codex-get` health checks return `405`,

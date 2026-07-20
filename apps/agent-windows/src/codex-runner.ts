@@ -713,14 +713,28 @@ function isIgnorableToolLine(toolName: string, line: string): boolean {
 
 function normalizeCodexNetworkFailure(line: string, activeFailure: string): string | null {
   const text = line.trim();
+  const authExpired = [
+    /invalid_refresh_token/i,
+    /token_expired/i,
+    /access token (?:could not be refreshed|is expired)/i,
+    /Provided authentication token is expired/i,
+    /HTTP error:\s*401 Unauthorized/i
+  ].some((pattern) => pattern.test(text));
+
+  if (authExpired) {
+    return [
+      "Codex ChatGPT session expired.",
+      "Open the agent settings on xedoc.ru and choose Re-authenticate Codex."
+    ].join(" ");
+  }
+
   const chatGptBlocked = [
-    /wss:\/\/chatgpt\.com\/backend-api\/codex\/responses/i,
     /HTTP error:\s*403 Forbidden/i,
+    /unexpected status 403/i,
     /Unable to load site/i,
     /If you are using a VPN, try turning it off/i,
     /cdn-cgi\/challenge-platform/i,
-    /window\._cf_chl_opt/i,
-    /codexapi::endpoint::responses_websocket/i
+    /window\._cf_chl_opt/i
   ].some((pattern) => pattern.test(text));
 
   if (chatGptBlocked) {

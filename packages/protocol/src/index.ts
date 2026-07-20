@@ -85,6 +85,21 @@ export const CodexUsageSchema = z.object({
 });
 export type CodexUsage = z.infer<typeof CodexUsageSchema>;
 
+export const CodexAuthStateSchema = z.enum(["starting", "waiting", "signed-in", "failed", "cancelled"]);
+export type CodexAuthState = z.infer<typeof CodexAuthStateSchema>;
+
+export const CodexAuthUpdateSchema = z.object({
+  type: z.literal("codex.auth.update"),
+  requestId: z.string().min(1).max(120),
+  state: CodexAuthStateSchema,
+  verificationUrl: z.literal("https://auth.openai.com/codex/device").optional(),
+  userCode: z.string().regex(/^[A-Z0-9]{4}-[A-Z0-9]{4,8}$/).optional(),
+  expiresAt: z.string().datetime().optional(),
+  error: z.string().min(1).max(500).optional(),
+  codexUsage: CodexUsageSchema.optional()
+});
+export type CodexAuthUpdate = z.infer<typeof CodexAuthUpdateSchema>;
+
 export const LocalCodexActivitySchema = z.object({
   status: z.enum(["idle", "busy"]),
   summary: z.string().min(1).max(300),
@@ -301,6 +316,7 @@ export const AgentChatSyncSchema = z.object({
 export const AgentToServerSchema = z.discriminatedUnion("type", [
   AgentHelloSchema,
   AgentHeartbeatSchema,
+  CodexAuthUpdateSchema,
   AgentJobLogSchema,
   AgentJobProgressSchema,
   AgentJobDoneSchema,
@@ -498,6 +514,16 @@ export const ServerChatSyncRequestSchema = z.object({
   requestId: z.string().min(1)
 });
 
+export const ServerCodexAuthStartSchema = z.object({
+  type: z.literal("codex.auth.start"),
+  requestId: z.string().min(1).max(120)
+});
+
+export const ServerCodexAuthCancelSchema = z.object({
+  type: z.literal("codex.auth.cancel"),
+  requestId: z.string().min(1).max(120)
+});
+
 export const ServerToAgentSchema = z.discriminatedUnion("type", [
   ServerJobRunSchema,
   ServerJobCancelSchema,
@@ -515,6 +541,8 @@ export const ServerToAgentSchema = z.discriminatedUnion("type", [
   ServerFileWriteSchema,
   ServerFileDownloadSchema,
   ServerChatSyncRequestSchema,
+  ServerCodexAuthStartSchema,
+  ServerCodexAuthCancelSchema,
   z.object({ type: z.literal("repo.scan") })
 ]);
 export type ServerToAgent = z.infer<typeof ServerToAgentSchema>;

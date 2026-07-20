@@ -267,6 +267,17 @@ type Agent = {
   };
 };
 
+type CodexAuthSession = {
+  agentId?: string;
+  requestId?: string;
+  state: "idle" | "starting" | "waiting" | "signed-in" | "failed" | "cancelled";
+  verificationUrl?: "https://auth.openai.com/codex/device";
+  userCode?: string;
+  expiresAt?: string;
+  error?: string;
+  updatedAt?: string;
+};
+
 type User = {
   id: string;
   email: string;
@@ -5102,6 +5113,11 @@ function App() {
   const [newAgentUserId, setNewAgentUserId] = useState("");
   const [agentSetup, setAgentSetup] = useState<AgentSetup | null>(null);
   const [settingsNotice, setSettingsNotice] = useState("");
+  const [codexAuthSession, setCodexAuthSession] = useState<CodexAuthSession | null>(null);
+  const [codexAuthAgentId, setCodexAuthAgentId] = useState("");
+  const [codexAuthModalOpen, setCodexAuthModalOpen] = useState(false);
+  const [codexAuthBusy, setCodexAuthBusy] = useState(false);
+  const [codexAuthNotice, setCodexAuthNotice] = useState("");
   const [uiTheme, setUiTheme] = useState<UiTheme>(() => {
     try {
       const stored = localStorage.getItem("cmc.uiTheme");
@@ -7929,6 +7945,33 @@ function App() {
   }, [imagePreview]);
 
   useEffect(() => {
+    if (!csrf || !codexAuthAgentId || !codexAuthSession || !["starting", "waiting"].includes(codexAuthSession.state)) return;
+    const timer = window.setInterval(() => {
+      void loadCodexAuth(codexAuthAgentId);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [codexAuthAgentId, codexAuthSession?.requestId, codexAuthSession?.state, csrf]);
+
+  useEffect(() => {
+    if (!codexAuthSession) return;
+    if (codexAuthSession.state === "waiting") {
+      setCodexAuthNotice("Открой официальный сайт OpenAI и подтверди одноразовый код.");
+      return;
+    }
+    if (codexAuthSession.state === "signed-in") {
+      setCodexAuthNotice("Codex снова авторизован. Агент уже готов к задачам.");
+      trackMetrikaGoal("codex_device_auth", { status: "success" });
+      void refresh();
+      return;
+    }
+    if (codexAuthSession.state === "failed") {
+      setCodexAuthNotice(codexAuthSession.error || "Перелогин Codex не завершился.");
+      return;
+    }
+    if (codexAuthSession.state === "cancelled") setCodexAuthNotice("Перелогин отменён.");
+  }, [codexAuthSession?.requestId, codexAuthSession?.state]);
+
+  useEffect(() => {
     if (view !== "sync" || !csrf || !syncControlAgent || syncControlAgent.status !== "online" || isLinuxAgent(syncControlAgent) || vscodeBusy) return;
     if (syncAutoPingRef.current === syncControlAgent.id) return;
     syncAutoPingRef.current = syncControlAgent.id;
@@ -9955,6 +9998,76 @@ function App() {
     setAdminStatsVisible((current) => ({ ...current, [metric]: !current[metric] }));
   }
 
+  function codexAuthErrorText(error: string | undefined) {
+    if (error === "agent_offline") return "Агент offline. Сначала запусти его.";
+    if (error === "agent_busy") return "Дождись завершения текущей задачи агента.";
+    if (error === "codex_auth_in_progress") return "Перелогин Codex уже запущен другим пользователем.";
+    if (error === "codex_auth_expired") return "Одноразовый код истёк. Нажми «Повторить».";
+    return error || "Не получилось запустить перелогин Codex.";
+  }
+
+  async function loadCodexAuth(agentId: string) {
+    const response = await api(`/api/agents/${encodeURIComponent(agentId)}/codex-auth`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setCodexAuthNotice(codexAuthErrorText(data.error));
+      return;
+    }
+    setCodexAuthSession({ ...(data.auth as CodexAuthSession), agentId });
+  }
+
+  async function startCodexAuth(agent: Agent) {
+    if (!csrf || codexAuthBusy) return;
+    setCodexAuthAgentId(agent.id);
+    setCodexAuthModalOpen(true);
+    setCodexAuthBusy(true);
+    setCodexAuthNotice("Запускаю безопасный вход через OpenAI device-auth...");
+    const response = await api(`/api/agents/${encodeURIComponent(agent.id)}/codex-auth`, {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: "{}"
+    });
+    const data = await response.json().catch(() => ({}));
+    setCodexAuthBusy(false);
+    if (!response.ok) {
+      if (data.auth) setCodexAuthSession({ ...(data.auth as CodexAuthSession), agentId: agent.id });
+      setCodexAuthNotice(codexAuthErrorText(data.error));
+      trackMetrikaGoal("codex_device_auth", { status: "failed", error: data.error });
+      return;
+    }
+    setCodexAuthSession({ ...(data.auth as CodexAuthSession), agentId: agent.id });
+    setCodexAuthNotice("Жду одноразовый код от агента...");
+    trackMetrikaGoal("codex_device_auth", { status: "started" });
+  }
+
+  async function cancelCodexAuth() {
+    if (!csrf || !codexAuthAgentId || codexAuthBusy) return;
+    setCodexAuthBusy(true);
+    const response = await api(`/api/agents/${encodeURIComponent(codexAuthAgentId)}/codex-auth/cancel`, {
+      method: "POST",
+      headers: { "x-csrf-token": csrf },
+      body: "{}"
+    });
+    const data = await response.json().catch(() => ({}));
+    setCodexAuthBusy(false);
+    if (!response.ok) {
+      setCodexAuthNotice(codexAuthErrorText(data.error));
+      return;
+    }
+    setCodexAuthSession({ ...(data.auth as CodexAuthSession), agentId: codexAuthAgentId });
+    setCodexAuthNotice("Перелогин отменён.");
+  }
+
+  async function copyCodexDeviceCode() {
+    if (!codexAuthSession?.userCode) return;
+    try {
+      await navigator.clipboard.writeText(codexAuthSession.userCode);
+      setCodexAuthNotice("Одноразовый код скопирован.");
+    } catch {
+      setCodexAuthNotice("Не удалось скопировать код — выдели его вручную.");
+    }
+  }
+
   async function createAgent(event: React.FormEvent) {
     event.preventDefault();
     if (!csrf || !newAgentName.trim()) return;
@@ -11300,6 +11413,63 @@ function App() {
     );
   }
 
+  function renderCodexAuthModal() {
+    if (!codexAuthModalOpen) return null;
+    const agent = agents.find((item) => item.id === codexAuthAgentId);
+    const state = codexAuthSession?.state ?? "idle";
+    const active = state === "starting" || state === "waiting";
+    const terminal = state === "signed-in" || state === "failed" || state === "cancelled";
+    return (
+      <div className="project-settings-modal codex-auth-modal" role="dialog" aria-modal="true" aria-label="Codex login" onClick={() => setCodexAuthModalOpen(false)}>
+        <section className="codex-auth-dialog" onClick={(event) => event.stopPropagation()}>
+          <header className="project-settings-header">
+            <div>
+              <span><KeyRound size={16} /> ChatGPT device-auth</span>
+              <h2>Перелогинить Codex</h2>
+              <small>{agent?.name ?? codexAuthAgentId}</small>
+            </div>
+            <button className="icon" type="button" onClick={() => setCodexAuthModalOpen(false)} title="Закрыть">
+              <X size={18} />
+            </button>
+          </header>
+          <div className="codex-auth-content">
+            <p>
+              Пароль и токены не проходят через xedoc.ru. Агент получает одноразовый код, а вход подтверждается только на официальном домене <code>auth.openai.com</code>.
+            </p>
+            {(state === "starting" || codexAuthBusy) && (
+              <div className="codex-auth-state waiting"><RefreshCw className="spin" size={18} /><span>Готовлю одноразовый код…</span></div>
+            )}
+            {state === "waiting" && codexAuthSession?.userCode && (
+              <div className="codex-device-code-card">
+                <span>Одноразовый код</span>
+                <button type="button" title="Скопировать код" onClick={() => void copyCodexDeviceCode()}>{codexAuthSession.userCode}</button>
+                {codexAuthSession.expiresAt && <small>Действует до {formatDateTime(codexAuthSession.expiresAt)}</small>}
+                <button className="codex-auth-open" type="button" onClick={() => {
+                  void copyCodexDeviceCode();
+                  window.open("https://auth.openai.com/codex/device", "_blank", "noopener,noreferrer");
+                }}>
+                  <ExternalLink size={16} /> Скопировать код и открыть OpenAI
+                </button>
+              </div>
+            )}
+            {state === "signed-in" && (
+              <div className="codex-auth-state success"><CheckCircle2 size={20} /><span>Codex авторизован и готов к новым задачам.</span></div>
+            )}
+            {(state === "failed" || state === "cancelled") && (
+              <div className="codex-auth-state failed"><ShieldCheck size={20} /><span>{codexAuthSession?.error || codexAuthNotice || "Авторизация не завершена."}</span></div>
+            )}
+            {codexAuthNotice && <div className="notice">{codexAuthNotice}</div>}
+            <div className="codex-auth-actions">
+              {active && <button className="secondary" disabled={codexAuthBusy} type="button" onClick={() => void cancelCodexAuth()}><X size={15} /> Отменить</button>}
+              {(terminal || state === "idle") && agent && <button disabled={codexAuthBusy || agent.status !== "online"} type="button" onClick={() => void startCodexAuth(agent)}><RefreshCw size={15} /> Повторить</button>}
+              <button className="secondary" type="button" onClick={() => setCodexAuthModalOpen(false)}>{state === "signed-in" ? "Готово" : "Закрыть"}</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   function renderSettings() {
     return (
       <section className="settings-work">
@@ -11444,6 +11614,16 @@ function App() {
                 </div>
                 <div className="agent-settings-actions">
                   <strong>{agent.status}</strong>
+                  {(currentUser?.role === "admin" || agent.user_id === currentUser?.id) && (
+                    <button
+                      className="secondary compact"
+                      disabled={codexAuthBusy || agent.status !== "online" || Boolean(agent.current_job_id)}
+                      type="button"
+                      onClick={() => void startCodexAuth(agent)}
+                    >
+                      <KeyRound size={15} /> Codex login
+                    </button>
+                  )}
                   <button
                     className="secondary compact"
                     disabled={busy || agent.status === "online"}
@@ -14547,6 +14727,16 @@ function App() {
                 : "Codex CLI remaining quota is not exposed locally."}
             </small>
             {selectedAgent?.codexUsage?.checkedAt && <small>Checked {formatDateTime(selectedAgent.codexUsage.checkedAt)}</small>}
+            {selectedAgent && (currentUser?.role === "admin" || selectedAgent.user_id === currentUser?.id) && (
+              <button
+                className="secondary codex-auth-trigger"
+                disabled={codexAuthBusy || selectedAgent.status !== "online" || Boolean(selectedAgent.current_job_id)}
+                type="button"
+                onClick={() => void startCodexAuth(selectedAgent)}
+              >
+                <KeyRound size={15} /> Перелогинить Codex
+              </button>
+            )}
           </div>
           <div className="codex-limit">
             <div>
@@ -14926,6 +15116,7 @@ function App() {
         </div>
       )}
       {renderProjectSettingsModal()}
+      {renderCodexAuthModal()}
       {imagePreview && (
         <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={imagePreview.name} onClick={() => setImagePreview(null)}>
           <figure onClick={(event) => event.stopPropagation()}>

@@ -35,6 +35,7 @@ import {
   UpdateProjectSchema,
   VscodeCommandRequestSchema,
   type AgentToServer,
+  type CodexAuthState,
   type DeployConfig,
   type LocalCodexActivity,
   type ProjectDataConfig,
@@ -204,6 +205,19 @@ const chatSyncRequests = new Map<string, {
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 }>();
+type CodexAuthSession = {
+  agentId: string;
+  requestId: string;
+  requestedByUserId: string;
+  connectionId: string;
+  state: CodexAuthState;
+  verificationUrl?: "https://auth.openai.com/codex/device";
+  userCode?: string;
+  expiresAt?: string;
+  error?: string;
+  updatedAt: string;
+};
+const codexAuthSessions = new Map<string, CodexAuthSession>();
 const STALE_JOB_GRACE_MS = 2 * 60 * 1000;
 const AgentChatShareSchema = AgentChatSyncSchema.extend({
   messages: ChatMessageSchema.array().max(1000)
@@ -797,6 +811,35 @@ function sendAgent(agentId: string, message: ServerToAgent): boolean {
     if (agents.get(agentId)?.connectionId === agent.connectionId) agents.delete(agentId);
     return false;
   }
+}
+
+function activeCodexAuthSession(session: CodexAuthSession | undefined): boolean {
+  if (!session || !["starting", "waiting"].includes(session.state)) return false;
+  return !session.expiresAt || Date.parse(session.expiresAt) > Date.now();
+}
+
+function serializeCodexAuthSession(session: CodexAuthSession | undefined) {
+  if (!session) return { state: "idle" as const };
+  return {
+    agentId: session.agentId,
+    requestId: session.requestId,
+    state: session.state,
+    verificationUrl: session.verificationUrl,
+    userCode: session.userCode,
+    expiresAt: session.expiresAt,
+    error: session.error,
+    updatedAt: session.updatedAt
+  };
+}
+
+function failCodexAuthForConnection(agentId: string, connectionId: string, error: string): void {
+  const session = codexAuthSessions.get(agentId);
+  if (!session || session.connectionId !== connectionId || !activeCodexAuthSession(session)) return;
+  session.state = "failed";
+  session.error = error;
+  session.userCode = undefined;
+  session.verificationUrl = undefined;
+  session.updatedAt = nowIso();
 }
 
 function requestAgentProject(
@@ -4300,6 +4343,93 @@ async function createApp(): Promise<FastifyInstance> {
     };
   });
 
+  app.get("/api/agents/:agentId/codex-auth", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth) return;
+    const agentId = (request.params as { agentId: string }).agentId;
+    if (!canManageAgent(auth.user, agentId)) return reply.code(404).send({ error: "not_found" });
+    const session = codexAuthSessions.get(agentId);
+    if (session && session.requestedByUserId !== auth.user.id) {
+      return reply.code(409).send({ error: "codex_auth_in_progress" });
+    }
+    return reply.header("cache-control", "no-store").send({ auth: serializeCodexAuthSession(session) });
+  });
+
+  app.post("/api/agents/:agentId/codex-auth", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const agentId = (request.params as { agentId: string }).agentId;
+    if (!canManageAgent(auth.user, agentId)) return reply.code(404).send({ error: "not_found" });
+    const connection = agents.get(agentId);
+    if (!connection) return reply.code(409).send({ error: "agent_offline" });
+    const row = db.prepare("SELECT current_job_id FROM agents WHERE id = ?").get(agentId) as { current_job_id: string | null } | undefined;
+    if (!row) return reply.code(404).send({ error: "not_found" });
+    if (row.current_job_id) return reply.code(409).send({ error: "agent_busy" });
+
+    const existing = codexAuthSessions.get(agentId);
+    if (existing && activeCodexAuthSession(existing)) {
+      if (existing.requestedByUserId !== auth.user.id) {
+        return reply.code(409).send({ error: "codex_auth_in_progress" });
+      }
+      return reply.header("cache-control", "no-store").send({ auth: serializeCodexAuthSession(existing) });
+    }
+    if (existing && ["starting", "waiting"].includes(existing.state)) {
+      existing.state = "failed";
+      existing.error = "The one-time Codex device code expired. Start again.";
+      existing.userCode = undefined;
+      existing.verificationUrl = undefined;
+      existing.updatedAt = nowIso();
+      sendAgent(agentId, { type: "codex.auth.cancel", requestId: existing.requestId });
+      return reply.code(409).header("cache-control", "no-store").send({ error: "codex_auth_expired", auth: serializeCodexAuthSession(existing) });
+    }
+
+    const requestId = id("auth");
+    const session: CodexAuthSession = {
+      agentId,
+      requestId,
+      requestedByUserId: auth.user.id,
+      connectionId: connection.connectionId,
+      state: "starting",
+      updatedAt: nowIso()
+    };
+    codexAuthSessions.set(agentId, session);
+    if (!sendAgent(agentId, { type: "codex.auth.start", requestId })) {
+      codexAuthSessions.delete(agentId);
+      return reply.code(409).send({ error: "agent_offline" });
+    }
+    setTimeout(() => {
+      const current = codexAuthSessions.get(agentId);
+      if (!current || current.requestId !== requestId || !activeCodexAuthSession(current)) return;
+      current.state = "failed";
+      current.error = "Codex device authorization timed out. Start again.";
+      current.userCode = undefined;
+      current.verificationUrl = undefined;
+      current.updatedAt = nowIso();
+      sendAgent(agentId, { type: "codex.auth.cancel", requestId });
+    }, 16 * 60 * 1000);
+    return reply.code(202).header("cache-control", "no-store").send({ auth: serializeCodexAuthSession(session) });
+  });
+
+  app.post("/api/agents/:agentId/codex-auth/cancel", async (request, reply) => {
+    const auth = requireAuth(db, request, reply);
+    if (!auth || !requireCsrf(db, request, reply)) return;
+    const agentId = (request.params as { agentId: string }).agentId;
+    if (!canManageAgent(auth.user, agentId)) return reply.code(404).send({ error: "not_found" });
+    const session = codexAuthSessions.get(agentId);
+    if (!session) return { ok: true, auth: serializeCodexAuthSession(undefined) };
+    if (session.requestedByUserId !== auth.user.id) {
+      return reply.code(409).send({ error: "codex_auth_in_progress" });
+    }
+    if (activeCodexAuthSession(session)) {
+      sendAgent(agentId, { type: "codex.auth.cancel", requestId: session.requestId });
+      session.state = "cancelled";
+      session.userCode = undefined;
+      session.verificationUrl = undefined;
+      session.updatedAt = nowIso();
+    }
+    return reply.header("cache-control", "no-store").send({ ok: true, auth: serializeCodexAuthSession(session) });
+  });
+
   app.get("/api/repos", async (request, reply) => {
     const auth = requireAuth(db, request, reply);
     if (!auth) return;
@@ -5579,6 +5709,21 @@ async function createApp(): Promise<FastifyInstance> {
         clearOrphanedAgentJobs(agent.id, parsed.currentJobId);
         void dispatchQueue(agent.id);
       }
+      if (parsed.type === "codex.auth.update") {
+        const session = codexAuthSessions.get(agent.id);
+        if (session && session.requestId === parsed.requestId && session.connectionId === connectionId) {
+          session.state = parsed.state;
+          session.verificationUrl = parsed.state === "waiting" ? parsed.verificationUrl : undefined;
+          session.userCode = parsed.state === "waiting" ? parsed.userCode : undefined;
+          session.expiresAt = parsed.state === "waiting" ? parsed.expiresAt : session.expiresAt;
+          session.error = parsed.error;
+          session.updatedAt = nowIso();
+          if (parsed.codexUsage) {
+            db.prepare("UPDATE agents SET codex_usage_json = ?, last_seen_at = ? WHERE id = ?")
+              .run(JSON.stringify(parsed.codexUsage), nowIso(), agent.id);
+          }
+        }
+      }
       if (parsed.type === "job.log") {
         const previous = db.prepare("SELECT status FROM jobs WHERE id = ?").get(parsed.jobId) as { status: string } | undefined;
         db.prepare("UPDATE jobs SET status='running', started_at=COALESCE(started_at, ?) WHERE id=?").run(nowIso(), parsed.jobId);
@@ -5747,6 +5892,7 @@ async function createApp(): Promise<FastifyInstance> {
 
     socket.on("close", () => {
       rejectAgentRequestsForConnection(agent.id, connectionId, "agent_disconnected");
+      failCodexAuthForConnection(agent.id, connectionId, "Agent disconnected during Codex authorization.");
       if (agents.get(agent.id)?.connectionId !== connectionId) return;
       agents.delete(agent.id);
       setTimeout(() => {

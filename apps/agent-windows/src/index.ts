@@ -1,4 +1,5 @@
 import os from "node:os";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import WebSocket from "ws";
@@ -7,7 +8,7 @@ import { loadAgentConfig, saveAgentConfig, type RepoConfig } from "./config.js";
 import { Runner } from "./codex-runner.js";
 import { detectLocalCodexActivity } from "./local-activity.js";
 import { syncLocalChats, type SyncLocalChatsResult } from "./local-chat-sync.js";
-import { runCapture } from "./process-utils.js";
+import { minimalEnv, needsShell, runCapture } from "./process-utils.js";
 import { makeRedactor } from "./redact.js";
 import { scanRepos } from "./repo-scanner.js";
 import { sendVscodeBridgeCommand } from "./vscode-bridge.js";
@@ -62,6 +63,18 @@ let cachedCodexUsage: CodexUsage | undefined;
 let cachedCodexUsageAt = 0;
 let cachedGrokUsage: CodexUsage | undefined;
 let cachedGrokUsageAt = 0;
+type ActiveCodexAuth = {
+  requestId: string;
+  child?: ChildProcessWithoutNullStreams;
+  expiresAt: string;
+  settled: boolean;
+  cancelled: boolean;
+  cancelReason?: "cancelled" | "expired";
+  codeSent: boolean;
+  output: string;
+  timer?: NodeJS.Timeout;
+};
+let activeCodexAuth: ActiveCodexAuth | undefined;
 let lastLocalActivitySyncKey = "";
 let lastLocalActivityStatus: LocalCodexActivity["status"] = "idle";
 let lastBusyLocalChatSyncOnly: LocalChatSyncOptions["only"];
@@ -1336,6 +1349,190 @@ function codexExecutable(): { command: string; args: string[] } {
   return { command: process.env.CMC_CODEX_BIN || "codex", args: [] };
 }
 
+const CODEX_DEVICE_AUTH_URL = "https://auth.openai.com/codex/device" as const;
+
+function setCachedCodexUsage(status: CodexUsage["status"], summary: string, source: string): CodexUsage {
+  cachedCodexUsage = {
+    status,
+    summary: compactSummary([summary]),
+    source,
+    checkedAt: new Date().toISOString()
+  };
+  cachedCodexUsageAt = Date.now();
+  return cachedCodexUsage;
+}
+
+function noteExpiredCodexAuth(message: string): CodexUsage | undefined {
+  if (!/invalid_refresh_token|token_expired|access token (?:could not be refreshed|is expired)|session expired|HTTP error:\s*401 Unauthorized/i.test(message)) {
+    return undefined;
+  }
+  return setCachedCodexUsage(
+    "signed-out",
+    "ChatGPT session expired. Re-authenticate Codex from the agent settings on xedoc.ru.",
+    "codex runtime"
+  );
+}
+
+function stripTerminalControl(value: string): string {
+  return value
+    .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g, "")
+    .replace(/\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+}
+
+function codexAuthFailureMessage(output: string): string {
+  if (/timed out|timeout/i.test(output)) return "Codex device authorization timed out. Try again.";
+  if (/network|connect|proxy|403|Forbidden|Cloudflare/i.test(output)) return "Could not reach OpenAI device authorization through this agent's network route.";
+  if (/not found|ENOENT|is not recognized/i.test(output)) return "Codex CLI is not available on this agent.";
+  return "Codex device authorization failed. Try again.";
+}
+
+async function stopCodexAuthChild(child: ChildProcessWithoutNullStreams | undefined): Promise<void> {
+  if (!child) return;
+  const pid = child.pid;
+  try {
+    child.kill();
+  } catch {
+    // Best-effort cancellation; the close handler owns final state.
+  }
+  if (process.platform === "win32" && pid) {
+    await runCapture("taskkill", ["/PID", String(pid), "/T", "/F"], undefined, 10000);
+  }
+}
+
+async function finishCodexAuth(
+  auth: ActiveCodexAuth,
+  send: (message: AgentToServer) => boolean,
+  state: "signed-in" | "failed" | "cancelled",
+  error?: string
+): Promise<void> {
+  if (auth.settled) return;
+  auth.settled = true;
+  if (auth.timer) clearTimeout(auth.timer);
+  if (activeCodexAuth === auth) activeCodexAuth = undefined;
+
+  if (state === "signed-in") {
+    cachedCodexUsage = undefined;
+    cachedCodexUsageAt = 0;
+    const codexUsage = await probeCodexUsage(true);
+    send({ type: "codex.auth.update", requestId: auth.requestId, state, codexUsage });
+    logProgress("auth: Codex device authorization completed.");
+    return;
+  }
+
+  const summary = state === "cancelled"
+    ? "Codex device authorization was cancelled."
+    : error || "Codex device authorization failed.";
+  const codexUsage = setCachedCodexUsage("signed-out", summary, "codex device auth");
+  send({ type: "codex.auth.update", requestId: auth.requestId, state, error: state === "failed" ? summary : undefined, codexUsage });
+  logProgress(`auth: Codex device authorization ${state}.`);
+}
+
+async function startCodexDeviceAuth(requestId: string, send: (message: AgentToServer) => boolean): Promise<void> {
+  if (currentRunner) {
+    send({ type: "codex.auth.update", requestId, state: "failed", error: "Wait for the current agent job to finish." });
+    return;
+  }
+  if (activeCodexAuth) {
+    send({ type: "codex.auth.update", requestId, state: "failed", error: "Codex device authorization is already in progress." });
+    return;
+  }
+
+  const auth: ActiveCodexAuth = {
+    requestId,
+    expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    settled: false,
+    cancelled: false,
+    codeSent: false,
+    output: ""
+  };
+  activeCodexAuth = auth;
+  const signedOutUsage = setCachedCodexUsage("signed-out", "Preparing ChatGPT device authorization.", "codex device auth");
+  send({ type: "codex.auth.update", requestId, state: "starting", codexUsage: signedOutUsage });
+  logProgress("auth: Starting Codex device authorization.");
+
+  const executable = codexExecutable();
+  const logout = await runCapture(executable.command, [...executable.args, "logout"], undefined, 15000);
+  if (activeCodexAuth !== auth || auth.settled || auth.cancelled) return;
+  if (logout.exitCode !== 0 && !/not logged in/i.test(`${logout.stdout}\n${logout.stderr}`)) {
+    await finishCodexAuth(auth, send, "failed", "Could not clear the previous Codex session.");
+    return;
+  }
+
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    // Windows npm installations expose Codex as a trusted .cmd wrapper; needsShell is limited to that fixed executable.
+    child = spawn(executable.command, [...executable.args, "login", "--device-auth"], {
+      shell: needsShell(executable.command),
+      windowsHide: true,
+      env: minimalEnv()
+    });
+  } catch (error) {
+    await finishCodexAuth(auth, send, "failed", error instanceof Error ? error.message : "Could not start Codex CLI.");
+    return;
+  }
+  auth.child = child;
+  child.stdin.end();
+
+  const inspectOutput = (chunk: Buffer) => {
+    if (auth.settled) return;
+    auth.output = `${auth.output}${chunk.toString()}`.slice(-20000);
+    if (auth.codeSent) return;
+    const text = stripTerminalControl(auth.output);
+    const code = text.match(/\b[A-Z0-9]{4}-[A-Z0-9]{4,8}\b/)?.[0];
+    if (!text.includes(CODEX_DEVICE_AUTH_URL) || !code) return;
+    auth.codeSent = true;
+    send({
+      type: "codex.auth.update",
+      requestId,
+      state: "waiting",
+      verificationUrl: CODEX_DEVICE_AUTH_URL,
+      userCode: code,
+      expiresAt: auth.expiresAt,
+      codexUsage: cachedCodexUsage
+    });
+    logProgress("auth: Codex device code is ready for confirmation.");
+  };
+  child.stdout.on("data", inspectOutput);
+  child.stderr.on("data", inspectOutput);
+  child.on("error", (error) => {
+    auth.output = `${auth.output}\n${error.message}`.slice(-20000);
+    void finishCodexAuth(auth, send, "failed", codexAuthFailureMessage(auth.output));
+  });
+  child.on("close", (exitCode) => {
+    if (auth.cancelReason === "cancelled") {
+      void finishCodexAuth(auth, send, "cancelled");
+      return;
+    }
+    if (auth.cancelReason === "expired") {
+      void finishCodexAuth(auth, send, "failed", "The one-time Codex device code expired. Try again.");
+      return;
+    }
+    void finishCodexAuth(auth, send, exitCode === 0 ? "signed-in" : "failed", codexAuthFailureMessage(auth.output));
+  });
+  auth.timer = setTimeout(() => {
+    if (auth.settled) return;
+    auth.cancelled = true;
+    auth.cancelReason = "expired";
+    void stopCodexAuthChild(auth.child);
+  }, Math.max(1000, Date.parse(auth.expiresAt) - Date.now()));
+}
+
+async function cancelCodexDeviceAuth(requestId: string, send: (message: AgentToServer) => boolean): Promise<void> {
+  const auth = activeCodexAuth;
+  if (!auth || auth.requestId !== requestId) {
+    send({ type: "codex.auth.update", requestId, state: "cancelled" });
+    return;
+  }
+  auth.cancelled = true;
+  auth.cancelReason = "cancelled";
+  if (!auth.child) {
+    await finishCodexAuth(auth, send, "cancelled");
+    return;
+  }
+  await stopCodexAuthChild(auth.child);
+}
+
 function grokExecutable(args: string[]): { command: string; args: string[] } {
   if (process.env.CMC_GROK_BIN) {
     return { command: process.env.CMC_GROK_BIN, args };
@@ -1579,6 +1776,16 @@ function connect() {
       return;
     }
     console.log(`Incoming ${message.type}: ${incomingSummary(message)}`);
+
+    if (message.type === "codex.auth.start") {
+      void startCodexDeviceAuth(message.requestId, send);
+      return;
+    }
+
+    if (message.type === "codex.auth.cancel") {
+      void cancelCodexDeviceAuth(message.requestId, send);
+      return;
+    }
 
     if (message.type === "repo.scan") {
       logProgress("scan: Scanning configured projects.");
@@ -1930,6 +2137,10 @@ function connect() {
           job: message.job,
           sendLog: (log) => {
             const redactedMessage = redact(log.message);
+            const expiredUsage = message.job.kind === "codex" ? noteExpiredCodexAuth(redactedMessage) : undefined;
+            if (expiredUsage) {
+              send({ type: "agent.heartbeat", currentJobId, codexUsage: expiredUsage });
+            }
             if (log.stream === "system" || log.stream === "stderr") {
               console.log(`Job log ${shortId(log.jobId)} ${log.stream}: ${redactedMessage.slice(0, 500)}`);
             }
