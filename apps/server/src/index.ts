@@ -38,10 +38,12 @@ import {
   type CodexAuthState,
   type DeployConfig,
   type LocalCodexActivity,
+  type ProjectAgentRole,
   type ProjectDataConfig,
   type ProjectVisibility,
   type ProjectWriteAccess,
   type RepoInfo,
+  type ReasoningEffort,
   type Sandbox,
   type ServerToAgent,
   type UiEvent
@@ -1193,15 +1195,16 @@ function moveProjectRowsToAgent(
   visibility: ProjectVisibility,
   ownerUserId: string | null,
   writeAccess = "owner",
-  writeUsersJson = "[]"
+  writeUsersJson = "[]",
+  agentRolesJson = "[]"
 ): void {
   const stamp = nowIso();
   const allowedSandboxes = patch.allowedSandboxes ?? ["read-only", "workspace-write", "danger-full-access"];
   db.exec("BEGIN");
   try {
     db.prepare(`
-      INSERT OR IGNORE INTO repos (id,user_id,agent_id,name,path_masked,github_url,server_path,domain,visibility,write_access,write_users_json,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT OR IGNORE INTO repos (id,user_id,agent_id,name,path_masked,github_url,server_path,domain,visibility,write_access,write_users_json,agent_roles_json,deploy_json,data_json,current_branch,dirty,default_sandbox,allowed_sandboxes,test_commands,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       repoId,
       ownerUserId,
@@ -1214,6 +1217,7 @@ function moveProjectRowsToAgent(
       visibility,
       writeAccess,
       writeUsersJson,
+      agentRolesJson,
       patch.deploy ? JSON.stringify(patch.deploy) : null,
       patch.data ? JSON.stringify(patch.data) : null,
       null,
@@ -1234,6 +1238,7 @@ function moveProjectRowsToAgent(
           visibility = ?,
           write_access = ?,
           write_users_json = ?,
+          agent_roles_json = ?,
           deploy_json = ?,
           data_json = ?,
           default_sandbox = ?,
@@ -1250,6 +1255,7 @@ function moveProjectRowsToAgent(
       visibility,
       writeAccess,
       writeUsersJson,
+      agentRolesJson,
       patch.deploy ? JSON.stringify(patch.deploy) : null,
       patch.data ? JSON.stringify(patch.data) : null,
       patch.defaultSandbox ?? "danger-full-access",
@@ -1286,12 +1292,13 @@ function updateControllerProjectSettings(
     visibility?: ProjectVisibility;
     writeAccess?: ProjectWriteAccess;
     writeUsers?: string[];
+    agentRoles?: ProjectAgentRole[];
     deploy?: DeployConfig | null;
     data?: ProjectDataConfig | null;
     defaultSandbox?: Sandbox;
     allowedSandboxes?: Sandbox[];
   },
-  fields: { deploy: boolean; data: boolean }
+  fields: { deploy: boolean; data: boolean; agentRoles: boolean }
 ): boolean {
   const assignments: string[] = [];
   const values: Array<string | null> = [];
@@ -1326,6 +1333,10 @@ function updateControllerProjectSettings(
   if (patch.writeUsers) {
     assignments.push("write_users_json = ?");
     values.push(JSON.stringify(patch.writeUsers));
+  }
+  if (fields.agentRoles) {
+    assignments.push("agent_roles_json = ?");
+    values.push(JSON.stringify(patch.agentRoles ?? []));
   }
   if (fields.deploy) {
     assignments.push("deploy_json = ?");
@@ -1442,6 +1453,11 @@ function noteMessageMentionsKind(value: string, kind: JobRow["kind"]): boolean {
   if (kind === "grok") return mentions.includes("grok");
   if (kind === "gemini" || kind === "gemini-cli") return mentions.includes("gemini");
   return false;
+}
+
+function messageMentionsRole(value: string, alias: string): boolean {
+  return [...value.matchAll(/(^|[\s,;:()"'[\]{}])@([a-z0-9][a-z0-9_-]{0,31})\b/gi)]
+    .some((match) => (match[2] ?? "").toLowerCase() === alias);
 }
 
 type ProjectOperationKind = "git-sync" | "build" | "deploy" | "nginx" | "ssl";
@@ -2392,6 +2408,7 @@ function serializeJob(job: JobRow, options: { includeDiff?: boolean } = {}) {
     model: job.model,
     reasoningEffort: job.reasoning_effort,
     speed: job.speed,
+    roleAlias: job.role_alias,
     kind: job.kind,
     testCommandId: job.test_command_id,
     status: job.status,
@@ -2475,7 +2492,7 @@ function createModelApiJob(
     displayPrompt?: string;
     kind: "codex" | "grok" | "gemini-cli" | "gemini";
     model?: string;
-    reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+    reasoningEffort?: ReasoningEffort;
     speed?: "standard" | "fast";
   }
 ): JobRow {
@@ -4489,8 +4506,17 @@ async function createApp(): Promise<FastifyInstance> {
       if (!result.ok) return reply.code(400).send({ error: result.error ?? "project_create_failed" });
       if (result.repos) upsertRepos(parsed.data.agentId, result.repos);
       const storedVisibility = parsed.data.writeAccess === "readonly" ? "public" : parsed.data.visibility;
-      db.prepare("UPDATE repos SET user_id = ?, visibility = ?, write_access = ?, write_users_json = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
-        .run(auth.user.id, storedVisibility, parsed.data.writeAccess, JSON.stringify(parsed.data.writeUsers), nowIso(), parsed.data.agentId, repoId);
+      db.prepare("UPDATE repos SET user_id = ?, visibility = ?, write_access = ?, write_users_json = ?, agent_roles_json = ?, updated_at = ? WHERE agent_id = ? AND id = ?")
+        .run(
+          auth.user.id,
+          storedVisibility,
+          parsed.data.writeAccess,
+          JSON.stringify(parsed.data.writeUsers),
+          JSON.stringify(parsed.data.agentRoles),
+          nowIso(),
+          parsed.data.agentId,
+          repoId
+        );
       const notesChat = ensureProjectNotesChat(auth.user, parsed.data.agentId, repoId);
       return reply.code(201).send({ repoId, githubUrl, notesChatId: notesChat.id });
     } catch (error) {
@@ -4505,10 +4531,11 @@ async function createApp(): Promise<FastifyInstance> {
     if (!canOwnRepoSettings(auth.user, params.agentId, params.repoId)) return reply.code(404).send({ error: "repo_not_found" });
     const parsed = UpdateProjectSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_project", details: parsed.error.flatten() });
-    const { visibility, writeAccess, writeUsers, deploy, data, targetAgentId, ...agentPatch } = parsed.data;
+    const { visibility, writeAccess, writeUsers, agentRoles, deploy, data, targetAgentId, ...agentPatch } = parsed.data;
     const storedVisibility = writeAccess === "readonly" ? "public" : visibility;
     const deployProvided = Object.prototype.hasOwnProperty.call(parsed.data, "deploy");
     const dataProvided = Object.prototype.hasOwnProperty.call(parsed.data, "data");
+    const agentRolesProvided = Object.prototype.hasOwnProperty.call(parsed.data, "agentRoles");
     const agentPatchKeys = Object.keys(agentPatch).filter((key) => (agentPatch as Record<string, unknown>)[key] !== undefined);
     const nextAgentId = targetAgentId?.trim();
     try {
@@ -4546,7 +4573,8 @@ async function createApp(): Promise<FastifyInstance> {
           storedVisibility ?? sourceRepo.visibility,
           sourceRepo.user_id,
           writeAccess ?? sourceRepo.write_access,
-          writeUsers ? JSON.stringify(writeUsers) : sourceRepo.write_users_json
+          writeUsers ? JSON.stringify(writeUsers) : sourceRepo.write_users_json,
+          agentRolesProvided ? JSON.stringify(agentRoles ?? []) : sourceRepo.agent_roles_json
         );
         broadcast({ type: "repos.updated", agentId: params.agentId, repos: repoInfosForAgent(params.agentId) });
         broadcast({ type: "repos.updated", agentId: nextAgentId, repos: repoInfosForAgent(nextAgentId) });
@@ -4575,9 +4603,10 @@ async function createApp(): Promise<FastifyInstance> {
         visibility: storedVisibility,
         writeAccess,
         writeUsers,
+        agentRoles,
         deploy: deploy ?? null,
         data: data ?? null
-      }, { deploy: deployProvided, data: dataProvided });
+      }, { deploy: deployProvided, data: dataProvided, agentRoles: agentRolesProvided });
       if (controllerSettingsUpdated) {
         broadcast({ type: "repos.updated", agentId: params.agentId, repos: repoInfosForAgent(params.agentId) });
       }
@@ -5517,6 +5546,18 @@ async function createApp(): Promise<FastifyInstance> {
     const repo = db.prepare("SELECT * FROM repos WHERE agent_id = ? AND id = ?")
       .get(parsed.data.agentId, parsed.data.repoId) as RepoRow | undefined;
     if (!repo) return reply.code(404).send({ error: "repo_not_found" });
+    const displayPrompt = parsed.data.displayPrompt?.trim() || parsed.data.prompt;
+    const role = parsed.data.roleAlias
+      ? (mapRepo(repo).agentRoles ?? []).find((item) => item.alias === parsed.data.roleAlias)
+      : undefined;
+    if (parsed.data.roleAlias && !role) return reply.code(400).send({ error: "agent_role_not_found" });
+    if (role && !messageMentionsRole(displayPrompt, role.alias)) {
+      return reply.code(400).send({ error: "agent_role_mention_required" });
+    }
+    const jobKind = role?.kind ?? parsed.data.kind;
+    const jobModel = role?.model ?? parsed.data.model;
+    const jobReasoningEffort = role?.reasoningEffort ?? parsed.data.reasoningEffort;
+    const jobSpeed = role ? role.speed : parsed.data.speed;
     const allowed = JSON.parse(repo.allowed_sandboxes) as string[];
     if (!allowed.includes(parsed.data.sandbox)) return reply.code(400).send({ error: "sandbox_not_allowed" });
     if (isAgentLocallyBusy(parsed.data.agentId)) return reply.code(409).send({ error: "agent_local_busy" });
@@ -5538,16 +5579,15 @@ async function createApp(): Promise<FastifyInstance> {
     const jobId = id("job");
     const createdAt = nowIso();
     const promptMessageId = id("msg");
-    const displayPrompt = parsed.data.displayPrompt?.trim() || parsed.data.prompt;
-    if (targetChat?.source === "notes" && !noteMessageMentionsKind(displayPrompt, parsed.data.kind)) {
+    if (targetChat?.source === "notes" && !role && !noteMessageMentionsKind(displayPrompt, jobKind)) {
       return reply.code(400).send({ error: "note_agent_mention_required" });
     }
     if (targetChat?.source === "notes" && parsed.data.sandbox !== "read-only") {
       return reply.code(400).send({ error: "note_read_only_required" });
     }
     db.prepare(`
-      INSERT INTO jobs (id,chat_id,agent_id,repo_id,prompt,sandbox,branch_mode,model,reasoning_effort,speed,kind,status,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+      INSERT INTO jobs (id,chat_id,agent_id,repo_id,prompt,sandbox,branch_mode,model,reasoning_effort,speed,role_alias,kind,status,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       jobId,
       chatId,
@@ -5556,10 +5596,11 @@ async function createApp(): Promise<FastifyInstance> {
       parsed.data.prompt,
       parsed.data.sandbox,
       parsed.data.branchMode,
-      parsed.data.model ?? null,
-      parsed.data.reasoningEffort ?? null,
-      parsed.data.speed ?? null,
-      parsed.data.kind,
+      jobModel ?? null,
+      jobReasoningEffort ?? null,
+      jobSpeed ?? null,
+      role?.alias ?? null,
+      jobKind,
       "queued",
       createdAt
     );
@@ -5573,10 +5614,11 @@ async function createApp(): Promise<FastifyInstance> {
       metadata_json: JSON.stringify({
         jobId,
         prompt: parsed.data.prompt,
-        model: parsed.data.model,
-        reasoningEffort: parsed.data.reasoningEffort,
-        speed: parsed.data.speed,
-        kind: parsed.data.kind
+        model: jobModel,
+        reasoningEffort: jobReasoningEffort,
+        speed: jobSpeed,
+        roleAlias: role?.alias,
+        kind: jobKind
       }),
       created_at: createdAt
     });

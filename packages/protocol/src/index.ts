@@ -47,6 +47,57 @@ export const ProjectDataConfigSchema = z.object({
 });
 export type ProjectDataConfig = z.infer<typeof ProjectDataConfigSchema>;
 
+export const CodexModelSchema = z.string().trim().min(1).max(80);
+export const ReasoningEffortSchema = z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]);
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
+export const CodexSpeedSchema = z.enum(["standard", "fast"]);
+export const ModelGatewayKindSchema = z.enum(["codex", "grok", "gemini-cli", "gemini"]);
+export type ModelGatewayKind = z.infer<typeof ModelGatewayKindSchema>;
+
+export const ProjectAgentRoleAliasSchema = z.string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/, "Use 1-32 lowercase letters, numbers, _ or -");
+
+export const ProjectAgentRoleSchema = z.object({
+  alias: ProjectAgentRoleAliasSchema,
+  label: z.string().trim().min(1).max(80).optional(),
+  kind: ModelGatewayKindSchema,
+  model: CodexModelSchema,
+  reasoningEffort: ReasoningEffortSchema.default("high"),
+  speed: CodexSpeedSchema.optional()
+}).superRefine((role, context) => {
+  if (["gpt", "codex", "grok", "gemini"].includes(role.alias)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["alias"],
+      message: "This alias is reserved"
+    });
+  }
+  if (role.kind !== "codex" && role.speed !== undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["speed"],
+      message: "Speed is available only for Codex roles"
+    });
+  }
+});
+export type ProjectAgentRole = z.infer<typeof ProjectAgentRoleSchema>;
+
+export const ProjectAgentRolesSchema = z.array(ProjectAgentRoleSchema).max(24).superRefine((roles, context) => {
+  const seen = new Set<string>();
+  roles.forEach((role, index) => {
+    if (seen.has(role.alias)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [index, "alias"],
+        message: "Aliases must be unique"
+      });
+    }
+    seen.add(role.alias);
+  });
+});
+
 export const RepoInfoSchema = z.object({
   id: z.string().min(1).max(80),
   name: z.string().min(1).max(120),
@@ -57,6 +108,7 @@ export const RepoInfoSchema = z.object({
   visibility: ProjectVisibilitySchema.optional(),
   writeAccess: ProjectWriteAccessSchema.optional(),
   writeUsers: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
+  agentRoles: ProjectAgentRolesSchema.optional(),
   deploy: DeployConfigSchema.optional(),
   data: ProjectDataConfigSchema.optional(),
   currentBranch: z.string().optional(),
@@ -333,12 +385,6 @@ export const AgentToServerSchema = z.discriminatedUnion("type", [
 ]);
 export type AgentToServer = z.infer<typeof AgentToServerSchema>;
 
-export const CodexModelSchema = z.string().min(1).max(80);
-export const ReasoningEffortSchema = z.enum(["low", "medium", "high", "xhigh"]);
-export const CodexSpeedSchema = z.enum(["standard", "fast"]);
-export const ModelGatewayKindSchema = z.enum(["codex", "grok", "gemini-cli", "gemini"]);
-export type ModelGatewayKind = z.infer<typeof ModelGatewayKindSchema>;
-
 const ModelGatewayProjectSchema = z.object({
   agentId: z.string().min(1).max(80).optional(),
   repoId: z.string().min(1).max(80).optional()
@@ -559,6 +605,7 @@ export const CreateJobSchema = z.object({
   model: CodexModelSchema.optional(),
   reasoningEffort: ReasoningEffortSchema.optional(),
   speed: CodexSpeedSchema.optional(),
+  roleAlias: ProjectAgentRoleAliasSchema.optional(),
   attachments: z.array(JobAttachmentSchema).max(8).default([])
 });
 export type CreateJob = z.infer<typeof CreateJobSchema>;
@@ -607,6 +654,7 @@ export const CreateProjectSchema = z.object({
   visibility: ProjectVisibilitySchema.default("private"),
   writeAccess: ProjectWriteAccessSchema.default("owner"),
   writeUsers: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+  agentRoles: ProjectAgentRolesSchema.default([]),
   deploy: DeployConfigSchema.nullish(),
   data: ProjectDataConfigSchema.nullish(),
   defaultSandbox: SandboxSchema.default("danger-full-access")
@@ -623,6 +671,7 @@ export const UpdateProjectSchema = z.object({
   visibility: ProjectVisibilitySchema.optional(),
   writeAccess: ProjectWriteAccessSchema.optional(),
   writeUsers: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
+  agentRoles: ProjectAgentRolesSchema.optional(),
   deploy: DeployConfigSchema.nullish(),
   data: ProjectDataConfigSchema.nullish(),
   defaultSandbox: SandboxSchema.optional(),

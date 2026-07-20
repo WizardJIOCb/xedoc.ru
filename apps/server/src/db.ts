@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { CodexUsage, DeployConfig, JobStatus, LocalCodexActivity, ProjectVisibility, ProjectWriteAccess, RepoInfo, Sandbox } from "@cmc/protocol";
+import { ProjectAgentRolesSchema, type CodexUsage, type DeployConfig, type JobStatus, type LocalCodexActivity, type ProjectVisibility, type ProjectWriteAccess, type RepoInfo, type Sandbox } from "@cmc/protocol";
 
 export type UserRow = {
   id: string;
@@ -84,6 +84,7 @@ export type RepoRow = {
   visibility: ProjectVisibility;
   write_access: ProjectWriteAccess;
   write_users_json: string;
+  agent_roles_json: string;
   deploy_json: string | null;
   data_json: string | null;
   current_branch: string | null;
@@ -103,8 +104,9 @@ export type JobRow = {
   sandbox: Sandbox;
   branch_mode: "current" | "create-per-job";
   model: string | null;
-  reasoning_effort: "low" | "medium" | "high" | "xhigh" | null;
+  reasoning_effort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null;
   speed: "standard" | "fast" | null;
+  role_alias: string | null;
   kind: "codex" | "grok" | "gemini-cli" | "gemini" | "test";
   test_command_id: string | null;
   status: JobStatus;
@@ -261,6 +263,7 @@ export function openDb(path: string): DatabaseSync {
       visibility TEXT NOT NULL DEFAULT 'private',
       write_access TEXT NOT NULL DEFAULT 'owner',
       write_users_json TEXT NOT NULL DEFAULT '[]',
+      agent_roles_json TEXT NOT NULL DEFAULT '[]',
       deploy_json TEXT,
       data_json TEXT,
       current_branch TEXT,
@@ -282,6 +285,7 @@ export function openDb(path: string): DatabaseSync {
       model TEXT,
       reasoning_effort TEXT,
       speed TEXT,
+      role_alias TEXT,
       kind TEXT NOT NULL DEFAULT 'codex',
       test_command_id TEXT,
       status TEXT NOT NULL,
@@ -492,6 +496,9 @@ export function openDb(path: string): DatabaseSync {
   if (!jobColumns.some((column) => column.name === "reasoning_effort")) {
     db.exec("ALTER TABLE jobs ADD COLUMN reasoning_effort TEXT");
   }
+  if (!jobColumns.some((column) => column.name === "role_alias")) {
+    db.exec("ALTER TABLE jobs ADD COLUMN role_alias TEXT");
+  }
   if (!jobColumns.some((column) => column.name === "speed")) {
     db.exec("ALTER TABLE jobs ADD COLUMN speed TEXT");
   }
@@ -528,6 +535,9 @@ export function openDb(path: string): DatabaseSync {
   }
   if (!repoColumns.some((column) => column.name === "write_users_json")) {
     db.exec("ALTER TABLE repos ADD COLUMN write_users_json TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!repoColumns.some((column) => column.name === "agent_roles_json")) {
+    db.exec("ALTER TABLE repos ADD COLUMN agent_roles_json TEXT NOT NULL DEFAULT '[]'");
   }
   if (!repoColumns.some((column) => column.name === "deploy_json")) {
     db.exec("ALTER TABLE repos ADD COLUMN deploy_json TEXT");
@@ -630,6 +640,7 @@ export function mapRepo(row: RepoRow): RepoInfo {
     visibility: row.visibility,
     writeAccess: row.write_access ?? "owner",
     writeUsers: parseStringArray(row.write_users_json),
+    agentRoles: parseProjectAgentRoles(row.agent_roles_json),
     deploy: parseDeployConfig(row.deploy_json),
     data: parseProjectDataConfig(row.data_json),
     currentBranch: row.current_branch ?? undefined,
@@ -646,6 +657,16 @@ function parseDeployConfig(value: string | null): DeployConfig | undefined {
     return JSON.parse(value) as DeployConfig;
   } catch {
     return undefined;
+  }
+}
+
+function parseProjectAgentRoles(value: string | null): RepoInfo["agentRoles"] {
+  if (!value) return [];
+  try {
+    const parsed = ProjectAgentRolesSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
   }
 }
 

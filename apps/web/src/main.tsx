@@ -78,9 +78,17 @@ const MonacoCodeEditor = React.lazy(() => import("./MonacoEditors").then((module
 const MonacoReadOnlyCodeViewer = React.lazy(() => import("./MonacoEditors").then((module) => ({ default: module.MonacoReadOnlyCodeViewer })));
 
 type Sandbox = "read-only" | "workspace-write" | "danger-full-access";
-type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 type CodexSpeed = "standard" | "fast";
 type JobKind = "codex" | "grok" | "gemini-cli" | "gemini";
+type ProjectAgentRole = {
+  alias: string;
+  label?: string;
+  kind: JobKind;
+  model: string;
+  reasoningEffort: ReasoningEffort;
+  speed?: CodexSpeed;
+};
 type RunnerAgent = "codex" | "grok" | "gemini";
 type ProjectVisibility = "private" | "public";
 type ProjectWriteAccess = "owner" | "everyone" | "users" | "readonly";
@@ -91,7 +99,7 @@ type IdeChatTextSize = "small" | "normal" | "large";
 type IdeChatWidth = "small" | "normal" | "large";
 type IdeChatTextStyle = "cards" | "plain" | "reader";
 type ProjectWizardStep = "project" | "git" | "deploy" | "data" | "ready";
-type ProjectSettingsTab = "general" | "git" | "deploy" | "data" | "access" | "automation";
+type ProjectSettingsTab = "general" | "git" | "deploy" | "data" | "access" | "roles" | "automation";
 type IdeMobilePane = "files" | "code" | "chat";
 type ProjectDataLocation = "local" | "server";
 type ProjectDataConfig = {
@@ -135,18 +143,24 @@ const SANDBOX_LABELS: Record<Sandbox, string> = {
   "danger-full-access": "full-access"
 };
 const REASONING_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
+  { value: "ultra", label: "Ultra" },
+  { value: "max", label: "Max" },
   { value: "xhigh", label: "Extra High" },
   { value: "high", label: "High" },
   { value: "medium", label: "Medium" },
   { value: "low", label: "Low" }
 ];
 const CODEX_MODEL_OPTIONS = [
+  { value: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+  { value: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+  { value: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
   { value: "gpt-5.5", label: "GPT-5.5" },
   { value: "gpt-5.4", label: "GPT-5.4" },
   { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
   { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" }
 ];
 const GROK_MODEL_OPTIONS = [
+  { value: "grok-4.5", label: "Grok 4.5" },
   { value: "grok-build", label: "Grok Build" },
   { value: "grok-build-latest", label: "Grok Build Latest" }
 ];
@@ -170,6 +184,75 @@ const RUNNER_OPTIONS: Array<{ value: JobKind; label: string; note: string }> = [
   { value: "grok", label: "Grok", note: "Grok Build CLI" },
   { value: "gemini-cli", label: "Gemini CLI", note: "Google account agent" },
   { value: "gemini", label: "Gemini API", note: "Google AI Studio key" }
+];
+
+function modelOptionsForRole(kind: JobKind) {
+  if (kind === "grok") return GROK_MODEL_OPTIONS;
+  if (kind === "gemini-cli") return GEMINI_CLI_MODEL_OPTIONS;
+  if (kind === "gemini") return GEMINI_MODEL_OPTIONS;
+  return CODEX_MODEL_OPTIONS;
+}
+
+function normalizeRoleAliasInput(value: string) {
+  return value.replace(/^@+/, "").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+}
+
+function availableRoleAlias(base: string, roles: ProjectAgentRole[]) {
+  const normalized = normalizeRoleAliasInput(base) || "agent";
+  const used = new Set(roles.map((role) => role.alias));
+  if (!used.has(normalized)) return normalized;
+  for (let suffix = 2; suffix < 100; suffix += 1) {
+    const candidate = `${normalized.slice(0, Math.max(1, 31 - String(suffix).length))}-${suffix}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `agent-${Date.now().toString().slice(-6)}`;
+}
+
+function normalizedAgentRoles(roles: ProjectAgentRole[]) {
+  return roles.map((role) => ({
+    alias: normalizeRoleAliasInput(role.alias),
+    label: role.label?.trim() || undefined,
+    kind: role.kind,
+    model: role.model.trim(),
+    reasoningEffort: role.reasoningEffort,
+    speed: role.kind === "codex" ? role.speed ?? "standard" : undefined
+  }));
+}
+
+function agentRolesValidationError(roles: ProjectAgentRole[]) {
+  if (roles.length > 24) return "В проекте можно сохранить не больше 24 AI-ролей.";
+  const aliases = new Set<string>();
+  for (const role of roles) {
+    if (!/^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/.test(role.alias)) return "У каждой роли нужен alias из 1–32 латинских символов, цифр, _ или -.";
+    if (["gpt", "codex", "grok", "gemini"].includes(role.alias)) return `@${role.alias} уже занят системным агентом.`;
+    if (aliases.has(role.alias)) return `Alias @${role.alias} используется дважды.`;
+    if (!role.model.trim()) return `Для @${role.alias} укажи модель.`;
+    aliases.add(role.alias);
+  }
+  return "";
+}
+
+const PROJECT_ROLE_PRESETS: Array<{ id: string; label: string; role: ProjectAgentRole }> = [
+  {
+    id: "sol-ultra",
+    label: "Sol Ultra",
+    role: { alias: "codex-sol", label: "Codex Sol Ultra", kind: "codex", model: "gpt-5.6-sol", reasoningEffort: "ultra", speed: "standard" }
+  },
+  {
+    id: "terra-high",
+    label: "Terra High",
+    role: { alias: "codex-little", label: "Codex Terra High", kind: "codex", model: "gpt-5.6-terra", reasoningEffort: "high", speed: "standard" }
+  },
+  {
+    id: "gemini-high",
+    label: "Gemini High",
+    role: { alias: "gemini-high", label: "Gemini High", kind: "gemini-cli", model: "gemini-3-pro-preview", reasoningEffort: "high" }
+  },
+  {
+    id: "grok-45",
+    label: "Grok 4.5",
+    role: { alias: "grok-45", label: "Grok 4.5 High", kind: "grok", model: "grok-4.5", reasoningEffort: "high" }
+  }
 ];
 const AGENT_MENU_OPTIONS: Array<{ value: RunnerAgent; label: string; note: string }> = [
   { value: "codex", label: "Codex", note: "OpenAI Codex CLI" },
@@ -208,6 +291,7 @@ const PROJECT_SETTINGS_TABS: Array<{ id: ProjectSettingsTab; label: string; icon
   { id: "deploy", label: "Deploy", icon: <UploadCloud size={15} /> },
   { id: "data", label: "Data", icon: <Database size={15} /> },
   { id: "access", label: "Access", icon: <ShieldCheck size={15} /> },
+  { id: "roles", label: "AI Roles", icon: <Bot size={15} /> },
   { id: "automation", label: "Automation", icon: <Bot size={15} /> }
 ];
 const LOCAL_CHAT_SYNC_REFRESH_DELAYS_MS = [0, 800, 2000, 4000, 8000, 15000];
@@ -375,6 +459,7 @@ type Repo = {
   visibility?: ProjectVisibility;
   writeAccess?: ProjectWriteAccess;
   writeUsers?: string[];
+  agentRoles?: ProjectAgentRole[];
   deploy?: DeployConfig;
   data?: ProjectDataConfig;
   currentBranch?: string;
@@ -688,6 +773,7 @@ type Job = {
   model?: string | null;
   reasoningEffort?: ReasoningEffort | null;
   speed?: CodexSpeed | null;
+  roleAlias?: string | null;
   kind?: JobKind | "test" | null;
   status: string;
   exitCode: number | null;
@@ -1705,6 +1791,10 @@ type MentionedAgentJob = {
   kind: JobKind;
   prompt: string;
   displayPrompt: string;
+  roleAlias?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  speed?: CodexSpeed;
 };
 
 function kindForMention(mention: string, currentKind: JobKind): JobKind {
@@ -1722,26 +1812,55 @@ function cleanMentionPrompt(value: string) {
     .trim();
 }
 
-function parseMentionedAgentJobs(value: string, currentKind: JobKind, mentionsOnly = false): MentionedAgentJob[] {
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseMentionedAgentJobs(
+  value: string,
+  currentKind: JobKind,
+  roles: ProjectAgentRole[] = [],
+  mentionsOnly = false
+): MentionedAgentJob[] {
   const trimmed = value.trim();
   if (!trimmed) return [];
-  const matches = [...trimmed.matchAll(/(^|[\s,;:()"'[\]{}])@(gpt|codex|grok|gemini)\b/gi)]
+  const roleByAlias = new Map(roles.map((role) => [role.alias.toLowerCase(), role]));
+  const mentionNames = [...new Set(["gpt", "codex", "grok", "gemini", ...roleByAlias.keys()])]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join("|");
+  const mentionPattern = new RegExp(`(^|[\\s,;:()"'[\\]{}])@(${mentionNames})(?![a-z0-9_-])`, "gi");
+  const matches = [...trimmed.matchAll(mentionPattern)]
     .map((match) => ({
       start: (match.index ?? 0) + (match[1]?.length ?? 0),
       mention: match[2] ?? ""
-    }));
+  }));
   if (!matches.length) return mentionsOnly ? [] : [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
   const intro = cleanMentionPrompt(trimmed.slice(0, matches[0]!.start));
-  const jobs = matches.flatMap((match, index) => {
+  const segments = matches.map((match, index) => {
     const next = matches[index + 1]?.start ?? trimmed.length;
     const bodyStart = match.start + match.mention.length + 1;
-    const body = cleanMentionPrompt(trimmed.slice(bodyStart, next));
-    const displayPrompt = cleanMentionPrompt(trimmed.slice(match.start, next));
+    return {
+      ...match,
+      body: cleanMentionPrompt(trimmed.slice(bodyStart, next)),
+      displayPrompt: cleanMentionPrompt(trimmed.slice(match.start, next))
+    };
+  });
+  const sharedBody = segments.find((segment) => segment.body)?.body || intro;
+  const jobs = segments.flatMap((segment) => {
+    const body = segment.body || sharedBody;
     if (!body) return [];
+    const role = roleByAlias.get(segment.mention.toLowerCase());
+    const displayPrompt = segment.body ? segment.displayPrompt : `@${segment.mention} ${body}`;
+    const includeIntro = Boolean(intro && body !== intro);
     return [{
-      kind: kindForMention(match.mention, currentKind),
-      prompt: intro ? `${intro}\n\n${body}` : body,
-      displayPrompt: intro ? `${intro}\n\n${displayPrompt}` : displayPrompt
+      kind: role?.kind ?? kindForMention(segment.mention, currentKind),
+      prompt: includeIntro ? `${intro}\n\n${body}` : body,
+      displayPrompt: includeIntro ? `${intro}\n\n${displayPrompt}` : displayPrompt,
+      roleAlias: role?.alias,
+      model: role?.model,
+      reasoningEffort: role?.reasoningEffort,
+      speed: role?.speed
     }];
   });
   return jobs.length ? jobs : mentionsOnly ? [] : [{ kind: currentKind, prompt: trimmed, displayPrompt: trimmed }];
@@ -2104,12 +2223,15 @@ function messageRunDetails(message: ChatMessage, job: Job | undefined, collapsed
   const metadataReasoning = typeof message.metadata?.reasoningEffort === "string" ? message.metadata.reasoningEffort : "";
   const metadataSpeed = typeof message.metadata?.speed === "string" ? message.metadata.speed : "";
   const metadataKind = typeof message.metadata?.kind === "string" ? message.metadata.kind : "";
+  const metadataRoleAlias = typeof message.metadata?.roleAlias === "string" ? message.metadata.roleAlias : "";
   const kind = runJob?.kind || metadataKind || message.source;
   const model = runJob?.model || metadataModel;
   const reasoning = runJob?.reasoningEffort || metadataReasoning;
+  const roleAlias = runJob?.roleAlias || metadataRoleAlias;
   const speed = kind === "grok" || kind === "gemini" || kind === "gemini-cli" ? "" : runJob?.speed || metadataSpeed;
   const durationSeconds = collapsedRun?.durationSeconds ?? (runJob?.finishedAt ? jobDurationSeconds(runJob) : messageDurationSeconds(message));
   const settings = [
+    roleAlias ? `@${roleAlias}` : "",
     model ? modelLabelForMessage(kind, model) : "",
     reasoning ? `Intelligence ${REASONING_OPTIONS.find((option) => option.value === reasoning)?.label ?? reasoning}` : "",
     speed ? `Speed ${SPEED_OPTIONS.find((option) => option.value === speed)?.label ?? speed}` : ""
@@ -5023,6 +5145,7 @@ function App() {
   const [projectVisibility, setProjectVisibility] = useState<ProjectVisibility>("private");
   const [projectWriteAccess, setProjectWriteAccess] = useState<ProjectWriteAccess>("owner");
   const [projectWriteUsersText, setProjectWriteUsersText] = useState("");
+  const [projectAgentRoles, setProjectAgentRoles] = useState<ProjectAgentRole[]>([]);
   const [projectDeployMode, setProjectDeployMode] = useState<"ssh" | "local">("ssh");
   const [projectDeploySshTarget, setProjectDeploySshTarget] = useState("");
   const [projectDeploySourceDir, setProjectDeploySourceDir] = useState("dist");
@@ -5275,7 +5398,7 @@ function App() {
   ), [repos, selectedRepo, syncRepoKey]);
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId), [activeChatId, chats]);
   const activeChatIsNotes = activeChat?.source === "notes";
-  const ideNoteRequestsAgent = activeChatIsNotes && parseMentionedAgentJobs(ideChatPrompt, jobKind, true).length > 0;
+  const ideNoteRequestsAgent = activeChatIsNotes && parseMentionedAgentJobs(ideChatPrompt, jobKind, selectedRepo?.agentRoles ?? [], true).length > 0;
   const generatedGitMessage = useMemo(
     () => autoCommitMessage(selectedRepo, activeChat, messages, gitMessageTemplate, gitStatusContext),
     [activeChat, gitMessageTemplate, gitStatusContext, messages, selectedRepo]
@@ -6885,6 +7008,37 @@ function App() {
     setProjectDataPath(defaultProjectDataPath(location, projectPath, effectiveProjectServerPath));
   }
 
+  function addProjectAgentRole(preset?: ProjectAgentRole) {
+    setProjectAgentRoles((current) => {
+      const base = preset ?? {
+        alias: "agent",
+        label: "New AI role",
+        kind: "codex" as const,
+        model: "gpt-5.6-terra",
+        reasoningEffort: "high" as const,
+        speed: "standard" as const
+      };
+      return [...current, { ...base, alias: availableRoleAlias(base.alias, current) }];
+    });
+  }
+
+  function updateProjectAgentRole(index: number, patch: Partial<ProjectAgentRole>) {
+    setProjectAgentRoles((current) => current.map((role, roleIndex) => {
+      if (roleIndex !== index) return role;
+      const next = { ...role, ...patch };
+      if (patch.alias !== undefined) next.alias = normalizeRoleAliasInput(patch.alias);
+      if (patch.kind && patch.kind !== role.kind) {
+        next.model = modelOptionsForRole(patch.kind)[0]?.value ?? "";
+        next.speed = patch.kind === "codex" ? "standard" : undefined;
+      }
+      return next;
+    }));
+  }
+
+  function removeProjectAgentRole(index: number) {
+    setProjectAgentRoles((current) => current.filter((_, roleIndex) => roleIndex !== index));
+  }
+
   function openNewProject() {
     const targetAgent = defaultNewProjectAgent;
     const defaults = defaultProjectValues("New Project", targetAgent, currentUser);
@@ -6912,6 +7066,7 @@ function App() {
     setProjectVisibility("private");
     setProjectWriteAccess("owner");
     setProjectWriteUsersText("");
+    setProjectAgentRoles([]);
     setProjectDeployEnabled(true);
     setProjectDeployMode(defaultMode);
     setProjectDeploySshTarget(defaultMode === "ssh" ? DEFAULT_DEPLOY_SSH_TARGET : "");
@@ -6951,6 +7106,7 @@ function App() {
     setProjectVisibility(repo.visibility ?? "private");
     setProjectWriteAccess(repo.writeAccess ?? "owner");
     setProjectWriteUsersText((repo.writeUsers ?? []).join("\n"));
+    setProjectAgentRoles((repo.agentRoles ?? []).map((role) => ({ ...role })));
     setProjectDeployMode(deployMode);
     setProjectDeploySshTarget(repo.deploy?.sshTarget ?? "");
     setProjectDeploySourceDir(repo.deploy?.sourceDir ?? defaultDeploySourceDirForAgent(repoAgent, deployMode));
@@ -8116,6 +8272,13 @@ function App() {
     const targetAgent = isNew ? projectFormAgent : selectedRepoAgent ?? selectedAgent;
     if (!csrf || !targetAgent || !projectName.trim() || !projectPath.trim()) return;
     if (!isNew && (!selectedRepo || !repoCanManage(selectedRepo))) return;
+    const nextAgentRoles = normalizedAgentRoles(projectAgentRoles);
+    const roleError = agentRolesValidationError(nextAgentRoles);
+    if (roleError) {
+      setProjectSettingsTab("roles");
+      setProjectNotice(roleError);
+      return;
+    }
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const shouldRunPrompt = submitter?.value === "run-prompt" && Boolean(projectStartPrompt.trim());
     if ((isNew || projectTargetAgentChanged) && !projectSaveAgentOnline) {
@@ -8148,6 +8311,7 @@ function App() {
       visibility: effectiveProjectVisibility,
       writeAccess: projectWriteAccess,
       writeUsers: projectWriteUsers,
+      agentRoles: nextAgentRoles,
       deploy: deployConfig,
       data: dataConfig,
       defaultSandbox: sandbox
@@ -8163,6 +8327,7 @@ function App() {
       if (normalizedDomain !== (selectedRepo?.domain ?? "")) body.domain = normalizedDomain;
       if (projectWriteAccess !== (selectedRepo?.writeAccess ?? "owner")) body.writeAccess = projectWriteAccess;
       if (JSON.stringify(projectWriteUsers) !== JSON.stringify(selectedRepo?.writeUsers ?? [])) body.writeUsers = projectWriteUsers;
+      if (JSON.stringify(nextAgentRoles) !== JSON.stringify(selectedRepo?.agentRoles ?? [])) body.agentRoles = nextAgentRoles;
       if (JSON.stringify(deployConfig) !== JSON.stringify(selectedRepo?.deploy ?? null)) body.deploy = deployConfig;
       if (JSON.stringify(dataConfig) !== JSON.stringify(selectedRepo?.data ?? null)) body.data = dataConfig;
       if (sandbox !== selectedRepo?.defaultSandbox) body.defaultSandbox = sandbox;
@@ -8269,7 +8434,7 @@ function App() {
     if (!selectedRepo || (!prompt.trim() && !attachments.length) || !csrf) return;
     const notesMode = activeChat?.source === "notes";
     const promptText = prompt.trim() || "Посмотри вложенные файлы.";
-    const requestedJobs = parseMentionedAgentJobs(promptText, jobKind, notesMode);
+    const requestedJobs = parseMentionedAgentJobs(promptText, jobKind, selectedRepo.agentRoles ?? [], notesMode);
     if (!notesMode && !repoCanWrite(selectedRepo)) {
       setChatNoticeOk(false);
       setChatNotice("Этот public-проект добавлен в режиме просмотра. Запуск задач доступен только владельцу или пользователям с правом записи.");
@@ -8350,9 +8515,10 @@ function App() {
           sandbox: notesMode ? "read-only" : sandbox,
           branchMode: "current",
           kind: requested.kind,
-          model: modelValueForKind(requested.kind, codexModel, grokModel, geminiCliModel, geminiModel),
-          reasoningEffort: reasoningValueForKind(requested.kind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
-          speed: requested.kind === "codex" ? codexSpeed : undefined,
+          model: requested.model ?? modelValueForKind(requested.kind, codexModel, grokModel, geminiCliModel, geminiModel),
+          reasoningEffort: requested.reasoningEffort ?? reasoningValueForKind(requested.kind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
+          speed: requested.kind === "codex" ? requested.speed ?? codexSpeed : undefined,
+          roleAlias: requested.roleAlias,
           attachments: jobAttachments
         })
       });
@@ -8582,7 +8748,7 @@ function App() {
     if (event.key !== "Enter" || !event.ctrlKey || event.repeat || event.nativeEvent.isComposing) return;
     const canSubmit = Boolean(prompt.trim() || attachments.length);
     const notesMode = activeChat?.source === "notes";
-    const noteRequestsAgent = notesMode && parseMentionedAgentJobs(prompt, jobKind, true).length > 0;
+    const noteRequestsAgent = notesMode && parseMentionedAgentJobs(prompt, jobKind, selectedRepo?.agentRoles ?? [], true).length > 0;
     if (busy || !canSubmit || ((!notesMode || noteRequestsAgent) && (localCodexBusy || activeRunBusy))) return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
@@ -8974,7 +9140,7 @@ function App() {
     if (!selectedRepo || !csrf || (!ideChatPrompt.trim() && !attachments.length) || ideChatSending) return;
     const notesMode = activeChat?.source === "notes";
     const promptText = ideChatPrompt.trim() || "Посмотри вложенные файлы.";
-    const requestedJobs = parseMentionedAgentJobs(promptText, jobKind, notesMode);
+    const requestedJobs = parseMentionedAgentJobs(promptText, jobKind, selectedRepo.agentRoles ?? [], notesMode);
     if (!notesMode && !repoCanWrite(selectedRepo)) {
       setIdeChatNotice("Этот public-проект добавлен в режиме просмотра. Запуск задач доступен только владельцу или пользователям с правом записи.");
       return;
@@ -9050,9 +9216,10 @@ function App() {
             sandbox: notesMode ? "read-only" : sandbox,
             branchMode: "current",
             kind: requested.kind,
-            model: modelValueForKind(requested.kind, codexModel, grokModel, geminiCliModel, geminiModel),
-            reasoningEffort: reasoningValueForKind(requested.kind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
-            speed: requested.kind === "codex" ? codexSpeed : undefined,
+            model: requested.model ?? modelValueForKind(requested.kind, codexModel, grokModel, geminiCliModel, geminiModel),
+            reasoningEffort: requested.reasoningEffort ?? reasoningValueForKind(requested.kind, codexReasoningEffort, grokReasoningEffort, geminiReasoningEffort),
+            speed: requested.kind === "codex" ? requested.speed ?? codexSpeed : undefined,
+            roleAlias: requested.roleAlias,
             attachments: jobAttachments
           })
         });
@@ -11263,6 +11430,109 @@ function App() {
           </div>
         );
       }
+      if (projectSettingsTab === "roles") {
+        return (
+          <div className="project-settings-tab-panel project-agent-roles-panel">
+            <div className="project-agent-roles-intro">
+              <div>
+                <strong>Project AI roles</strong>
+                <span>Пиши alias в обычном чате или Заметках: сервер сам выберет сохранённые модель и reasoning.</span>
+              </div>
+              <button className="secondary compact" type="button" onClick={() => addProjectAgentRole()}>
+                <Plus size={15} /> Custom role
+              </button>
+            </div>
+            <div className="project-agent-role-presets">
+              {PROJECT_ROLE_PRESETS.map((preset) => (
+                <button className="secondary compact" key={preset.id} type="button" onClick={() => addProjectAgentRole(preset.role)}>
+                  <Plus size={14} /> {preset.label}
+                </button>
+              ))}
+            </div>
+            {projectAgentRoles.length ? (
+              <div className="project-agent-role-list">
+                {projectAgentRoles.map((role, index) => {
+                  const modelOptions = modelOptionsForRole(role.kind);
+                  const modelListId = `project-role-models-${index}`;
+                  return (
+                    <article className="project-agent-role-card" key={`${role.alias}-${index}`}>
+                      <header>
+                        <div>
+                          <span>@{role.alias || "alias"}</span>
+                          <strong>{role.label?.trim() || RUNNER_OPTIONS.find((option) => option.value === role.kind)?.label || "AI role"}</strong>
+                        </div>
+                        <button className="icon tiny" type="button" title="Remove role" onClick={() => removeProjectAgentRole(index)}>
+                          <Trash2 size={15} />
+                        </button>
+                      </header>
+                      <div className="project-agent-role-grid">
+                        <label>
+                          Alias
+                          <div className="project-agent-role-alias-input">
+                            <span>@</span>
+                            <input
+                              aria-label={`Alias for role ${index + 1}`}
+                              placeholder="codex-sol"
+                              value={role.alias}
+                              onChange={(event) => updateProjectAgentRole(index, { alias: event.target.value })}
+                            />
+                          </div>
+                        </label>
+                        <label>
+                          Display name
+                          <input
+                            placeholder="Sol Ultra"
+                            value={role.label ?? ""}
+                            onChange={(event) => updateProjectAgentRole(index, { label: event.target.value })}
+                          />
+                        </label>
+                        <label>
+                          Provider
+                          <select value={role.kind} onChange={(event) => updateProjectAgentRole(index, { kind: event.target.value as JobKind })}>
+                            {RUNNER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </select>
+                        </label>
+                        <label>
+                          Model
+                          <input
+                            list={modelListId}
+                            placeholder="model id"
+                            value={role.model}
+                            onChange={(event) => updateProjectAgentRole(index, { model: event.target.value })}
+                          />
+                          <datalist id={modelListId}>
+                            {modelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </datalist>
+                        </label>
+                        <label>
+                          Reasoning
+                          <select value={role.reasoningEffort} onChange={(event) => updateProjectAgentRole(index, { reasoningEffort: event.target.value as ReasoningEffort })}>
+                            {REASONING_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </select>
+                        </label>
+                        {role.kind === "codex" && (
+                          <label>
+                            Speed
+                            <select value={role.speed ?? "standard"} onChange={(event) => updateProjectAgentRole(index, { speed: event.target.value as CodexSpeed })}>
+                              {SPEED_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                            </select>
+                          </label>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="project-agent-roles-empty">
+                <Bot size={22} />
+                <strong>Роли пока не настроены</strong>
+                <span>Системные @gpt, @grok и @gemini продолжат работать как раньше.</span>
+              </div>
+            )}
+          </div>
+        );
+      }
       if (projectSettingsTab === "access") {
         const writeAccessSummary = projectWriteAccess === "readonly"
           ? "public read-only"
@@ -12667,7 +12937,7 @@ function App() {
     const notesMode = activeChatIsNotes;
     const canWriteProject = notesMode || repoCanWrite(selectedRepo);
     const canSubmit = Boolean(prompt.trim() || attachments.length);
-    const noteRequestsAgent = notesMode && parseMentionedAgentJobs(prompt, jobKind, true).length > 0;
+    const noteRequestsAgent = notesMode && parseMentionedAgentJobs(prompt, jobKind, selectedRepo?.agentRoles ?? [], true).length > 0;
     const agentRunBlocked = (!notesMode || noteRequestsAgent) && (localCodexBusy || activeRunBusy);
     const runDisabled = busy || !canWriteProject || !canSubmit || agentRunBlocked || (notesMode && noteRequestsAgent && !repoCanWrite(selectedRepo));
     const currentModelOptions = modelOptionsForKind(jobKind);
@@ -12804,7 +13074,7 @@ function App() {
         {notesMode && (
           <div className="notes-composer-hint">
             <FileText size={15} />
-            <span>Без тега это личная заметка. Для ответа напиши <code>@gpt</code>, <code>@grok</code> или <code>@gemini</code>.</span>
+            <span>Без тега это личная заметка. Для ответа напиши <code>@gpt</code>, <code>@grok</code>, <code>@gemini</code> или проектную <code>@роль</code>.</span>
           </div>
         )}
         <textarea
@@ -14400,7 +14670,7 @@ function App() {
             {activeChatIsNotes && (
               <div className="notes-mode-banner">
                 <FileText size={16} />
-                <span>Это приватный блокнот проекта. Сообщения остаются без ответа, пока ты явно не позовёшь <code>@gpt</code>, <code>@grok</code> или <code>@gemini</code>.</span>
+                <span>Это приватный блокнот проекта. Сообщения остаются без ответа, пока ты явно не позовёшь <code>@gpt</code>, <code>@grok</code>, <code>@gemini</code> или проектную <code>@роль</code>.</span>
               </div>
             )}
             {selectedRepoAgent && selectedRepoAgent.status !== "online" && (
@@ -15047,7 +15317,7 @@ function App() {
                   <form className={`ide-chat-composer ${activeChatIsNotes ? "notes" : ""}`} onSubmit={submitIdeChat}>
                     {renderPendingAttachments("attachment-list ide-chat-attachment-list")}
                     {attachmentNotice && <div className="notice danger ide-chat-attachment-notice">{attachmentNotice}</div>}
-                    {activeChatIsNotes && <div className="ide-notes-hint">Личная заметка · AI отвечает только по <code>@gpt</code>, <code>@grok</code> или <code>@gemini</code></div>}
+                    {activeChatIsNotes && <div className="ide-notes-hint">Личная заметка · AI отвечает только по <code>@gpt</code>, <code>@grok</code>, <code>@gemini</code> или проектной <code>@роли</code></div>}
                     <textarea
                       disabled={!activeChatIsNotes && !repoCanWrite(selectedRepo)}
                       placeholder={activeChatIsNotes ? "Записать заметку…" : repoCanWrite(selectedRepo) ? (activeChat ? "Задача для Codex в этом чате" : "Начать новый чат по проекту") : "Public-проект открыт только для просмотра"}

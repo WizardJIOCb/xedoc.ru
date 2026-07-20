@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ReasoningEffort } from "@cmc/protocol";
 import type { AgentJobDone, AgentJobLog, AgentJobProgress } from "./types.js";
 import type { AgentConfig, RepoConfig } from "./config.js";
 import { minimalEnv, needsShell, runCapture } from "./process-utils.js";
@@ -18,7 +19,7 @@ type RunContext = {
     kind: "codex" | "grok" | "gemini-cli" | "gemini" | "test";
     testCommandId?: string;
     model?: string;
-    reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+    reasoningEffort?: ReasoningEffort;
     speed?: "standard" | "fast";
     attachments?: Array<{
       name: string;
@@ -597,7 +598,7 @@ function writePromptFile(repo: RepoConfig, jobId: string, prompt: string): strin
   return path;
 }
 
-function writeGeminiPayloadFile(repo: RepoConfig, jobId: string, prompt: string, model: string, reasoningEffort?: "low" | "medium" | "high" | "xhigh"): string {
+function writeGeminiPayloadFile(repo: RepoConfig, jobId: string, prompt: string, model: string, reasoningEffort?: ReasoningEffort): string {
   const root = join(repo.path, ".codex-web-attachments", safePathSegment(jobId));
   mkdirSync(root, { recursive: true });
   ensureGitExclude(repo.path);
@@ -621,7 +622,7 @@ function writeGeminiPayloadFile(repo: RepoConfig, jobId: string, prompt: string,
   return path;
 }
 
-function geminiThinkingLevel(reasoningEffort?: "low" | "medium" | "high" | "xhigh"): "low" | "high" {
+function geminiThinkingLevel(reasoningEffort?: ReasoningEffort): "low" | "high" {
   return reasoningEffort === "low" || reasoningEffort === "medium" ? "low" : "high";
 }
 
@@ -637,7 +638,7 @@ function geminiEnvironmentPrompt(repo: RepoConfig): string {
   ].join("\n");
 }
 
-function geminiCliEnvironmentPrompt(repo: RepoConfig, reasoningEffort?: "low" | "medium" | "high" | "xhigh"): string {
+function geminiCliEnvironmentPrompt(repo: RepoConfig, reasoningEffort?: ReasoningEffort): string {
   return [
     "Gemini CLI web agent environment:",
     `- Project: ${repo.name} at ${repo.path}.`,
