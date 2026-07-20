@@ -4561,9 +4561,14 @@ function jobProgressLabel(progress: JobProgress | null | undefined, fallback = "
   }
 }
 
+function isIgnorableCodexModelRefreshWarning(value: string) {
+  return /ERROR\s+codex_models_manager::manager:\s+failed to refresh available models:\s+timeout waiting for child process to exit/i.test(value);
+}
+
 function jobProgressMessage(progress: JobProgress | null | undefined, runnerLabel = "Codex") {
   const phase = (progress?.phase ?? "").toLowerCase();
   const message = progress?.message?.trim() ?? "";
+  if (isIgnorableCodexModelRefreshWarning(message)) return `Получаю ответ от ${runnerLabel}`;
   if (phase === "thinking") return `Жду ответ локального ${runnerLabel}`;
   if (phase === "working") return hasProgressChanges(progress) ? "Проверяю изменения в рабочей папке" : `Жду следующего события от локального ${runnerLabel}`;
   if (phase === "finalizing") return "Собираю git diff и сохраняю ответ в web";
@@ -4648,6 +4653,7 @@ function displayLogMessage(log: Log) {
   const rawText = log.message.trim();
   if (!rawText) return null;
   if (/ERROR\s+codex_core::session:\s+failed to record rollout items:\s+thread .* not found/i.test(rawText)) return null;
+  if (isIgnorableCodexModelRefreshWarning(rawText)) return null;
   if (log.stream === "system") return null;
   try {
     const event = JSON.parse(rawText) as Record<string, unknown>;

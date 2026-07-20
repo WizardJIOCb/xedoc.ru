@@ -694,7 +694,10 @@ function environmentPrompt(config: AgentConfig, repo: RepoConfig): string {
 }
 
 function isIgnorableCodexWarning(line: string): boolean {
-  return /ERROR\s+codex_core::session:\s+failed to record rollout items:\s+thread .* not found/i.test(line);
+  return [
+    /ERROR\s+codex_core::session:\s+failed to record rollout items:\s+thread .* not found/i,
+    /ERROR\s+codex_models_manager::manager:\s+failed to refresh available models:\s+timeout waiting for child process to exit/i
+  ].some((pattern) => pattern.test(line));
 }
 
 function isIgnorableGrokWarning(line: string): boolean {
