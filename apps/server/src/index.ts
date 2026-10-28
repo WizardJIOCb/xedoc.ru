@@ -2729,6 +2729,13 @@ function serializeShare(row: ChatShareRow, request: { protocol: string; hostname
   };
 }
 
+function serializeShareSummary(row: ChatShareRow, request: { protocol: string; hostname: string }) {
+  return {
+    token: row.token,
+    url: publicShareUrl(request, row.token)
+  };
+}
+
 function upsertChatShareFromChat(chat: ChatRow): ChatShareRow {
   const snapshot = chatShareSnapshot(chat);
   const stamp = nowIso();
@@ -3962,7 +3969,8 @@ async function createApp(): Promise<FastifyInstance> {
     const parsed = AgentChatShareSchema.safeParse({ ...(request.body as Record<string, unknown> | null ?? {}), type: "chat.sync" });
     if (!parsed.success) return reply.code(400).send({ error: "invalid_chat_share", details: parsed.error.flatten() });
     const share = upsertChatShareFromLocalSync(agent, parsed.data);
-    return reply.code(201).send({ ok: true, share: serializeShare(share, request), url: publicShareUrl(request, share.token) });
+    const summary = serializeShareSummary(share, request);
+    return reply.code(201).send({ ok: true, share: summary, url: summary.url });
   });
 
   app.get("/api/oauth/providers", async () => ({ providers: oauthProviders() }));
