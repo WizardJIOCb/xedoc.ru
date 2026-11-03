@@ -139,7 +139,6 @@
   .job-company h3 { margin-top:8px; }
 }
 .name-line { display:block; }
-.reading-progress { position:fixed;inset:0 0 auto;height:2px;background:var(--accent);transform:scaleX(0);transform-origin:left;z-index:30;pointer-events:none; }
 .orbital-art { position:absolute;right:-80px;top:-80px;width:400px;height:400px;stroke:#9cc9aa;stroke-width:1;opacity:.14;pointer-events:none; }
 .orbital-art .orbit-node { fill:#9cc9aa;stroke:none; }
 .profile-card > :not(.orbital-art) { position:relative;z-index:1; }
@@ -173,7 +172,7 @@
   .interactive-surface::before { display:none; }
 }
 @media print {
-  .reading-progress,.orbital-art { display:none!important; }
+  .orbital-art { display:none!important; }
   .name-word { color:inherit;background:none; }
   .interactive-surface { transform:none!important;opacity:1!important; }
 }

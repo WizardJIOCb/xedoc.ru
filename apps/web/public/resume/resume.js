@@ -6,7 +6,7 @@ const entranceDelay = new WeakMap();
 const curve = 'cubic-bezier(0.22,1,0.36,1)';
 
 function animate(element, keyframes, options = {}) {
-  if (!element || motionPreference.matches || window.matchMedia('print').matches || !element.animate) return;
+  if (!element || motionPreference.matches || document.documentElement.classList.contains('fx-paused') || window.matchMedia('print').matches || !element.animate) return;
   const animation = element.animate(keyframes, {duration:700, easing:curve, ...options});
   runningAnimations.add(animation);
   animation.finished.then(() => runningAnimations.delete(animation), () => runningAnimations.delete(animation));
@@ -42,7 +42,6 @@ filters.forEach(button => {
 
 const links = [...document.querySelectorAll('.nav-links a')];
 const sections = links.map(link => document.querySelector(link.getAttribute('href')));
-const progress = document.querySelector('.reading-progress');
 let navigationFrame = 0;
 function updateNavigation() {
   navigationFrame = 0;
@@ -53,8 +52,6 @@ function updateNavigation() {
     if (index === active) link.setAttribute('aria-current', 'location');
     else link.removeAttribute('aria-current');
   });
-  const distance = document.documentElement.scrollHeight - window.innerHeight;
-  if (progress) progress.style.transform = `scaleX(${distance > 0 ? Math.min(1, Math.max(0, window.scrollY / distance)) : 0})`;
 }
 function scheduleNavigation() { if (!navigationFrame) navigationFrame = requestAnimationFrame(updateNavigation); }
 window.addEventListener('scroll', scheduleNavigation, {passive:true});
@@ -84,7 +81,7 @@ document.querySelectorAll('.capabilities article, .job, .stack-card, .contact-li
   let x = 0;
   let y = 0;
   card.addEventListener('pointermove', event => {
-    if (!finePointer.matches || motionPreference.matches || event.pointerType === 'touch') return;
+    if (!finePointer.matches || motionPreference.matches || document.documentElement.classList.contains('fx-paused') || event.pointerType === 'touch') return;
     x = event.clientX;
     y = event.clientY;
     if (pointerFrame) return;

@@ -36,12 +36,34 @@ Research references:
 The implementation is original, framework-free JavaScript and CSS. No template
 code, new packages, external scripts, or external runtime assets are included.
 Entrances run once using the Web Animations API and IntersectionObserver.
-Scroll progress and active navigation share one requestAnimationFrame callback;
+Active navigation uses one requestAnimationFrame callback;
 pointer work is also limited to one callback per frame while the pointer moves.
 There is no repeating animation loop or custom scroll controller. Touch devices
 skip hover effects. Reduced motion and printing show the complete static page.
 The orbital drawing is decorative SVG and is excluded from accessibility and
 print output. All resume text remains live HTML.
+
+## Experimental dark variant
+
+`https://xedoc.ru/iam` uses the same `main` content as the light resume, with a
+separate stylesheet and effects controller under `apps/web/public/iam/`.
+It reuses the local resume fonts, base layout and shared interaction script.
+The light page has no reading progress indicator.
+
+The dark page offers Ember (fire), Plasma and Ion (neon) palettes, a procedural
+WebGL background with embers, moving border light, card sheen, glowing type,
+pointer lighting and click sparks. All graphics are generated locally; there
+are no external scripts, media dependencies or new packages. The effects
+button pauses the render loop and CSS effects; user choices are stored only
+in localStorage. Reduced motion, printing and hidden browser tabs stop the
+render loop. Card animations pause off screen. Rendering is capped at 30 fps
+on desktop and 24 fps on mobile, with a limited pixel ratio and reduced render
+resolution. If WebGL is unavailable, the page still shows its static layout.
+
+The experimental page is `noindex,follow` and keeps `/resume` as its canonical
+URL. Include `infra/iam.nginx.conf` inside the same HTTPS server block as the
+resume snippet; the shared JSON-LD CSP hash is unchanged. This page is an
+independent copy of the resume content and needs the same content updates.
 
 ## Serving
 

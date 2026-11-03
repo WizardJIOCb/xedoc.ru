@@ -5,3 +5,7 @@ apps/web/public/resume/*.js text eol=lf
 apps/web/public/resume/*.svg text eol=lf
 # Preserve the upstream font license, including its original whitespace.
 apps/web/public/resume/OFL.txt text eol=lf -whitespace
+apps/web/public/iam/*.html text eol=lf
+apps/web/public/iam/*.css text eol=lf
+apps/web/public/iam/*.js text eol=lf
+apps/web/public/iam/*.svg text eol=lf

@@ -37,6 +37,11 @@ Nginx serves this route independently of the private application. See
 [docs/resume.md](docs/resume.md) for content sources, validation and deployment,
 and [infra/resume.nginx.conf](infra/resume.nginx.conf) for the route configuration.
 
+An experimental dark version with the same resume content is available at
+[xedoc.ru/iam](https://xedoc.ru/iam). It adds a procedural WebGL background,
+three palettes, card lighting and a global effects toggle. Source lives in
+`apps/web/public/iam/`, with its Nginx route in `infra/iam.nginx.conf`.
+
 ## What This App Does
 
 - Shows a browser/PWA interface for projects, chats, jobs, live logs, files, diffs, profile, sync, and admin controls.
