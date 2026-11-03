@@ -26,6 +26,17 @@
 
 Do new work from `C:\Projects\xedoc.ru`. Do not use old `codex.rodion.pro` folders for active development.
 
+## Public Resume
+
+The public resume is available at [xedoc.ru/resume](https://xedoc.ru/resume).
+Its static source lives in `apps/web/public/resume/` and is copied into the
+web build by Vite. It includes the Russian resume, green accent palette,
+responsive card layout, technology filters and a print layout for saving PDF.
+
+Nginx serves this route independently of the private application. See
+[docs/resume.md](docs/resume.md) for content sources, validation and deployment,
+and [infra/resume.nginx.conf](infra/resume.nginx.conf) for the route configuration.
+
 ## What This App Does
 
 - Shows a browser/PWA interface for projects, chats, jobs, live logs, files, diffs, profile, sync, and admin controls.

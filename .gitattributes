@@ -1,0 +1,7 @@
+# Keep the deployed static page identical across Windows and Linux checkouts.
+apps/web/public/resume/*.html text eol=lf
+apps/web/public/resume/*.css text eol=lf
+apps/web/public/resume/*.js text eol=lf
+apps/web/public/resume/*.svg text eol=lf
+# Preserve the upstream font license, including its original whitespace.
+apps/web/public/resume/OFL.txt text eol=lf -whitespace
