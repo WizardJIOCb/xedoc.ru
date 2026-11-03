@@ -20,6 +20,29 @@ padding and consistent section spacing. Experience is a two-by-two card
 grid, technology tags align along the card bottoms, and mobile uses one
 column. The hero metric and print layout keep the experience number intact.
 
+## Motion direction
+
+The page uses a custom adaptation of a minimal editorial portfolio direction:
+large kinetic type, a balanced card grid, subtle depth and green pointer light.
+Research references:
+
+| Reference | Design idea |
+| --- | --- |
+| [PortfolioZ / Framer](https://www.framer.com/marketplace/templates/portfolioz/) | Strong typography and staged entrances |
+| [indie / Webflow](https://webflow.com/made-in-webflow/website/mark-indie) | Minimal layout with restrained transitions |
+| [Eduard Bodak / Codrops](https://tympanus.net/codrops/2025/07/29/built-to-move-a-closer-look-at-the-animations-behind-eduard-bodaks-portfolio/) | Depth and pointer-responsive cards |
+| [Spotlight Card / React Bits](https://reactbits.dev/components/spotlight-card) | A soft light following the pointer |
+
+The implementation is original, framework-free JavaScript and CSS. No template
+code, new packages, external scripts, or external runtime assets are included.
+Entrances run once using the Web Animations API and IntersectionObserver.
+Scroll progress and active navigation share one requestAnimationFrame callback;
+pointer work is also limited to one callback per frame while the pointer moves.
+There is no repeating animation loop or custom scroll controller. Touch devices
+skip hover effects. Reduced motion and printing show the complete static page.
+The orbital drawing is decorative SVG and is excluded from accessibility and
+print output. All resume text remains live HTML.
+
 ## Serving
 
 Include `infra/resume.nginx.conf` inside the HTTPS `server_name xedoc.ru`
